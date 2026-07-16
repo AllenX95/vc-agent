@@ -87,14 +87,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Creating and browsing an empty Thread does not start Pi.
-- [ ] Submitting without an effective Profile retains the prompt and shows `Model Profile not configured` without starting a Worker.
-- [ ] Retrying after manual Profile configuration starts one isolated Unscoped Worker and streams ordered text deltas.
-- [ ] The custom ResourceLoader excludes project/global `.pi`, `.agents`, `AGENTS.md`, external Skills, settings, auth, and arbitrary Extensions.
-- [ ] Only the bundled reviewed pinned Extension inventory is loadable.
-- [ ] The Pi Adapter consumes one immutable Host-supplied Runtime Resource Snapshot and Extension Inventory Snapshot; it does not scan resource directories or hard-code bundled package paths in session orchestration.
-- [ ] Provider errors show parsed human-readable text, retain the User turn, and offer manual retry or Profile adjustment without automatic fallback.
-- [ ] The UI records the effective Profile, Provider, Model, token usage when available, and completion status.
+- [x] Creating and browsing an empty Thread does not start Pi.
+- [x] Submitting without an effective Profile retains the prompt and shows `Model Profile not configured` without starting a Worker.
+- [x] Retrying after manual Profile configuration starts one isolated Unscoped Worker and streams ordered text deltas.
+- [x] The custom ResourceLoader excludes project/global `.pi`, `.agents`, `AGENTS.md`, external Skills, settings, auth, and arbitrary Extensions.
+- [x] Only the bundled reviewed pinned Extension inventory is loadable.
+- [x] The Pi Adapter consumes one immutable Host-supplied Runtime Resource Snapshot and Extension Inventory Snapshot; it does not scan resource directories or hard-code bundled package paths in session orchestration.
+- [x] Provider errors show parsed human-readable text, retain the User turn, and offer manual retry or Profile adjustment without automatic fallback.
+- [x] The UI records the effective Profile, Provider, Model, token usage when available, and completion status.
 
 ### F3. Preserve And Recover Thread Trajectory
 

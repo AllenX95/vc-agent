@@ -47,7 +47,9 @@ describe("workspace dependency direction", () => {
   it("allows direct Pi SDK imports only in pi-adapter", () => {
     const imports = sourceFiles(root).flatMap((file) => {
       const content = readFileSync(file, "utf8");
-      return /@mariozechner\/pi-(?:coding-agent|ai)/.test(content) ? [relative(root, file)] : [];
+      return /@(mariozechner|earendil-works)\/pi-(?:coding-agent|agent-core|ai)/.test(content)
+        ? [relative(root, file)]
+        : [];
     });
     expect(imports.every((file) => file.startsWith("packages\\pi-adapter\\") || file.startsWith("packages/pi-adapter/"))).toBe(true);
   });

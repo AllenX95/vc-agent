@@ -17,6 +17,49 @@ export const provenanceRefSchema = z.object({
 
 export type ProvenanceRef = z.infer<typeof provenanceRefSchema>;
 
+export const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]);
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
+
+export const modelProfileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  credentialRef: z.string().min(1),
+  thinkingLevel: thinkingLevelSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+export type ModelProfile = z.infer<typeof modelProfileSchema>;
+
+export const unscopedThreadSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  scope: z.literal("unscoped"),
+  activeProfileId: z.string().min(1).optional(),
+  createdAt: z.string().datetime()
+});
+export type UnscopedThread = z.infer<typeof unscopedThreadSchema>;
+
+export const usageSchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative(),
+  cacheWrite: z.number().nonnegative(),
+  totalTokens: z.number().nonnegative()
+});
+export type TokenUsage = z.infer<typeof usageSchema>;
+
+export const providerFailureSchema = z.object({
+  kind: z.enum(["configuration", "provider", "worker"]),
+  code: z.string().min(1),
+  message: z.string().min(1).max(1200),
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  requestId: z.string().min(1).optional()
+});
+export type ProviderFailure = z.infer<typeof providerFailureSchema>;
+
 const commandMetadataSchema = z.object({
   schemaVersion: z.literal(IPC_SCHEMA_VERSION),
   commandId: z.string().min(1),
@@ -25,14 +68,45 @@ const commandMetadataSchema = z.object({
   sentAt: z.string().datetime()
 });
 
-const bootstrapCommandSchema = commandMetadataSchema.extend({
-  command: z.literal("app.bootstrap")
+const bootstrapCommandSchema = commandMetadataSchema.extend({ command: z.literal("app.bootstrap") });
+const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
+const createProfileCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("profile.create"),
+  payload: z.object({
+    name: z.string().trim().min(1).max(80),
+    provider: z.string().trim().min(1).max(100),
+    model: z.string().trim().min(1).max(160),
+    apiKey: z.string().min(1).max(8192),
+    thinkingLevel: thinkingLevelSchema
+  })
+});
+const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
+const createThreadCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.create.unscoped"),
+  payload: z.object({ title: z.string().trim().min(1).max(120) })
+});
+const selectThreadProfileCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.profile.select"),
+  payload: z.object({ threadId: z.string().min(1), profileId: z.string().min(1) })
+});
+const submitTurnCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("turn.submit"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    text: z.string().trim().min(1).max(200_000),
+    retryOfTurnId: z.string().min(1).optional()
+  })
 });
 
 export const hostCommandSchema = z.discriminatedUnion("command", [
-  bootstrapCommandSchema
+  bootstrapCommandSchema,
+  listProfilesCommandSchema,
+  createProfileCommandSchema,
+  listThreadsCommandSchema,
+  createThreadCommandSchema,
+  selectThreadProfileCommandSchema,
+  submitTurnCommandSchema
 ]);
-
 export type HostCommand = z.infer<typeof hostCommandSchema>;
 
 const eventMetadataSchema = z.object({
@@ -50,15 +124,15 @@ export const bootstrapStateSchema = z.object({
   stateSchemaVersion: z.number().int().positive(),
   storagePath: z.string().min(1),
   entityCounts: z.object({
-    projects: z.literal(0),
-    threads: z.literal(0),
-    modelProfiles: z.literal(0),
-    taskAssignments: z.literal(0)
+    projects: z.number().int().nonnegative(),
+    threads: z.number().int().nonnegative(),
+    modelProfiles: z.number().int().nonnegative(),
+    taskAssignments: z.number().int().nonnegative()
   }),
   runtimeActivity: z.object({
-    agentWorkersStarted: z.literal(0),
-    piSessionsStarted: z.literal(0),
-    providerRequests: z.literal(0),
+    agentWorkersStarted: z.number().int().nonnegative(),
+    piSessionsStarted: z.number().int().nonnegative(),
+    providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
   })
 });
@@ -67,7 +141,6 @@ const bootstrapCompletedEventSchema = eventMetadataSchema.extend({
   event: z.literal("app.bootstrap.completed"),
   payload: bootstrapStateSchema
 });
-
 const diagnosticRaisedEventSchema = eventMetadataSchema.extend({
   event: z.literal("diagnostic.raised"),
   payload: z.object({
@@ -76,10 +149,80 @@ const diagnosticRaisedEventSchema = eventMetadataSchema.extend({
     recoverable: z.boolean()
   })
 });
+const profilesListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("profiles.listed"),
+  payload: z.object({ profiles: z.array(modelProfileSchema) })
+});
+const profileCreatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("profile.created"),
+  payload: z.object({ profile: modelProfileSchema })
+});
+const threadsListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("threads.listed"),
+  payload: z.object({ threads: z.array(unscopedThreadSchema) })
+});
+const threadCreatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.created"),
+  payload: z.object({ thread: unscopedThreadSchema })
+});
+const threadProfileSelectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.profile.selected"),
+  payload: z.object({ thread: unscopedThreadSchema })
+});
+const turnAcceptedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("turn.accepted"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    text: z.string(),
+    retryOfTurnId: z.string().min(1).optional(),
+    profile: modelProfileSchema
+  })
+});
+const turnStartedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("turn.started"),
+  payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1) })
+});
+const messageDeltaEventSchema = eventMetadataSchema.extend({
+  event: z.literal("message.delta"),
+  payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), delta: z.string() })
+});
+const turnCompletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("turn.completed"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    message: z.string(),
+    profile: modelProfileSchema,
+    usage: usageSchema,
+    responseId: z.string().optional()
+  })
+});
+const turnFailedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("turn.failed"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    text: z.string(),
+    retryOfTurnId: z.string().min(1).optional(),
+    profile: modelProfileSchema.optional(),
+    failure: providerFailureSchema
+  })
+});
 
 export const hostEventSchema = z.discriminatedUnion("event", [
   bootstrapCompletedEventSchema,
-  diagnosticRaisedEventSchema
+  diagnosticRaisedEventSchema,
+  profilesListedEventSchema,
+  profileCreatedEventSchema,
+  threadsListedEventSchema,
+  threadCreatedEventSchema,
+  threadProfileSelectedEventSchema,
+  turnAcceptedEventSchema,
+  turnStartedEventSchema,
+  messageDeltaEventSchema,
+  turnCompletedEventSchema,
+  turnFailedEventSchema
 ]);
 
 export type HostEvent = z.infer<typeof hostEventSchema>;
@@ -90,13 +233,25 @@ export interface VcAgentBridge {
   onEvent(listener: (event: HostEvent) => void): () => void;
 }
 
-export function createBootstrapCommand(): HostCommand {
+type HostCommandName = HostCommand["command"];
+type HostCommandFor<TName extends HostCommandName> = Extract<HostCommand, { command: TName }>;
+type HostCommandInput<TName extends HostCommandName> = Omit<
+  HostCommandFor<TName>,
+  "schemaVersion" | "commandId" | "correlationId" | "actor" | "sentAt"
+>;
+type AnyHostCommandInput = { [TName in HostCommandName]: HostCommandInput<TName> }[HostCommandName];
+
+export function createCommand(command: AnyHostCommandInput): HostCommand {
   return {
+    ...command,
     schemaVersion: IPC_SCHEMA_VERSION,
-    command: "app.bootstrap",
     commandId: crypto.randomUUID(),
     correlationId: crypto.randomUUID(),
     actor: { actorType: "user", actorId: "local-user" },
     sentAt: new Date().toISOString()
-  };
+  } as HostCommand;
+}
+
+export function createBootstrapCommand(): HostCommand {
+  return createCommand({ command: "app.bootstrap" });
 }

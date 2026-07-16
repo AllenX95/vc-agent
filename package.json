@@ -8,7 +8,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @vc-agent/desktop build",
+    "build": "pnpm --filter @vc-agent/agent-worker build && pnpm --filter @vc-agent/desktop build",
     "dev": "pnpm build && electron apps/desktop/dist/main/main.js",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",
@@ -20,6 +20,7 @@
     "@types/node": "26.1.1",
     "@vc-agent/contracts": "workspace:*",
     "@vc-agent/persistence": "workspace:*",
+    "@vc-agent/pi-adapter": "workspace:*",
     "electron": "43.1.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"

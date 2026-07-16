@@ -2,5 +2,21 @@
   "name": "@vc-agent/pi-adapter",
   "version": "0.1.0",
   "private": true,
-  "description": "The real Pi SDK adapter begins with the F2 tracer; no substitute runtime is provided."
+  "type": "module",
+  "description": "Versioned vc-agent boundary around the real Pi SDK.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vc-agent/contracts": "workspace:*",
+    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-coding-agent": "0.80.8"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
+  }
 }

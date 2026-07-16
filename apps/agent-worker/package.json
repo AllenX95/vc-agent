@@ -2,5 +2,22 @@
   "name": "@vc-agent/agent-worker",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent Worker execution begins lazily in Foundation slice F2."
+  "type": "module",
+  "description": "Isolated Pi execution process for Project and Unscoped Threads.",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vc-agent/contracts": "workspace:*",
+    "@vc-agent/pi-adapter": "workspace:*",
+    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-coding-agent": "0.80.8"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "electron": "43.1.1",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2"
+  }
 }
