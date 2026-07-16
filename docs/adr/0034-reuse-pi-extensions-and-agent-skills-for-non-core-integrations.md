@@ -1,6 +1,6 @@
 # Reuse Pi Extensions And Agent Skills For Non-Core Integrations
 
-Accepted: the first release does not build full native Office, MCP, Skill-package management, or multi-provider OCR subsystems. Office document creation and editing primarily reuse compatible document Skills; MCP connectivity reuses a selected Pi Extension; Skill discovery, validation, progressive disclosure, and package mechanics reuse Pi; and OCR uses one User-configured Skill, Extension, command, service, or API rather than an ordered Provider Chain.
+Accepted: the first release does not build full native Office, MCP, Skill-package management, or multi-provider OCR subsystems. Office document creation and editing primarily reuse compatible document Skills; MCP connectivity reuses a selected Pi Extension; and Skill discovery, validation, progressive disclosure, and package mechanics reuse Pi. OCR and Complex Page Recovery remain one Host-owned capability rather than an ecosystem package selector or user-selectable Provider Chain; ADR-0059 fixes its internal local stages to PyMuPDF, ordinary PaddleOCR, and OvisOCR2.
 
 ADR 0036 fixes the Personal Build's Office path to User-supplied Claude Code Office Skills, and ADR 0037 fixes the MCP path to a controlled, pinned `pi-mcp-adapter` integration.
 

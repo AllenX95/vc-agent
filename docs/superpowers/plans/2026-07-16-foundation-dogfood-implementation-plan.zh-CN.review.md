@@ -30,7 +30,7 @@ Foundation 或 Dogfood 不包含某项后续功能，表示暂缓它的 Adapter 
 | 后续能力 | 本计划当前建立的 seam | 当前兼容性要求 |
 | --- | --- | --- |
 | Office Skills 和 Skill Creator | Capability Registry、Utility Job Runner、Output Store、Artifact Registry | 首个 text/Markdown Adapter 使用与格式无关的 job、staged result、Output 和 provenance contract。Core 和 UI 不能假定所有 Output 都是 Markdown 或都能按文本编辑。 |
-| PaddleOCR 和未来 parser | Material Pipeline、Parser Adapter registry、Canonical Parse | 原生 parser 输出与 parser 无关的 blocks 和 warnings。OCR 后续作为同一 pipeline 后面的 page-recovery Adapter，不得要求第二套 material model 或新的模型可见工具。 |
+| PaddleOCR、OvisOCR2 和未来 parser | Material Pipeline、Parser Adapter registry、Canonical Parse | 原生 parser 输出与 parser 无关的 blocks 和 warnings。后续 Adapter 按固定顺序实现 PyMuPDF 原生提取 -> 普通 PaddleOCR -> OvisOCR2 页面恢复，不得要求第二套 material model 或新的模型可见工具；每个阶段保留与 parser 无关的 provenance、validation result 和此前最佳可用结果。 |
 | MCP | Capability Registry、Task Activation、Host Capability Gateway、runtime resource snapshot | Web 和本地工具使用 MCP proxy 以后会复用的 capability metadata、authorization、event 和 bounded-result contract。MCP 特有行为不得进入 core policy。 |
 | Skill Import 和 Skill loading | 应用控制的 ResourceLoader 和不可变 runtime resource snapshot | 仅捆绑版本从 Host 提供的 snapshot 获取资源，Pi Adapter 内部不扫描目录，也不硬编码 package path。Integration 后续只替换 snapshot producer，不替换 Pi session orchestration。 |
 | Extension Admission 和更新 | ResourceLoader 使用的不可变 Extension Inventory Snapshot | Foundation 只接受捆绑且固定版本的条目。Integration 后续通过同一 snapshot shape 提供已批准的全局 revision；未审计制品不得进入 Worker loading path。 |

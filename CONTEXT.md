@@ -453,8 +453,12 @@ A faithful reusable parse of a Material into blocks, structure, metadata, warnin
 _Avoid_: Task-specific Output, summary, inferred project facts
 
 **PDF Parse Pipeline**:
-A page-aware parsing path that preserves usable native PDF content first, invokes OCR only for pages whose native text is absent or unreliable, and retains partial results with explicit warnings when recovery fails.
-_Avoid_: Whole-document OCR by default, interchangeable OCR Provider Chain, silent parse substitution
+A page-aware parsing path that preserves usable native PDF content first, invokes ordinary OCR only when native text is absent or unreliable, and invokes Complex Page Recovery only when usable page structure still cannot be recovered, retaining the best earlier result with explicit warnings when a later stage fails.
+_Avoid_: Whole-document OCR by default, interchangeable OCR Provider Chain, unconditional generative replacement, silent parse substitution
+
+**Complex Page Recovery**:
+A bounded page-level attempt to recover layout, tables, formulas, visual regions, or reading order that remain unusable after native parsing and ordinary OCR, without discarding better earlier evidence when recovery fails validation.
+_Avoid_: Ordinary text OCR, user-selectable Provider fallback, whole-document generative parsing, silent evidence overwrite
 
 **Parse Batch**:
 A group of one or more Materials parsed together in a single user action or agent workflow.
@@ -577,8 +581,8 @@ A third-party Skill package placed into the VC Agent Skills Directory by the Use
 _Avoid_: Bundled first-party Skill, vc-agent ownership, redistribution right
 
 **Configured OCR Capability**:
-The single User-selected Skill, Pi Extension, command, local service, or external API used on demand when a Material requires OCR, with visible availability, provenance, warnings, and external-submission status.
-_Avoid_: Bundled OCR runtime, ordered Provider Chain, automatic fallback, silent external upload
+The single fixed local page-recovery capability used on demand when a Material requires OCR or Complex Page Recovery, with visible stage availability, provenance, validation, hardware path, and warnings while remaining one model-visible capability.
+_Avoid_: User-selected OCR Provider, separate model-visible OCR tools, user-selectable Provider Chain, unconditional generative overwrite, silent external upload
 
 **Skill Creator**:
 A User-invoked meta-skill reused as a complete compatible Claude Code or Codex skill package to create or update personal Skill directories under the active Access Mode.
