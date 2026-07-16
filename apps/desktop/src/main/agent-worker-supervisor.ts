@@ -44,7 +44,9 @@ export class AgentWorkerSupervisor {
   }
 
   stop(command: Extract<WorkerCommand, { command: "turn.stop" }>): void {
-    this.#workers.get(command.threadId)?.process.postMessage(command);
+    const record = this.#workers.get(command.threadId);
+    if (record === undefined) return;
+    void record.spawned.then(() => record.process.postMessage(command)).catch(() => undefined);
   }
 
   acknowledge(command: Extract<WorkerCommand, { command: "trajectory.acknowledge" }>): void {
