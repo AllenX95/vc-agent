@@ -106,13 +106,13 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Completed messages and terminal tool events append and flush to `trajectory.jsonl`.
-- [ ] Streaming partial content is atomically checkpointed without storing hidden reasoning, credentials, or raw authorization payloads.
-- [ ] Stop or crash produces one visible Interrupted Turn and never automatically resumes, replays tools, or submits queued text.
-- [ ] Restarting for inspection does not start Pi; continuing rebuilds the Physical Model Context lazily.
-- [ ] Stable event ids and high-water marks prevent duplicate terminal content after checkpoint recovery.
-- [ ] Persisted execution, tool, and artifact events carry a versioned actor/provenance reference that represents the primary Agent now and can represent a later Sub-Agent without reinterpreting old events.
-- [ ] A cross-Provider selection requires `Continue Current Thread` or `Start New Thread` and records the choice and retained-context disclosure.
+- [x] Completed messages and terminal tool events append and flush to `trajectory.jsonl`.
+- [x] Streaming partial content is atomically checkpointed without storing hidden reasoning, credentials, or raw authorization payloads.
+- [x] Stop or crash produces one visible Interrupted Turn and never automatically resumes, replays tools, or submits queued text.
+- [x] Restarting for inspection does not start Pi; continuing rebuilds the Physical Model Context lazily.
+- [x] Stable event ids and high-water marks prevent duplicate terminal content after checkpoint recovery.
+- [x] Persisted execution, tool, and artifact events carry a versioned actor/provenance reference that represents the primary Agent now and can represent a later Sub-Agent without reinterpreting old events.
+- [x] A cross-Provider selection requires `Continue Current Thread` or `Start New Thread` and records the choice and retained-context disclosure.
 
 ### F4. Execute One Authorized Host Capability
 

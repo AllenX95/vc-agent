@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 2,
+      stateSchemaVersion: 3,
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
     });
@@ -32,7 +32,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["model_profiles", "protected_credentials", "schema_migrations", "threads"]);
+    expect(tables).toEqual(["model_profiles", "physical_contexts", "protected_credentials", "schema_migrations", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -48,10 +48,13 @@ describe("HostStateStore", () => {
     });
     const thread = store.createUnscopedThread("Thread 1");
     const selected = store.selectThreadProfile(thread.id, profile.id);
+    store.setPhysicalContextSession(thread.id, "C:\\app\\threads\\thread-1\\pi\\session.jsonl");
+    store.acknowledgePhysicalContext(thread.id, "event-7", 7);
 
     expect(profile).not.toHaveProperty("apiKey");
     expect(store.getEncryptedCredential(profile.credentialRef)).toEqual(encryptedCredential);
     expect(selected.activeProfileId).toBe(profile.id);
+    expect(store.getPhysicalContext(thread.id)).toMatchObject({ highWaterEventId: "event-7", highWaterSequence: 7 });
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ threads: 1, modelProfiles: 1 });
     store.close();
   });

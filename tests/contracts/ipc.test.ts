@@ -3,7 +3,8 @@ import {
   IPC_SCHEMA_VERSION,
   createBootstrapCommand,
   hostCommandSchema,
-  hostEventSchema
+  hostEventSchema,
+  trajectoryEventSchema
 } from "@vc-agent/contracts";
 
 describe("versioned IPC contracts", () => {
@@ -32,5 +33,22 @@ describe("versioned IPC contracts", () => {
       payload: { code: "HOST_FAILURE", message: "Fixture failure", recoverable: true }
     };
     expect(hostEventSchema.parse(event).actor.actorId).toBe("agent-2");
+  });
+
+  it("keeps tool and artifact trajectory provenance actor-neutral", () => {
+    const event = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 9,
+      threadId: crypto.randomUUID(),
+      turnId: crypto.randomUUID(),
+      actor: { actorType: "sub_agent", actorId: "agent-2", parentActorId: "agent-1" },
+      provenance: { producerType: "sub_agent", producerId: "agent-2" },
+      occurredAt: new Date().toISOString(),
+      event: "tool.completed",
+      payload: { toolCallId: "tool-1", capabilityId: "output.write", summary: "Created output", artifactIds: ["artifact-1"] }
+    };
+    expect(trajectoryEventSchema.parse(event).provenance.producerId).toBe("agent-2");
   });
 });

@@ -8,11 +8,13 @@ import {
   type HostEvent,
   type ModelProfile,
   type ProviderFailure,
+  type TrajectoryProfile,
   type TokenUsage,
   type UnscopedThread
 } from "@vc-agent/contracts";
 import {
   ChevronDown,
+  CircleStop,
   Folder,
   KeyRound,
   MessageSquare,
@@ -27,13 +29,14 @@ import {
 type View = "workspace" | "settings";
 type ConversationItem =
   | { id: string; turnId: string; role: "user"; text: string }
+  | { id: string; turnId: string; role: "system"; text: string }
   | {
       id: string;
       turnId: string;
       role: "assistant";
       text: string;
-      status: "queued" | "streaming" | "completed" | "failed";
-      profile?: ModelProfile;
+      status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
+      profile?: TrajectoryProfile;
       usage?: TokenUsage;
       failure?: ProviderFailure;
       retryText?: string;
@@ -59,6 +62,7 @@ export function App() {
   const [conversations, setConversations] = useState<Record<string, ConversationItem[]>>({});
   const [prompt, setPrompt] = useState("");
   const [profileFormOpen, setProfileFormOpen] = useState(false);
+  const [profileChange, setProfileChange] = useState<Extract<HostEvent, { event: "thread.profile.change.required" }> | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -66,6 +70,7 @@ export function App() {
   const hasActiveTurn = items.some(
     (item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming")
   );
+  const activeTurn = items.find((item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming"));
 
   const applyEvent = useCallback((event: HostEvent) => {
     switch (event.event) {
@@ -76,6 +81,9 @@ export function App() {
         setProfileFormOpen(false);
         break;
       case "threads.listed": setThreads(event.payload.threads); break;
+      case "thread.trajectory.loaded":
+        setConversations((current) => ({ ...current, [event.payload.threadId]: projectTrajectoryTurns(event.payload.turns) }));
+        break;
       case "thread.created":
         setThreads((current) => [...current, event.payload.thread]);
         setActiveThreadId(event.payload.thread.id);
@@ -83,6 +91,16 @@ export function App() {
         break;
       case "thread.profile.selected":
         setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
+        break;
+      case "thread.profile.change.required": setProfileChange(event); break;
+      case "thread.profile.change.resolved":
+        setProfileChange(null);
+        setThreads((current) => [...current.filter((item) => item.id !== event.payload.thread.id), event.payload.thread]);
+        setActiveThreadId(event.payload.thread.id);
+        setView("workspace");
+        if (event.payload.action === "start_new_thread") {
+          setConversations((current) => ({ ...current, [event.payload.thread.id]: [] }));
+        }
         break;
       case "turn.accepted":
         setConversations((current) => appendTurn(current, event.payload.threadId, event.payload.turnId, event.payload.text, event.payload.profile));
@@ -101,6 +119,18 @@ export function App() {
         setConversations((current) => failTurn(current, event.payload));
         setPrompt("");
         break;
+      case "turn.interrupted":
+        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({
+          ...item,
+          text: event.payload.partialMessage,
+          status: "interrupted",
+          ...(event.payload.profile === undefined ? {} : { profile: event.payload.profile })
+        })));
+        break;
+      case "physical_context.rebuilt":
+        setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Physical context rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`));
+        break;
+      case "turn.stop.requested": break;
       case "diagnostic.raised": setDiagnostic(event); break;
     }
   }, []);
@@ -135,11 +165,30 @@ export function App() {
     void invoke(createCommand({ command: "thread.profile.select", payload: { threadId: activeThreadId, profileId } }));
   };
 
+  const selectThread = (threadId: string) => {
+    setActiveThreadId(threadId);
+    setView("workspace");
+    void invoke(createCommand({ command: "thread.trajectory.load", payload: { threadId } }));
+  };
+
   const submit = (text = prompt, retryOfTurnId?: string) => {
     if (activeThreadId === null || text.trim().length === 0 || hasActiveTurn) return;
     void invoke(createCommand({
       command: "turn.submit",
       payload: { threadId: activeThreadId, text: text.trim(), ...(retryOfTurnId === undefined ? {} : { retryOfTurnId }) }
+    }));
+  };
+
+  const stop = () => {
+    if (activeThreadId === null || activeTurn?.role !== "assistant") return;
+    void invoke(createCommand({ command: "turn.stop", payload: { threadId: activeThreadId, turnId: activeTurn.turnId } }));
+  };
+
+  const resolveProfileChange = (action: "continue_current_thread" | "start_new_thread") => {
+    if (profileChange === null) return;
+    void invoke(createCommand({
+      command: "thread.profile.change.resolve",
+      payload: { threadId: profileChange.payload.threadId, profileId: profileChange.payload.requestedProfile.id, action }
     }));
   };
 
@@ -157,7 +206,7 @@ export function App() {
               <button className="section-action" type="button" title="New thread" aria-label="New thread" onClick={createThread}><Plus size={15} /></button>
             </div>
             {threads.length === 0 ? <p className="empty-list">No threads</p> : threads.map((thread) => (
-              <button key={thread.id} className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => { setActiveThreadId(thread.id); setView("workspace"); }}>
+              <button key={thread.id} className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}>
                 <MessageSquare size={14} /><span>{thread.title}</span>
               </button>
             ))}
@@ -180,8 +229,14 @@ export function App() {
             <header className="conversation-header"><div><span className="eyebrow">Unscoped Thread</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}`}</span></header>
             <div className="message-list">
               {items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
-                <MessageItem key={item.id} item={item} configure={() => setView("settings")} retry={(text, turnId) => submit(text, turnId)} />
+                <MessageItem key={item.id} item={item} configure={() => setView("settings")} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
               ))}
+              {profileChange && <div className="profile-change" role="dialog" aria-label="Cross-Provider continuation">
+                <strong>Change Provider for this conversation?</strong>
+                <p>{profileChange.payload.currentProfile.provider} / {profileChange.payload.currentProfile.model} to {profileChange.payload.requestedProfile.provider} / {profileChange.payload.requestedProfile.model}</p>
+                <span>Continuing retains the visible Thread trajectory. Starting a new Thread retains no conversation context.</span>
+                <div><button type="button" onClick={() => resolveProfileChange("continue_current_thread")}>Continue current thread</button><button type="button" onClick={() => resolveProfileChange("start_new_thread")}>Start new thread</button><button type="button" onClick={() => setProfileChange(null)}>Cancel</button></div>
+              </div>}
             </div>
           </section>
         )}
@@ -193,7 +248,7 @@ export function App() {
               <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={hasActiveTurn || profiles.length === 0}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
-              <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0 || hasActiveTurn}><Send size={16} /></button>
+              {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0}><Send size={16} /></button>}
             </div>
           </form>
         )}
@@ -249,15 +304,38 @@ function SettingsView({ bootstrap, profiles, formOpen, setFormOpen, invoke }: {
   );
 }
 
-function MessageItem({ item, configure, retry }: { item: ConversationItem; configure(): void; retry(text: string, turnId: string): void }) {
+function MessageItem({ item, configure, retry, continueInterrupted }: { item: ConversationItem; configure(): void; retry(text: string, turnId: string): void; continueInterrupted(): void }) {
   if (item.role === "user") return <article className="message user-message"><div>{item.text}</div></article>;
+  if (item.role === "system") return <div className="system-event">{item.text}</div>;
   return <article className={`message assistant-message ${item.status}`}>
     <div className="message-meta"><span>vc-agent</span>{item.profile && <span>{item.profile.provider} / {item.profile.model}</span>}</div>
     {item.text && <div className="message-content">{item.text}</div>}
     {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">Working</div>}
     {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div><button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button><button type="button" onClick={configure}>Adjust profile</button></div></div>}
+    {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
     {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens</div>}
   </article>;
+}
+
+function projectTrajectoryTurns(turns: Extract<HostEvent, { event: "thread.trajectory.loaded" }>["payload"]["turns"]): ConversationItem[] {
+  return turns.flatMap((turn) => {
+    const assistant: Extract<ConversationItem, { role: "assistant" }> = {
+      id: `${turn.turnId}:assistant`,
+      turnId: turn.turnId,
+      role: "assistant",
+      text: turn.assistantText,
+      status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
+      ...(turn.profile === undefined ? {} : { profile: turn.profile }),
+      ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      ...(turn.failure === undefined ? {} : { failure: turn.failure, retryText: turn.text })
+    };
+    return [{ id: `${turn.turnId}:user`, turnId: turn.turnId, role: "user" as const, text: turn.text }, assistant];
+  });
+}
+
+function appendSystemEvent(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string) {
+  const item: ConversationItem = { id: `${turnId}:context-rebuilt`, turnId, role: "system", text };
+  return { ...current, [threadId]: [...(current[threadId] ?? []), item] };
 }
 
 function appendTurn(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string, profile: ModelProfile) {

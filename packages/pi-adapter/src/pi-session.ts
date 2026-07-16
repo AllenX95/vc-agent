@@ -1,4 +1,6 @@
-import { InMemoryCredentialStore, type AssistantMessage, type Usage } from "@earendil-works/pi-ai";
+import { existsSync } from "node:fs";
+import { resolve, sep } from "node:path";
+import { InMemoryCredentialStore, type AssistantMessage, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   ModelRuntime,
@@ -6,6 +8,7 @@ import {
   SettingsManager,
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
+import type { PhysicalContextHistoryItem } from "@vc-agent/contracts";
 import {
   SnapshotResourceLoader,
   type ExtensionInventorySnapshot,
@@ -21,6 +24,10 @@ export interface PiSessionProfile {
 
 export interface PiSessionConfig {
   readonly cwd: string;
+  readonly threadDirectory: string;
+  readonly previousSessionFile?: string;
+  readonly hostHighWater?: { readonly eventId: string; readonly sequence: number };
+  readonly contextHistory: readonly PhysicalContextHistoryItem[];
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
   readonly extensions: ExtensionInventorySnapshot;
@@ -28,16 +35,23 @@ export interface PiSessionConfig {
 
 export type PiSessionEvent =
   | { readonly type: "text_delta"; readonly delta: string }
-  | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly responseId?: string }
+  | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly responseId?: string; readonly piEntryId?: string }
   | { readonly type: "failed"; readonly error: unknown };
 
 export interface PiSessionHandle {
   readonly provider: string;
   readonly model: string;
   readonly activeTools: readonly string[];
+  readonly sessionFile: string;
+  readonly reconciliation: PiSessionReconciliation;
+  readonly retainedTurnCount: number;
   submit(prompt: string): Promise<void>;
+  abort(): Promise<void>;
+  acknowledge(eventId: string, sequence: number): string;
   dispose(): void;
 }
+
+export type PiSessionReconciliation = "resumed" | "missing" | "host_ahead" | "pi_ahead" | "irreconcilable";
 
 export interface PiModelReference {
   readonly provider: string;
@@ -92,6 +106,7 @@ export async function createPiSession(
     },
     { projectTrusted: false }
   );
+  const physicalContext = reconcilePhysicalContext(config, model);
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
@@ -99,7 +114,7 @@ export async function createPiSession(
     thinkingLevel: config.profile.thinkingLevel ?? "off",
     noTools: "all",
     resourceLoader,
-    sessionManager: SessionManager.inMemory(config.cwd),
+    sessionManager: physicalContext.sessionManager,
     settingsManager
   });
 
@@ -112,6 +127,9 @@ export async function createPiSession(
     provider: model.provider,
     model: model.id,
     activeTools: Object.freeze(session.getActiveToolNames()),
+    sessionFile: session.sessionFile ?? physicalContext.sessionManager.getSessionFile() ?? "",
+    reconciliation: physicalContext.reconciliation,
+    retainedTurnCount: config.contextHistory.length,
     submit: async (prompt) => {
       failureEmitted = false;
       let timedOut = false;
@@ -129,7 +147,100 @@ export async function createPiSession(
         clearTimeout(timeout);
       }
     },
+    abort: () => session.abort(),
+    acknowledge: (eventId, sequence) => session.sessionManager.appendCustomEntry("vc-agent.trajectory-high-water", { eventId, sequence }),
     dispose: () => session.dispose()
+  };
+}
+
+function reconcilePhysicalContext(config: PiSessionConfig, activeModel: Model<any>): {
+  sessionManager: SessionManager;
+  reconciliation: PiSessionReconciliation;
+} {
+  let reconciliation: PiSessionReconciliation = "missing";
+  if (config.previousSessionFile !== undefined) {
+    const threadRoot = `${resolve(config.threadDirectory)}${sep}`;
+    const candidate = resolve(config.previousSessionFile);
+    if (!candidate.startsWith(threadRoot) || !existsSync(candidate)) {
+      reconciliation = "missing";
+    } else {
+      try {
+        const existing = SessionManager.open(candidate, resolve(config.threadDirectory, "pi"), config.cwd);
+        const entries = existing.getEntries();
+        const marks = entries.filter((entry) => entry.type === "custom" && entry.customType === "vc-agent.trajectory-high-water");
+        const mark = marks.at(-1);
+        const data = mark?.type === "custom" && typeof mark.data === "object" && mark.data !== null
+          ? mark.data as { eventId?: unknown; sequence?: unknown }
+          : undefined;
+        const piHighWater = typeof data?.eventId === "string" && typeof data.sequence === "number"
+          ? { eventId: data.eventId, sequence: data.sequence }
+          : undefined;
+        if (
+          config.hostHighWater !== undefined &&
+          piHighWater?.eventId === config.hostHighWater.eventId &&
+          piHighWater.sequence === config.hostHighWater.sequence &&
+          existing.getLeafId() === mark?.id
+        ) {
+          return { sessionManager: existing, reconciliation: "resumed" };
+        }
+        if (piHighWater === undefined && config.hostHighWater !== undefined) reconciliation = "host_ahead";
+        else if (piHighWater !== undefined && config.hostHighWater === undefined) reconciliation = "pi_ahead";
+        else if (piHighWater !== undefined && config.hostHighWater !== undefined) {
+          reconciliation = piHighWater.sequence > config.hostHighWater.sequence ? "pi_ahead" : "host_ahead";
+        } else if (entries.length > 0) reconciliation = "pi_ahead";
+      } catch {
+        reconciliation = "irreconcilable";
+      }
+    }
+  }
+
+  const sessionManager = SessionManager.create(config.cwd, resolve(config.threadDirectory, "pi"));
+  appendRetainedHistory(sessionManager, config.contextHistory, activeModel);
+  if (config.hostHighWater !== undefined) {
+    sessionManager.appendCustomEntry("vc-agent.trajectory-high-water", config.hostHighWater);
+  } else {
+    sessionManager.appendCustomEntry("vc-agent.physical-context", { schemaVersion: 1 });
+  }
+  return { sessionManager, reconciliation };
+}
+
+function appendRetainedHistory(
+  sessionManager: SessionManager,
+  history: readonly PhysicalContextHistoryItem[],
+  activeModel: Model<any>
+): void {
+  for (const item of history) {
+    sessionManager.appendMessage({ role: "user", content: item.user, timestamp: Date.now() });
+    if (item.status === "interrupted") {
+      sessionManager.appendCustomMessageEntry(
+        "vc-agent.interrupted-visible-context",
+        `[Interrupted assistant response retained for context]\n${item.assistant}`,
+        false
+      );
+      continue;
+    }
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: item.assistant }],
+      api: activeModel.api,
+      provider: item.profile?.provider ?? activeModel.provider,
+      model: item.profile?.model ?? activeModel.id,
+      usage: emptyUsage(),
+      stopReason: "stop",
+      timestamp: Date.now()
+    };
+    sessionManager.appendMessage(message as Message);
+  }
+}
+
+function emptyUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
   };
 }
 

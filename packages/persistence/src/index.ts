@@ -4,8 +4,9 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 import type { BootstrapState, ModelProfile, ThinkingLevel, UnscopedThread } from "@vc-agent/contracts";
+export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 
-const STATE_SCHEMA_VERSION = 2;
+const STATE_SCHEMA_VERSION = 3;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -41,6 +42,13 @@ export interface RuntimeActivitySnapshot {
   readonly piSessionsStarted: number;
   readonly providerRequests: number;
   readonly externalNetworkRequests: number;
+}
+
+export interface PhysicalContextState {
+  readonly threadId: string;
+  readonly sessionFile: string;
+  readonly highWaterEventId?: string;
+  readonly highWaterSequence?: number;
 }
 
 export class HostStateStore {
@@ -93,9 +101,20 @@ export class HostStateStore {
         active_profile_id TEXT REFERENCES model_profiles(id),
         created_at TEXT NOT NULL
       ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS physical_contexts (
+        thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+        session_file TEXT NOT NULL,
+        high_water_event_id TEXT,
+        high_water_sequence INTEGER,
+        updated_at TEXT NOT NULL
+      ) STRICT;
     `);
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)")
+      .run(new Date().toISOString());
+    this.#database
+      .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)")
       .run(new Date().toISOString());
   }
 
@@ -197,6 +216,36 @@ export class HostStateStore {
     const thread = this.getUnscopedThread(threadId);
     if (thread === undefined) throw new Error("Thread not found");
     return thread;
+  }
+
+  getPhysicalContext(threadId: string): PhysicalContextState | undefined {
+    const row = this.#database.prepare("SELECT * FROM physical_contexts WHERE thread_id = ?").get(threadId) as
+      | { thread_id: string; session_file: string; high_water_event_id: string | null; high_water_sequence: number | null }
+      | undefined;
+    if (row === undefined) return undefined;
+    return {
+      threadId: row.thread_id,
+      sessionFile: row.session_file,
+      ...(row.high_water_event_id === null ? {} : { highWaterEventId: row.high_water_event_id }),
+      ...(row.high_water_sequence === null ? {} : { highWaterSequence: row.high_water_sequence })
+    };
+  }
+
+  setPhysicalContextSession(threadId: string, sessionFile: string): void {
+    this.#database.prepare(`
+      INSERT INTO physical_contexts(thread_id, session_file, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET session_file = excluded.session_file, updated_at = excluded.updated_at
+    `).run(threadId, sessionFile, new Date().toISOString());
+  }
+
+  acknowledgePhysicalContext(threadId: string, eventId: string, sequence: number): void {
+    const result = this.#database.prepare(`
+      UPDATE physical_contexts
+      SET high_water_event_id = ?, high_water_sequence = ?, updated_at = ?
+      WHERE thread_id = ?
+    `).run(eventId, sequence, new Date().toISOString(), threadId);
+    if (result.changes !== 1) throw new Error("Physical context is not registered");
   }
 
   close(): void {

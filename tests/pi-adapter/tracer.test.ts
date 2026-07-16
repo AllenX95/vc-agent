@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,6 +46,8 @@ describe("real Pi SDK tracer", () => {
     const handle = await createPiSession(
       {
         cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
         profile: {
           provider: model!.provider,
           model: model!.model,
@@ -76,6 +78,65 @@ describe("real Pi SDK tracer", () => {
     expect(loader.getExtensions().extensions).toEqual([]);
     expect(() => loader.extendResources({ skillPaths: [] })).toThrow("immutable");
     expect(Object.isFrozen(loader.snapshot)).toBe(true);
+  });
+
+  it("resumes only an exactly acknowledged Pi context and rebuilds when the Host is ahead", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-reconcile-"));
+    temporaryDirectories.push(cwd);
+    const model = (await listKnownPiModels())[0]!;
+    const profile = { provider: model.provider, model: model.model, apiKey: "reconcile-secret" };
+    const first = await createPiSession(
+      {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [{ user: "Prior question", assistant: "Prior visible answer", status: "completed" }],
+        profile,
+        resources,
+        extensions
+      },
+      () => {}
+    );
+    expect(first.reconciliation).toBe("missing");
+    first.acknowledge("terminal-1", 2);
+    const firstFile = first.sessionFile;
+    expect(firstFile).not.toBe("");
+    expect(existsSync(firstFile)).toBe(true);
+    first.dispose();
+
+    const resumed = await createPiSession(
+      {
+        cwd,
+        threadDirectory: cwd,
+        previousSessionFile: firstFile,
+        hostHighWater: { eventId: "terminal-1", sequence: 2 },
+        contextHistory: [],
+        profile,
+        resources,
+        extensions
+      },
+      () => {}
+    );
+    expect(resumed.reconciliation).toBe("resumed");
+    expect(resumed.sessionFile).toBe(firstFile);
+    resumed.dispose();
+
+    const rebuilt = await createPiSession(
+      {
+        cwd,
+        threadDirectory: cwd,
+        previousSessionFile: firstFile,
+        hostHighWater: { eventId: "terminal-2", sequence: 4 },
+        contextHistory: [{ user: "Question", assistant: "Visible answer", status: "completed" }],
+        profile,
+        resources,
+        extensions
+      },
+      () => {}
+    );
+    expect(rebuilt.reconciliation).toBe("host_ahead");
+    expect(rebuilt.sessionFile).not.toBe(firstFile);
+    expect(readFileSync(rebuilt.sessionFile, "utf8")).not.toContain(profile.apiKey);
+    rebuilt.dispose();
   });
 
   it("sanitizes structured Provider failures without losing useful fields", () => {

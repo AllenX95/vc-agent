@@ -8,21 +8,30 @@ import {
   type HostEvent,
   type ModelProfile,
   type ProvenanceRef,
+  type ProviderFailure,
+  type TrajectoryEvent,
+  type TrajectoryProfile,
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { HostStateStore } from "@vc-agent/persistence";
+import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
+import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
 const EVENT_CHANNEL = "vc-agent:event";
 const HOST_ACTOR = { actorType: "host", actorId: "desktop-host" } as const;
 const HOST_PROVENANCE = { producerType: "host", producerId: "desktop-host" } as const;
+const USER_ACTOR = { actorType: "user", actorId: "local-user" } as const;
+const USER_PROVENANCE = { producerType: "user", producerId: "local-user" } as const;
 const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
 
 interface TurnContext {
+  readonly correlationId: string;
+  readonly threadId: string;
+  readonly turnId: string;
   readonly text: string;
   readonly profile: ModelProfile;
   readonly retryOfTurnId?: string;
@@ -30,15 +39,17 @@ interface TurnContext {
 
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
+let trajectoryStore: ThreadTrajectoryStore | null = null;
+let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
 let externalNetworkRequests = 0;
+let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
+const activeTurnByThread = new Map<string, string>();
 const credentials = new ProtectedCredentialService();
 
-if (process.env.VC_AGENT_USER_DATA_DIR) {
-  app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
-}
+if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
 function nextSequence(threadId?: string): number {
   if (threadId === undefined) return 0;
@@ -64,16 +75,38 @@ function eventMetadata(
   };
 }
 
+function trajectoryMetadata(
+  correlationId: string,
+  threadId: string,
+  turnId: string,
+  actor: ActorRef,
+  provenance: ProvenanceRef,
+  eventId: string = randomUUID()
+) {
+  return {
+    schemaVersion: IPC_SCHEMA_VERSION,
+    eventId,
+    correlationId,
+    sequence: nextSequence(threadId),
+    threadId,
+    turnId,
+    actor,
+    provenance,
+    occurredAt: new Date().toISOString()
+  } as const;
+}
+
+function ipcMetadata(event: TrajectoryEvent) {
+  const { threadId: _threadId, turnId: _turnId, ...metadata } = event;
+  return metadata;
+}
+
 function diagnostic(
   correlationId: string,
   code: "UNSUPPORTED_SCHEMA_VERSION" | "INVALID_COMMAND" | "HOST_FAILURE",
   message: string
 ): HostEvent {
-  return {
-    ...eventMetadata(correlationId),
-    event: "diagnostic.raised",
-    payload: { code, message, recoverable: true }
-  };
+  return { ...eventMetadata(correlationId), event: "diagnostic.raised", payload: { code, message, recoverable: true } };
 }
 
 async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Promise<HostEvent> {
@@ -84,30 +117,25 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
     event.sender.send(EVENT_CHANNEL, result);
     return result;
   }
-
   const parsed = hostCommandSchema.safeParse(rawCommand);
   if (!parsed.success) {
     const result = diagnostic(correlationId, "INVALID_COMMAND", "The Host rejected an invalid command envelope.");
     event.sender.send(EVENT_CHANNEL, result);
     return result;
   }
-  if (stateStore === null || workerSupervisor === null) {
+  if (stateStore === null || trajectoryStore === null || inflight === null || workerSupervisor === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
   }
 
   try {
     const command = parsed.data;
     switch (command.command) {
-      case "app.bootstrap": {
+      case "app.bootstrap":
         return {
           ...eventMetadata(command.correlationId),
           event: "app.bootstrap.completed",
-          payload: stateStore.getBootstrapState(app.getVersion(), {
-            ...workerSupervisor.activity,
-            externalNetworkRequests
-          })
+          payload: stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests })
         };
-      }
       case "profile.list":
         return { ...eventMetadata(command.correlationId), event: "profiles.listed", payload: { profiles: stateStore.listModelProfiles() } };
       case "profile.create": {
@@ -122,20 +150,108 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "thread.list":
         return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listUnscopedThreads() } };
+      case "thread.trajectory.load":
+        if (stateStore.getUnscopedThread(command.payload.threadId) === undefined) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
+        }
+        return {
+          ...eventMetadata(command.correlationId, command.payload.threadId),
+          event: "thread.trajectory.loaded",
+          payload: { threadId: command.payload.threadId, turns: trajectoryStore.projectTurns(command.payload.threadId) }
+        };
       case "thread.create.unscoped": {
         const thread = stateStore.createUnscopedThread(command.payload.title);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
       }
-      case "thread.profile.select": {
-        const thread = stateStore.selectThreadProfile(command.payload.threadId, command.payload.profileId);
-        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.profile.selected", payload: { thread } };
-      }
+      case "thread.profile.select":
+        return selectThreadProfile(command.correlationId, command.payload.threadId, command.payload.profileId);
+      case "thread.profile.change.resolve":
+        return resolveThreadProfileChange(command.correlationId, command.payload);
       case "turn.submit":
         return submitTurn(command.correlationId, command.payload);
+      case "turn.stop": {
+        const context = turnContexts.get(command.payload.turnId);
+        if (context === undefined || context.threadId !== command.payload.threadId) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", "The requested Turn is not active.");
+        }
+        inflight.flush(context.turnId);
+        workerSupervisor.stop({
+          schemaVersion: 1,
+          command: "turn.stop",
+          commandId: randomUUID(),
+          correlationId: command.correlationId,
+          threadId: context.threadId,
+          turnId: context.turnId
+        });
+        return { ...eventMetadata(command.correlationId, context.threadId), event: "turn.stop.requested", payload: { threadId: context.threadId, turnId: context.turnId } };
+      }
     }
   } catch {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host could not complete the command.");
   }
+}
+
+function selectThreadProfile(correlationId: string, threadId: string, profileId: string): HostEvent {
+  const thread = stateStore!.getUnscopedThread(threadId);
+  const requested = stateStore!.getModelProfile(profileId);
+  if (thread === undefined || requested === undefined) throw new Error("Thread or Profile not found");
+  if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
+  const previous = trajectoryStore!.lastProfile(threadId);
+  if (previous !== undefined && previous.provider !== requested.provider) {
+    return {
+      ...eventMetadata(correlationId, threadId),
+      event: "thread.profile.change.required",
+      payload: {
+        threadId,
+        currentProfile: previous,
+        requestedProfile: toTrajectoryProfile(requested),
+        retainedContext: "visible-retained-trajectory"
+      }
+    };
+  }
+  const selected = stateStore!.selectThreadProfile(threadId, profileId);
+  return { ...eventMetadata(correlationId, threadId), event: "thread.profile.selected", payload: { thread: selected } };
+}
+
+function resolveThreadProfileChange(
+  correlationId: string,
+  input: { threadId: string; profileId: string; action: "continue_current_thread" | "start_new_thread" }
+): HostEvent {
+  const source = stateStore!.getUnscopedThread(input.threadId);
+  const requested = stateStore!.getModelProfile(input.profileId);
+  const previous = trajectoryStore!.lastProfile(input.threadId);
+  if (source === undefined || requested === undefined || previous === undefined) throw new Error("Profile change is stale");
+  if (activeTurnByThread.has(input.threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
+
+  let destination = source;
+  let retainedContext: "visible-retained-trajectory" | "none" = "visible-retained-trajectory";
+  if (input.action === "start_new_thread") {
+    destination = stateStore!.createUnscopedThread(`${source.title} - ${requested.provider}`);
+    destination = stateStore!.selectThreadProfile(destination.id, requested.id);
+    retainedContext = "none";
+  } else {
+    destination = stateStore!.selectThreadProfile(source.id, requested.id);
+  }
+
+  const record: TrajectoryEvent = {
+    ...trajectoryMetadata(correlationId, source.id, randomUUID(), USER_ACTOR, USER_PROVENANCE),
+    event: "provider_continuation.authorized",
+    payload: {
+      previousProvider: previous.provider,
+      previousModel: previous.model,
+      nextProvider: requested.provider,
+      nextModel: requested.model,
+      action: input.action,
+      destinationThreadId: destination.id,
+      retainedContext
+    }
+  };
+  trajectoryStore!.append(record);
+  return {
+    ...ipcMetadata(record),
+    event: "thread.profile.change.resolved",
+    payload: { sourceThreadId: source.id, thread: destination, profile: requested, action: input.action, retainedContext }
+  };
 }
 
 function submitTurn(
@@ -143,41 +259,79 @@ function submitTurn(
   input: { threadId: string; text: string; retryOfTurnId?: string | undefined }
 ): HostEvent {
   const turnId = randomUUID();
-  const thread = stateStore?.getUnscopedThread(input.threadId);
-  const profile = thread?.activeProfileId === undefined ? undefined : stateStore?.getModelProfile(thread.activeProfileId);
-  if (thread === undefined || profile === undefined) {
-    return {
-      ...eventMetadata(correlationId, input.threadId),
+  const thread = stateStore!.getUnscopedThread(input.threadId);
+  if (thread === undefined) throw new Error("Thread not found");
+  if (activeTurnByThread.has(input.threadId)) {
+    return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
+  }
+  const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
+  const submitted: TrajectoryEvent = {
+    ...trajectoryMetadata(correlationId, input.threadId, turnId, USER_ACTOR, USER_PROVENANCE),
+    event: "turn.submitted",
+    payload: {
+      text: input.text,
+      idempotencyKey: randomUUID(),
+      ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
+      ...(profile === undefined ? {} : { profile: toTrajectoryProfile(profile) })
+    }
+  };
+  trajectoryStore!.append(submitted);
+
+  if (profile === undefined) {
+    const failure: ProviderFailure = { kind: "configuration", code: "MODEL_PROFILE_NOT_CONFIGURED", message: "Model Profile not configured" };
+    const failed: TrajectoryEvent = {
+      ...trajectoryMetadata(correlationId, input.threadId, turnId, HOST_ACTOR, HOST_PROVENANCE),
       event: "turn.failed",
-      payload: {
-        threadId: input.threadId,
-        turnId,
-        text: input.text,
-        ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
-        failure: {
-          kind: "configuration",
-          code: "MODEL_PROFILE_NOT_CONFIGURED",
-          message: "Model Profile not configured"
-        }
-      }
+      payload: { failure }
+    };
+    trajectoryStore!.append(failed);
+    return {
+      ...ipcMetadata(failed),
+      event: "turn.failed",
+      payload: { threadId: input.threadId, turnId, text: input.text, ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }), failure }
     };
   }
-  const encrypted = stateStore?.getEncryptedCredential(profile.credentialRef);
+
+  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
   const context: TurnContext = {
+    correlationId,
+    threadId: input.threadId,
+    turnId,
     text: input.text,
     profile,
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   turnContexts.set(turnId, context);
-  const workerCommand: WorkerCommand = {
-    schemaVersion: IPC_SCHEMA_VERSION,
+  activeTurnByThread.set(input.threadId, turnId);
+  inflight!.begin({
+    schemaVersion: 1,
+    checkpointId: randomUUID(),
+    interruptionEventId: randomUUID(),
+    correlationId,
+    threadId: input.threadId,
+    turnId,
+    profile: toTrajectoryProfile(profile),
+    partialMessage: "",
+    startedTools: [],
+    lastWorkerSequence: 0,
+    lastHostSequence: submitted.sequence,
+    updatedAt: new Date().toISOString()
+  });
+
+  const physical = stateStore!.getPhysicalContext(input.threadId);
+  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1,
     command: "turn.execute",
     commandId: randomUUID(),
     correlationId,
     threadId: input.threadId,
     turnId,
     cwd: app.getPath("userData"),
+    threadDirectory: trajectoryStore!.threadDirectory(input.threadId),
+    ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
+    ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
+    contextHistory: trajectoryStore!.contextHistory(input.threadId),
     prompt: input.text,
     profile: {
       provider: profile.provider,
@@ -187,87 +341,150 @@ function submitTurn(
     },
     resources: {
       schemaVersion: 1,
-      revisionId: "foundation-f2-v1",
+      revisionId: "foundation-f3-v1",
       systemPrompt: "You are vc-agent. Answer the user's request directly and clearly.",
       appendSystemPrompt: []
     },
     extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
   };
-  void workerSupervisor?.execute(workerCommand).catch(() => {
-    handleWorkerEvent({
-      schemaVersion: 1,
-      correlationId,
-      threadId: input.threadId,
-      turnId,
-      event: "turn.failed",
-      failure: {
-        kind: "worker",
-        code: "WORKER_START_FAILED",
-        message: "Agent Worker could not be started.",
-        provider: profile.provider,
-        model: profile.model
-      }
-    });
-  });
+  void workerSupervisor!.execute(workerCommand).catch(() => interruptTurn(context, "worker_exit", 0));
   return {
-    ...eventMetadata(correlationId, input.threadId),
+    ...ipcMetadata(submitted),
     event: "turn.accepted",
-    payload: {
-      threadId: input.threadId,
-      turnId,
-      text: input.text,
-      ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
-      profile
-    }
+    payload: { threadId: input.threadId, turnId, text: input.text, ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }), profile }
   };
 }
 
 function handleWorkerEvent(workerEvent: WorkerEvent): void {
+  if (workerEvent.event === "trajectory.acknowledged") {
+    stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
+    return;
+  }
   const context = turnContexts.get(workerEvent.turnId);
-  if (context === undefined || mainWindow === null) return;
-  let hostEvent: HostEvent;
+  if (context === undefined) return;
+
+  if (workerEvent.event === "physical_context.ready") {
+    stateStore!.setPhysicalContextSession(workerEvent.threadId, workerEvent.sessionFile);
+    if (workerEvent.reconciliation !== "resumed" && workerEvent.retainedTurnCount > 0) {
+      const record: TrajectoryEvent = {
+        ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, HOST_ACTOR, HOST_PROVENANCE),
+        event: "physical_context.rebuilt",
+        payload: { reason: workerEvent.reconciliation, retainedTurnCount: workerEvent.retainedTurnCount }
+      };
+      trajectoryStore!.append(record);
+      emit({ ...ipcMetadata(record), event: "physical_context.rebuilt", payload: { threadId: context.threadId, turnId: context.turnId, ...record.payload } });
+    }
+    return;
+  }
+
   if (workerEvent.event === "turn.started") {
-    hostEvent = {
-      ...eventMetadata(workerEvent.correlationId, workerEvent.threadId, AGENT_ACTOR, AGENT_PROVENANCE),
+    const record: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
       event: "turn.started",
-      payload: { threadId: workerEvent.threadId, turnId: workerEvent.turnId }
+      payload: { profile: toTrajectoryProfile(context.profile) }
     };
-  } else if (workerEvent.event === "message.delta") {
-    hostEvent = {
-      ...eventMetadata(workerEvent.correlationId, workerEvent.threadId, AGENT_ACTOR, AGENT_PROVENANCE),
-      event: "message.delta",
-      payload: { threadId: workerEvent.threadId, turnId: workerEvent.turnId, delta: workerEvent.delta }
-    };
-  } else if (workerEvent.event === "turn.completed") {
-    hostEvent = {
-      ...eventMetadata(workerEvent.correlationId, workerEvent.threadId, AGENT_ACTOR, AGENT_PROVENANCE),
+    trajectoryStore!.append(record);
+    inflight!.updateBoundary(context.turnId, workerEvent.workerSequence, record.sequence);
+    emit({ ...ipcMetadata(record), event: "turn.started", payload: { threadId: context.threadId, turnId: context.turnId } });
+    return;
+  }
+
+  if (workerEvent.event === "message.delta") {
+    const metadata = eventMetadata(context.correlationId, context.threadId, AGENT_ACTOR, AGENT_PROVENANCE);
+    inflight!.updateDelta(context.turnId, workerEvent.delta, workerEvent.workerSequence, metadata.sequence);
+    emit({ ...metadata, event: "message.delta", payload: { threadId: context.threadId, turnId: context.turnId, delta: workerEvent.delta } });
+    return;
+  }
+
+  if (workerEvent.event === "turn.completed") {
+    const record: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
       event: "turn.completed",
       payload: {
-        threadId: workerEvent.threadId,
-        turnId: workerEvent.turnId,
         message: workerEvent.message,
-        profile: context.profile,
+        profile: toTrajectoryProfile(context.profile),
         usage: workerEvent.usage,
-        ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId })
+        ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }),
+        ...(workerEvent.piEntryId === undefined ? {} : { piEntryId: workerEvent.piEntryId })
       }
     };
-    turnContexts.delete(workerEvent.turnId);
-  } else {
-    hostEvent = {
-      ...eventMetadata(workerEvent.correlationId, workerEvent.threadId, AGENT_ACTOR, AGENT_PROVENANCE),
-      event: "turn.failed",
-      payload: {
-        threadId: workerEvent.threadId,
-        turnId: workerEvent.turnId,
-        text: context.text,
-        ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }),
-        profile: context.profile,
-        failure: workerEvent.failure
-      }
-    };
-    turnContexts.delete(workerEvent.turnId);
+    trajectoryStore!.append(record);
+    finishTurn(context);
+    acknowledgeTrajectory(context, record);
+    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    return;
   }
-  mainWindow.webContents.send(EVENT_CHANNEL, hostEvent);
+
+  if (workerEvent.event === "turn.interrupted") {
+    interruptTurn(context, workerEvent.reason, workerEvent.workerSequence);
+    return;
+  }
+
+  if (workerEvent.failure.code === "WORKER_EXITED") {
+    interruptTurn(context, "worker_exit", workerEvent.workerSequence);
+    return;
+  }
+  const record: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+    event: "turn.failed",
+    payload: { profile: toTrajectoryProfile(context.profile), failure: workerEvent.failure }
+  };
+  trajectoryStore!.append(record);
+  finishTurn(context);
+  acknowledgeTrajectory(context, record);
+  emit({ ...ipcMetadata(record), event: "turn.failed", payload: { threadId: context.threadId, turnId: context.turnId, text: context.text, ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }), profile: context.profile, failure: workerEvent.failure } });
+}
+
+function acknowledgeTrajectory(context: TurnContext, record: TrajectoryEvent): void {
+  workerSupervisor?.acknowledge({
+    schemaVersion: 1,
+    command: "trajectory.acknowledge",
+    commandId: randomUUID(),
+    correlationId: context.correlationId,
+    threadId: context.threadId,
+    turnId: context.turnId,
+    eventId: record.eventId,
+    sequence: record.sequence
+  });
+}
+
+function interruptTurn(
+  context: TurnContext,
+  reason: "user_stop" | "worker_exit" | "application_restart" | "provider_interrupted",
+  workerSequence: number
+): void {
+  if (!turnContexts.has(context.turnId)) return;
+  inflight!.flush(context.turnId);
+  const checkpoint = inflight!.get(context.turnId);
+  const record: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, HOST_ACTOR, HOST_PROVENANCE, checkpoint?.interruptionEventId),
+    event: "turn.interrupted",
+    payload: {
+      partialMessage: checkpoint?.partialMessage ?? "",
+      reason,
+      profile: toTrajectoryProfile(context.profile),
+      tools: checkpoint?.startedTools.map((tool) => ({ ...tool, status: tool.status === "started" ? "interrupted" as const : tool.status })) ?? [],
+      lastWorkerSequence: Math.max(workerSequence, checkpoint?.lastWorkerSequence ?? 0),
+      lastHostSequence: checkpoint?.lastHostSequence ?? 0
+    }
+  };
+  trajectoryStore!.append(record);
+  finishTurn(context);
+  emit({ ...ipcMetadata(record), event: "turn.interrupted", payload: { threadId: context.threadId, turnId: context.turnId, partialMessage: record.payload.partialMessage, reason, profile: context.profile } });
+}
+
+function finishTurn(context: TurnContext): void {
+  inflight!.complete(context.turnId);
+  turnContexts.delete(context.turnId);
+  activeTurnByThread.delete(context.threadId);
+}
+
+function toTrajectoryProfile(profile: ModelProfile): TrajectoryProfile {
+  return { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel };
+}
+
+function emit(event: HostEvent): void {
+  if (!shuttingDown && mainWindow !== null) mainWindow.webContents.send(EVENT_CHANNEL, event);
 }
 
 function readValue(input: unknown, key: string): unknown {
@@ -289,12 +506,7 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: "#f4f5f2",
     title: "vc-agent",
     autoHideMenuBar: true,
-    webPreferences: {
-      preload: join(__dirname, "../preload/preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
+    webPreferences: { preload: join(__dirname, "../preload/preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   void window.loadFile(join(__dirname, "../renderer/index.html"));
   window.once("ready-to-show", () => window.show());
@@ -308,16 +520,24 @@ app.whenReady().then(() => {
     callback({});
   });
   stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"));
+  trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"));
+  for (const thread of stateStore.listUnscopedThreads()) {
+    trajectoryStore.recoverInterruptedTurns(thread.id);
+    const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
+    sequenceByThread.set(thread.id, lastSequence);
+  }
+  inflight = new InflightTurnCoordinator(trajectoryStore);
   workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
   ipcMain.handle(COMMAND_CHANNEL, handleCommand);
   mainWindow = createMainWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow();
-  });
+  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow(); });
 });
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
   ipcMain.removeHandler(COMMAND_CHANNEL);
   workerSupervisor?.closeAll();
   workerSupervisor = null;

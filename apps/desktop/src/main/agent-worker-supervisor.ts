@@ -5,7 +5,8 @@ interface WorkerRecord {
   readonly process: UtilityProcess;
   readonly spawned: Promise<void>;
   sessionStarted: boolean;
-  activeCommand?: WorkerCommand;
+  activeCommand?: Extract<WorkerCommand, { command: "turn.execute" }>;
+  lastWorkerSequence: number;
 }
 
 export interface WorkerActivity {
@@ -35,11 +36,19 @@ export class AgentWorkerSupervisor {
     };
   }
 
-  async execute(command: WorkerCommand): Promise<void> {
+  async execute(command: Extract<WorkerCommand, { command: "turn.execute" }>): Promise<void> {
     const record = this.#workers.get(command.threadId) ?? this.#startWorker(command.threadId);
     record.activeCommand = command;
     await record.spawned;
     record.process.postMessage(command);
+  }
+
+  stop(command: Extract<WorkerCommand, { command: "turn.stop" }>): void {
+    this.#workers.get(command.threadId)?.process.postMessage(command);
+  }
+
+  acknowledge(command: Extract<WorkerCommand, { command: "trajectory.acknowledge" }>): void {
+    this.#workers.get(command.threadId)?.process.postMessage(command);
   }
 
   #startWorker(threadId: string): WorkerRecord {
@@ -53,7 +62,7 @@ export class AgentWorkerSupervisor {
       resolveSpawn = resolve;
       rejectSpawn = reject;
     });
-    const record: WorkerRecord = { process: child, spawned, sessionStarted: false };
+    const record: WorkerRecord = { process: child, spawned, sessionStarted: false, lastWorkerSequence: 0 };
     this.#workers.set(threadId, record);
     this.#agentWorkersStarted += 1;
 
@@ -61,6 +70,7 @@ export class AgentWorkerSupervisor {
     child.on("message", (rawEvent) => {
       const parsed = workerEventSchema.safeParse(rawEvent);
       if (!parsed.success) return;
+      record.lastWorkerSequence = Math.max(record.lastWorkerSequence, parsed.data.workerSequence);
       if (parsed.data.event === "turn.started") {
         if (!record.sessionStarted) {
           record.sessionStarted = true;
@@ -68,7 +78,7 @@ export class AgentWorkerSupervisor {
         }
         this.#providerRequests += 1;
       }
-      if (parsed.data.event === "turn.completed" || parsed.data.event === "turn.failed") {
+      if (parsed.data.event === "turn.completed" || parsed.data.event === "turn.failed" || parsed.data.event === "turn.interrupted") {
         delete record.activeCommand;
       }
       this.#onEvent(parsed.data);
@@ -83,6 +93,7 @@ export class AgentWorkerSupervisor {
           correlationId: active.correlationId,
           threadId: active.threadId,
           turnId: active.turnId,
+          workerSequence: record.lastWorkerSequence + 1,
           event: "turn.failed",
           failure: {
             kind: "worker",
