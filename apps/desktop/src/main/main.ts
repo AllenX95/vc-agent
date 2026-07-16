@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
 import {
   IPC_SCHEMA_VERSION,
@@ -12,13 +12,14 @@ import {
   type ModelProfile,
   type ProvenanceRef,
   type ProviderFailure,
+  type Thread,
   type TrajectoryEvent,
   type TrajectoryProfile,
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityGateway, detectOutputIntent, ProjectIdentityStore, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -57,7 +58,9 @@ const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
 const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
+const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const credentials = new ProtectedCredentialService();
+const projectIdentities = new ProjectIdentityStore();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
@@ -161,10 +164,16 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         });
         return { ...eventMetadata(command.correlationId), event: "profile.created", payload: { profile } };
       }
+      case "project.list":
+        return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
+      case "project.open":
+        return openProject(command.correlationId);
+      case "project.collision.resolve":
+        return resolveProjectCollision(command.correlationId, command.payload.collisionId, command.payload.action);
       case "thread.list":
-        return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listUnscopedThreads() } };
+        return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listThreads() } };
       case "thread.trajectory.load":
-        if (stateStore.getUnscopedThread(command.payload.threadId) === undefined) {
+        if (stateStore.getThread(command.payload.threadId) === undefined) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
         }
         return {
@@ -180,6 +189,10 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const thread = stateStore.createUnscopedThread(command.payload.title);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
       }
+      case "thread.create.project": {
+        const thread = stateStore.createProjectThread(command.payload.projectId, command.payload.title);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
+      }
       case "thread.profile.select":
         return selectThreadProfile(command.correlationId, command.payload.threadId, command.payload.profileId);
       case "thread.profile.change.resolve":
@@ -188,8 +201,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (activeTurnByThread.has(command.payload.threadId)) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Output Location.");
         }
-        const thread = stateStore.getUnscopedThread(command.payload.threadId);
-        if (thread === undefined) throw new Error("Thread not found");
+        const thread = stateStore.getThread(command.payload.threadId);
+        if (thread === undefined || thread.scope !== "unscoped") throw new Error("Unscoped Thread not found");
         let outputLocation = process.env.VC_AGENT_TEST_OUTPUT_LOCATION;
         if (outputLocation === undefined) {
           const selection = await dialog.showOpenDialog(mainWindow!, {
@@ -233,8 +246,58 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
   }
 }
 
+async function openProject(correlationId: string): Promise<HostEvent> {
+  let selectedPath = process.env.VC_AGENT_TEST_PROJECT_PATH;
+  if (selectedPath === undefined) {
+    const selection = await dialog.showOpenDialog(mainWindow!, { title: "Open Project", properties: ["openDirectory"] });
+    selectedPath = selection.canceled ? undefined : selection.filePaths[0];
+  }
+  if (selectedPath === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Project selection was cancelled.");
+  const projectPath = resolve(selectedPath);
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return diagnostic(correlationId, "HOST_FAILURE", "The selected Project path is not an existing directory.");
+  }
+  const marker = projectIdentities.read(projectPath) ?? projectIdentities.create(projectPath);
+  const registeredAtPath = stateStore!.getProjectByPath(projectPath);
+  if (registeredAtPath !== undefined && registeredAtPath.id !== marker.projectId) {
+    return diagnostic(correlationId, "HOST_FAILURE", "The selected path is already registered to another Project Identity.");
+  }
+  const existing = stateStore!.getProject(marker.projectId);
+  if (existing === undefined) {
+    const project = stateStore!.registerProject({ id: marker.projectId, displayName: basename(projectPath), path: projectPath, createdAt: marker.createdAt });
+    return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
+  }
+  if (resolve(existing.path) === projectPath) {
+    return { ...eventMetadata(correlationId), event: "project.opened", payload: { project: existing } };
+  }
+  const collisionId = randomUUID();
+  pendingProjectCollisions.set(collisionId, { projectId: marker.projectId, existingPath: existing.path, selectedPath: projectPath });
+  return {
+    ...eventMetadata(correlationId),
+    event: "project.identity.collision",
+    payload: { collisionId, projectId: marker.projectId, existingPath: existing.path, selectedPath: projectPath }
+  };
+}
+
+function resolveProjectCollision(
+  correlationId: string,
+  collisionId: string,
+  action: "moved_project" | "project_copy"
+): HostEvent {
+  const collision = pendingProjectCollisions.get(collisionId);
+  pendingProjectCollisions.delete(collisionId);
+  if (collision === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The Project Identity Collision is no longer active.");
+  if (action === "moved_project") {
+    const project = stateStore!.moveProject(collision.projectId, basename(collision.selectedPath), collision.selectedPath);
+    return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
+  }
+  const marker = projectIdentities.replaceForCopy(collision.selectedPath);
+  const project = stateStore!.registerProject({ id: marker.projectId, displayName: basename(collision.selectedPath), path: collision.selectedPath, createdAt: marker.createdAt });
+  return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
+}
+
 function selectThreadProfile(correlationId: string, threadId: string, profileId: string): HostEvent {
-  const thread = stateStore!.getUnscopedThread(threadId);
+  const thread = stateStore!.getThread(threadId);
   const requested = stateStore!.getModelProfile(profileId);
   if (thread === undefined || requested === undefined) throw new Error("Thread or Profile not found");
   if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
@@ -252,6 +315,7 @@ function selectThreadProfile(correlationId: string, threadId: string, profileId:
     };
   }
   const selected = stateStore!.selectThreadProfile(threadId, profileId);
+  authorizeProjectProfile(selected, requested);
   return { ...eventMetadata(correlationId, threadId), event: "thread.profile.selected", payload: { thread: selected } };
 }
 
@@ -259,7 +323,7 @@ function resolveThreadProfileChange(
   correlationId: string,
   input: { threadId: string; profileId: string; action: "continue_current_thread" | "start_new_thread" }
 ): HostEvent {
-  const source = stateStore!.getUnscopedThread(input.threadId);
+  const source = stateStore!.getThread(input.threadId);
   const requested = stateStore!.getModelProfile(input.profileId);
   const previous = trajectoryStore!.lastProfile(input.threadId);
   if (source === undefined || requested === undefined || previous === undefined) throw new Error("Profile change is stale");
@@ -268,12 +332,15 @@ function resolveThreadProfileChange(
   let destination = source;
   let retainedContext: "visible-retained-trajectory" | "none" = "visible-retained-trajectory";
   if (input.action === "start_new_thread") {
-    destination = stateStore!.createUnscopedThread(`${source.title} - ${requested.provider}`);
+    destination = source.scope === "project"
+      ? stateStore!.createProjectThread(source.projectId, `${source.title} - ${requested.provider}`)
+      : stateStore!.createUnscopedThread(`${source.title} - ${requested.provider}`);
     destination = stateStore!.selectThreadProfile(destination.id, requested.id);
     retainedContext = "none";
   } else {
     destination = stateStore!.selectThreadProfile(source.id, requested.id);
   }
+  authorizeProjectProfile(destination, requested);
 
   const record: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, source.id, randomUUID(), USER_ACTOR, USER_PROVENANCE),
@@ -296,12 +363,16 @@ function resolveThreadProfileChange(
   };
 }
 
+function authorizeProjectProfile(thread: Thread, profile: ModelProfile): void {
+  if (thread.scope === "project") stateStore!.authorizeProjectProfile(thread.projectId, profile.id, profile.provider);
+}
+
 function submitTurn(
   correlationId: string,
   input: { threadId: string; text: string; retryOfTurnId?: string | undefined }
 ): HostEvent {
   const turnId = randomUUID();
-  const thread = stateStore!.getUnscopedThread(input.threadId);
+  const thread = stateStore!.getThread(input.threadId);
   if (thread === undefined) throw new Error("Thread not found");
   if (activeTurnByThread.has(input.threadId)) {
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
@@ -320,7 +391,7 @@ function submitTurn(
   };
   trajectoryStore!.append(submitted);
 
-  if (outputIntent && thread.outputLocation === undefined) {
+  if (outputIntent && thread.scope === "unscoped" && thread.outputLocation === undefined) {
     const failure: ProviderFailure = { kind: "configuration", code: "OUTPUT_LOCATION_NOT_CONFIGURED", message: "Choose an Output Location before creating a file." };
     const failed: TrajectoryEvent = {
       ...trajectoryMetadata(correlationId, input.threadId, turnId, HOST_ACTOR, HOST_PROVENANCE),
@@ -350,6 +421,17 @@ function submitTurn(
     };
   }
 
+  if (thread.scope === "project" && !stateStore!.isProjectProfileAuthorized(thread.projectId, profile.id)) {
+    const failure: ProviderFailure = { kind: "configuration", code: "PROJECT_PROVIDER_NOT_AUTHORIZED", message: "Select this Model Profile in the Project Thread to authorize its Provider." };
+    const failed: TrajectoryEvent = {
+      ...trajectoryMetadata(correlationId, input.threadId, turnId, HOST_ACTOR, HOST_PROVENANCE),
+      event: "turn.failed",
+      payload: { profile: toTrajectoryProfile(profile), failure }
+    };
+    trajectoryStore!.append(failed);
+    return { ...ipcMetadata(failed), event: "turn.failed", payload: { threadId: input.threadId, turnId, text: input.text, profile, failure } };
+  }
+
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
   const context: TurnContext = {
@@ -359,7 +441,7 @@ function submitTurn(
     text: input.text,
     profile,
     outputIntent,
-    activeCapabilities: outputIntent ? ["output.write_text"] : [],
+    activeCapabilities: outputIntent && thread.scope === "unscoped" ? ["output.write_text"] : [],
     expectedStateVersion: thread.stateVersion,
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
@@ -388,13 +470,16 @@ function submitTurn(
     correlationId,
     threadId: input.threadId,
     turnId,
-    cwd: app.getPath("userData"),
+    cwd: thread.scope === "project" ? stateStore!.getProject(thread.projectId)!.path : app.getPath("userData"),
     threadDirectory: trajectoryStore!.threadDirectory(input.threadId),
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
     contextHistory: trajectoryStore!.contextHistory(input.threadId),
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
+    executionScope: thread.scope === "project"
+      ? { kind: "project", projectId: thread.projectId }
+      : { kind: "unscoped", threadId: thread.id },
     prompt: input.text,
     profile: {
       provider: profile.provider,
@@ -657,8 +742,17 @@ function resolveCapabilityInWorker(context: TurnContext, result: CapabilityExecu
 }
 
 function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationSnapshot {
-  const thread = stateStore!.getUnscopedThread(context.threadId);
+  const thread = stateStore!.getThread(context.threadId);
   if (thread === undefined) throw new Error("Thread not found");
+  if (thread.scope === "project") {
+    return {
+      accessMode: stateStore!.getAccessMode(),
+      scope: "project",
+      stateVersion: thread.stateVersion,
+      activeCapabilityIds: context.activeCapabilities,
+      outputIntent: context.outputIntent
+    };
+  }
   return {
     accessMode: stateStore!.getAccessMode(),
     scope: "unscoped",
@@ -758,7 +852,7 @@ app.whenReady().then(() => {
   });
   stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"));
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"));
-  for (const thread of stateStore.listUnscopedThreads()) {
+  for (const thread of stateStore.listThreads()) {
     trajectoryStore.recoverInterruptedTurns(thread.id);
     const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
     sequenceByThread.set(thread.id, lastSequence);

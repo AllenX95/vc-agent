@@ -179,7 +179,7 @@ function requestCapability(
     turnId: command.turnId,
     toolCallId,
     capabilityId,
-    scope: { kind: "unscoped" as const, threadId: command.threadId },
+    scope: command.executionScope,
     arguments: arguments_,
     expectedStateVersion: command.expectedStateVersion,
     actor: { actorType: "agent" as const, actorId: "primary-agent" },

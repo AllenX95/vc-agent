@@ -42,6 +42,10 @@ const executeTurn = workerCommandBase.extend({
   contextHistory: z.array(physicalContextHistoryItemSchema),
   activeCapabilities: z.array(z.string().min(1)),
   expectedStateVersion: z.number().int().positive(),
+  executionScope: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("unscoped"), threadId: z.string().min(1) }),
+    z.object({ kind: z.literal("project"), projectId: z.string().uuid() })
+  ]),
   prompt: z.string().min(1),
   profile: z.object({
     provider: z.string().min(1),

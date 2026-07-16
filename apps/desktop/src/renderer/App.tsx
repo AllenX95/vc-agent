@@ -7,10 +7,11 @@ import {
   type HostCommand,
   type HostEvent,
   type ModelProfile,
+  type Project,
   type ProviderFailure,
   type TrajectoryProfile,
   type TokenUsage,
-  type UnscopedThread
+  type Thread
 } from "@vc-agent/contracts";
 import {
   ChevronDown,
@@ -67,13 +68,15 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [diagnostic, setDiagnostic] = useState<HostEvent | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [threads, setThreads] = useState<UnscopedThread[]>([]);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Record<string, ConversationItem[]>>({});
   const [prompt, setPrompt] = useState("");
   const [profileFormOpen, setProfileFormOpen] = useState(false);
   const [profileChange, setProfileChange] = useState<Extract<HostEvent, { event: "thread.profile.change.required" }> | null>(null);
   const [confirmations, setConfirmations] = useState<Record<string, Extract<HostEvent, { event: "capability.confirmation.required" }>>>({});
+  const [projectCollision, setProjectCollision] = useState<Extract<HostEvent, { event: "project.identity.collision" }> | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -88,6 +91,12 @@ export function App() {
       case "app.bootstrap.completed": setBootstrap(event.payload); break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
+      case "projects.listed": setProjects(event.payload.projects); break;
+      case "project.opened":
+        setProjects((current) => [...current.filter((project) => project.id !== event.payload.project.id), event.payload.project]);
+        setProjectCollision(null);
+        break;
+      case "project.identity.collision": setProjectCollision(event); break;
       case "profile.created":
         setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]);
         setProfileFormOpen(false);
@@ -180,12 +189,25 @@ export function App() {
     });
     void invoke(createBootstrapCommand());
     void invoke(createCommand({ command: "profile.list" }));
+    void invoke(createCommand({ command: "project.list" }));
     void invoke(createCommand({ command: "thread.list" }));
     return unsubscribe;
   }, [applyEvent, invoke]);
 
   const createThread = () => {
     void invoke(createCommand({ command: "thread.create.unscoped", payload: { title: `Thread ${threads.length + 1}` } }));
+  };
+
+  const openProject = () => void invoke(createCommand({ command: "project.open" }));
+
+  const createProjectThread = (projectId: string) => {
+    const count = threads.filter((thread) => thread.scope === "project" && thread.projectId === projectId).length;
+    void invoke(createCommand({ command: "thread.create.project", payload: { projectId, title: `Thread ${count + 1}` } }));
+  };
+
+  const resolveProjectCollision = (action: "moved_project" | "project_copy") => {
+    if (projectCollision === null) return;
+    void invoke(createCommand({ command: "project.collision.resolve", payload: { collisionId: projectCollision.payload.collisionId, action } }));
   };
 
   const selectProfile = (profileId: string) => {
@@ -242,13 +264,19 @@ export function App() {
               <MessageSquare size={15} /><span>Unscoped Threads</span>
               <button className="section-action" type="button" title="New thread" aria-label="New thread" onClick={createThread}><Plus size={15} /></button>
             </div>
-            {threads.length === 0 ? <p className="empty-list">No threads</p> : threads.map((thread) => (
+            {threads.filter((thread) => thread.scope === "unscoped").length === 0 ? <p className="empty-list">No threads</p> : threads.filter((thread) => thread.scope === "unscoped").map((thread) => (
               <button key={thread.id} className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}>
                 <MessageSquare size={14} /><span>{thread.title}</span>
               </button>
             ))}
           </section>
-          <section><div className="section-label"><Folder size={15} /><span>Projects</span><ChevronDown size={14} /></div><p className="empty-list">No projects</p></section>
+          <section>
+            <div className="section-label"><Folder size={15} /><span>Projects</span><button className="section-action" type="button" title="Open project" aria-label="Open project" onClick={openProject}><Plus size={15} /></button></div>
+            {projects.length === 0 ? <p className="empty-list">No projects</p> : projects.map((project) => <div className="project-group" key={project.id}>
+              <div className="project-row"><span title={project.path}>{project.displayName}</span><button className="section-action" type="button" title="New project thread" aria-label={`New thread in ${project.displayName}`} onClick={() => createProjectThread(project.id)}><Plus size={14} /></button></div>
+              {threads.filter((thread) => thread.scope === "project" && thread.projectId === project.id).map((thread) => <button key={thread.id} className={`thread-row project-thread ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}><MessageSquare size={14} /><span>{thread.title}</span></button>)}
+            </div>)}
+          </section>
         </nav>
         <button className={`settings-button ${view === "settings" ? "active" : ""}`} type="button" onClick={() => setView(view === "settings" ? "workspace" : "settings")}>
           <Settings size={17} /><span>Settings</span>
@@ -260,10 +288,10 @@ export function App() {
         {view === "settings" ? (
           <SettingsView bootstrap={bootstrap} profiles={profiles} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} />
         ) : activeThread === undefined ? (
-          <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select an unscoped thread from the navigation.</p></div>
+          <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">Unscoped Thread</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}`}</span></header>
+            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}`}</span></header>
             <div className="message-list">
               {items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
                 <MessageItem key={item.id} item={item} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
@@ -281,6 +309,10 @@ export function App() {
           </section>
         )}
 
+        {view === "workspace" && projectCollision && <div className="workspace-dialog" role="dialog" aria-label="Project identity collision">
+          <strong>Project Identity Collision</strong><p>{projectCollision.payload.selectedPath}</p><span>This identity is already registered at {projectCollision.payload.existingPath}. Classify the folder explicitly.</span><div><button type="button" onClick={() => resolveProjectCollision("moved_project")}>Moved Project</button><button type="button" onClick={() => resolveProjectCollision("project_copy")}>Project Copy</button><button type="button" onClick={() => setProjectCollision(null)}>Cancel</button></div>
+        </div>}
+
         {view === "workspace" && activeThread !== undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
             <textarea aria-label="Message" placeholder="Ask vc-agent" value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={hasActiveTurn} />
@@ -288,7 +320,7 @@ export function App() {
               <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={hasActiveTurn || profiles.length === 0}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
-              <span className="output-location" title={activeThread.outputLocation}>{activeThread.outputLocation ?? "No output location"}</span>
+              <span className="output-location" title={activeThread.scope === "unscoped" ? activeThread.outputLocation : projects.find((project) => project.id === activeThread.projectId)?.path}>{activeThread.scope === "unscoped" ? activeThread.outputLocation ?? "No output location" : "Project scoped"}</span>
               {bootstrap?.accessMode === "full" && <span className="full-access-indicator">Full access</span>}
               {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0}><Send size={16} /></button>}
             </div>
@@ -298,7 +330,7 @@ export function App() {
 
       <aside className="right-panel" aria-label="Project state">
         <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className="active" role="tab" aria-selected="true">Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" role="tab" disabled>Context</button><button type="button" role="tab" disabled>Memory</button></div>
-        <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>
+        <div className="panel-empty"><PanelRight size={20} /><h2>{activeThread?.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project" : "No project selected"}</h2><p>{activeThread?.scope === "project" ? "Project registered. Materials are not loaded until requested." : "Unscoped threads have no project state."}</p></div>
         <div className="status-strip"><span><span className="status-dot" /> Host ready</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>

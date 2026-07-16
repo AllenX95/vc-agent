@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, ThinkingLevel, UnscopedThread } from "@vc-agent/contracts";
+import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, Project, ProjectThread, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 
-const STATE_SCHEMA_VERSION = 4;
+const STATE_SCHEMA_VERSION = 5;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -28,7 +28,18 @@ interface ThreadRow {
   active_profile_id: string | null;
   output_location: string | null;
   state_version: number;
+  scope: "unscoped" | "project";
+  project_id: string | null;
   created_at: string;
+}
+
+interface ProjectRow {
+  id: string;
+  display_name: string;
+  path: string;
+  identity_status: "stable" | "path_bound";
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CreateModelProfileInput {
@@ -144,6 +155,55 @@ export class HostStateStore {
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?)")
       .run(new Date().toISOString());
+    if (!this.#columnExists("threads", "project_id")) this.#migrateProjects();
+    this.#database
+      .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)")
+      .run(new Date().toISOString());
+  }
+
+  #migrateProjects(): void {
+    this.#database.exec("PRAGMA foreign_keys = OFF");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.exec(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          path TEXT NOT NULL UNIQUE,
+          identity_status TEXT NOT NULL CHECK(identity_status IN ('stable', 'path_bound')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE threads_v5 (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK(scope IN ('unscoped', 'project')),
+          project_id TEXT REFERENCES projects(id),
+          active_profile_id TEXT REFERENCES model_profiles(id),
+          output_location TEXT,
+          state_version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          CHECK((scope = 'unscoped' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL))
+        ) STRICT;
+        INSERT INTO threads_v5(id, title, scope, project_id, active_profile_id, output_location, state_version, created_at)
+          SELECT id, title, 'unscoped', NULL, active_profile_id, output_location, state_version, created_at FROM threads;
+        DROP TABLE threads;
+        ALTER TABLE threads_v5 RENAME TO threads;
+        CREATE TABLE project_provider_authorizations (
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          profile_id TEXT NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          authorized_at TEXT NOT NULL,
+          PRIMARY KEY(project_id, profile_id)
+        ) STRICT;
+      `);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.#database.exec("PRAGMA foreign_keys = ON");
+    }
   }
 
   #columnExists(table: string, column: string): boolean {
@@ -158,7 +218,7 @@ export class HostStateStore {
       storagePath: this.#storagePath,
       accessMode: this.getAccessMode(),
       entityCounts: {
-        projects: 0,
+        projects: this.#count("projects"),
         threads: this.#count("threads"),
         modelProfiles: this.#count("model_profiles"),
         taskAssignments: 0
@@ -167,7 +227,7 @@ export class HostStateStore {
     };
   }
 
-  #count(table: "threads" | "model_profiles"): number {
+  #count(table: "projects" | "threads" | "model_profiles"): number {
     const row = this.#database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
     return Number(row.count);
   }
@@ -233,24 +293,90 @@ export class HostStateStore {
     return thread;
   }
 
-  listUnscopedThreads(): UnscopedThread[] {
-    const rows = this.#database.prepare("SELECT * FROM threads ORDER BY created_at ASC").all() as unknown as ThreadRow[];
-    return rows.map(mapThread);
+  registerProject(input: { id: string; displayName: string; path: string; createdAt: string; identityStatus?: "stable" | "path_bound" }): Project {
+    const now = new Date().toISOString();
+    this.#database.prepare(`
+      INSERT INTO projects(id, display_name, path, identity_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(input.id, input.displayName, input.path, input.identityStatus ?? "stable", input.createdAt, now);
+    return this.getProject(input.id)!;
   }
 
-  getUnscopedThread(id: string): UnscopedThread | undefined {
+  listProjects(): Project[] {
+    return (this.#database.prepare("SELECT * FROM projects ORDER BY created_at").all() as unknown as ProjectRow[]).map(mapProject);
+  }
+
+  getProject(id: string): Project | undefined {
+    const row = this.#database.prepare("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | undefined;
+    return row === undefined ? undefined : mapProject(row);
+  }
+
+  getProjectByPath(path: string): Project | undefined {
+    const row = this.#database.prepare("SELECT * FROM projects WHERE path = ?").get(path) as ProjectRow | undefined;
+    return row === undefined ? undefined : mapProject(row);
+  }
+
+  moveProject(id: string, displayName: string, path: string): Project {
+    const result = this.#database.prepare("UPDATE projects SET display_name = ?, path = ?, updated_at = ? WHERE id = ?")
+      .run(displayName, path, new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Project not found");
+    return this.getProject(id)!;
+  }
+
+  createProjectThread(projectId: string, title: string): ProjectThread {
+    if (this.getProject(projectId) === undefined) throw new Error("Project not found");
+    const thread: ProjectThread = {
+      id: randomUUID(), title, scope: "project", projectId, stateVersion: 1, createdAt: new Date().toISOString()
+    };
+    this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
+      .run(thread.id, thread.title, projectId, thread.createdAt);
+    return thread;
+  }
+
+  listThreads(): Thread[] {
+    return (this.#database.prepare("SELECT * FROM threads ORDER BY created_at ASC").all() as unknown as ThreadRow[]).map(mapThread);
+  }
+
+  listProjectThreads(projectId: string): ProjectThread[] {
+    return (this.#database.prepare("SELECT * FROM threads WHERE scope = 'project' AND project_id = ? ORDER BY created_at").all(projectId) as unknown as ThreadRow[])
+      .map(mapThread) as ProjectThread[];
+  }
+
+  getThread(id: string): Thread | undefined {
     const row = this.#database.prepare("SELECT * FROM threads WHERE id = ?").get(id) as ThreadRow | undefined;
     return row === undefined ? undefined : mapThread(row);
   }
 
-  selectThreadProfile(threadId: string, profileId: string): UnscopedThread {
+  listUnscopedThreads(): UnscopedThread[] {
+    const rows = this.#database.prepare("SELECT * FROM threads WHERE scope = 'unscoped' ORDER BY created_at ASC").all() as unknown as ThreadRow[];
+    return rows.map(mapThread) as UnscopedThread[];
+  }
+
+  getUnscopedThread(id: string): UnscopedThread | undefined {
+    const thread = this.getThread(id);
+    return thread?.scope === "unscoped" ? thread : undefined;
+  }
+
+  selectThreadProfile(threadId: string, profileId: string): Thread {
     const result = this.#database
       .prepare("UPDATE threads SET active_profile_id = ? WHERE id = ?")
       .run(profileId, threadId);
     if (result.changes !== 1) throw new Error("Thread not found");
-    const thread = this.getUnscopedThread(threadId);
+    const thread = this.getThread(threadId);
     if (thread === undefined) throw new Error("Thread not found");
     return thread;
+  }
+
+  authorizeProjectProfile(projectId: string, profileId: string, provider: string): void {
+    this.#database.prepare(`
+      INSERT INTO project_provider_authorizations(project_id, profile_id, provider, authorized_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(project_id, profile_id) DO UPDATE SET provider = excluded.provider, authorized_at = excluded.authorized_at
+    `).run(projectId, profileId, provider, new Date().toISOString());
+  }
+
+  isProjectProfileAuthorized(projectId: string, profileId: string): boolean {
+    return this.#database.prepare("SELECT 1 FROM project_provider_authorizations WHERE project_id = ? AND profile_id = ?").get(projectId, profileId) !== undefined;
   }
 
   getAccessMode(): AccessMode {
@@ -354,14 +480,28 @@ function mapProfile(row: ProfileRow): ModelProfile {
   };
 }
 
-function mapThread(row: ThreadRow): UnscopedThread {
-  return {
+function mapThread(row: ThreadRow): Thread {
+  const common = {
     id: row.id,
     title: row.title,
-    scope: "unscoped",
     ...(row.active_profile_id === null ? {} : { activeProfileId: row.active_profile_id }),
-    ...(row.output_location === null ? {} : { outputLocation: row.output_location }),
     stateVersion: row.state_version,
     createdAt: row.created_at
+  };
+  if (row.scope === "project") {
+    if (row.project_id === null) throw new Error("Project Thread has no Project");
+    return { ...common, scope: "project", projectId: row.project_id };
+  }
+  return { ...common, scope: "unscoped", ...(row.output_location === null ? {} : { outputLocation: row.output_location }) };
+}
+
+function mapProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    path: row.path,
+    identityStatus: row.identity_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }

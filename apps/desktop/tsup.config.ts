@@ -7,7 +7,7 @@ export default defineConfig([
     platform: "node",
     target: "es2023",
     external: ["electron", "node:sqlite"],
-    noExternal: ["@vc-agent/contracts", "@vc-agent/core", "@vc-agent/persistence"],
+    noExternal: ["@vc-agent/capabilities", "@vc-agent/contracts", "@vc-agent/core", "@vc-agent/host-services", "@vc-agent/persistence"],
     outDir: "dist/main",
     clean: true
   },

@@ -33,6 +33,10 @@ button { font: inherit; letter-spacing: 0; }
 .thread-row { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 9px 0 27px; border: 0; border-radius: 5px; background: transparent; color: #505851; font-size: 12px; text-align: left; }
 .thread-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-row:hover, .thread-row.active { background: #dfe4dd; color: #223029; }
+.project-group { margin: 2px 0 8px; }
+.project-row { align-items: center; color: #2c342d; display: flex; font-size: 12px; font-weight: 650; justify-content: space-between; min-height: 28px; padding: 0 8px 0 10px; }
+.project-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-row.project-thread { padding-left: 36px; }
 .settings-button { display: flex; align-items: center; gap: 9px; margin: 8px; min-height: 38px; padding: 0 11px; border: 0; border-radius: 6px; color: #444b45; background: transparent; text-align: left; }
 .settings-button:hover, .settings-button.active { background: #dfe4dd; color: #1f2e26; }
 
@@ -98,6 +102,12 @@ button { font: inherit; letter-spacing: 0; }
 .profile-change span { color: #707870; font-size: 10px; }
 .profile-change div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .profile-change button { min-height: 28px; padding: 0 9px; border: 1px solid #c5cbc4; border-radius: 5px; background: #fff; color: #36423a; font-size: 10px; }
+.workspace-dialog { position: absolute; z-index: 3; top: 72px; left: 50%; width: min(560px, calc(100% - 48px)); padding: 15px; transform: translateX(-50%); border: 1px solid #c9cec8; border-radius: 7px; background: #f4f6f2; box-shadow: 0 12px 34px rgba(37, 49, 40, .16); white-space: normal; }
+.workspace-dialog strong, .workspace-dialog p, .workspace-dialog span { display: block; }
+.workspace-dialog p { margin: 5px 0; color: #3d4940; font-size: 11px; overflow-wrap: anywhere; }
+.workspace-dialog span { color: #707870; font-size: 10px; overflow-wrap: anywhere; }
+.workspace-dialog div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.workspace-dialog button { min-height: 28px; padding: 0 9px; border: 1px solid #c5cbc4; border-radius: 5px; background: #fff; color: #36423a; font-size: 10px; }
 
 .diagnostic { position: absolute; z-index: 2; top: 14px; left: 18px; right: 18px; display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid #d9a94c; border-radius: 6px; background: #fff7df; color: #553f14; font-size: 12px; }
 .diagnostic strong { font-size: 11px; }

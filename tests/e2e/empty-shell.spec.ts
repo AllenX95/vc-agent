@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test } from "@playwright/test";
 import { join, resolve } from "node:path";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
@@ -233,6 +233,91 @@ test("gates text Outputs on explicit intent and a selected Unscoped Output Locat
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
     rmSync(outputDirectory, { recursive: true, force: true });
+  }
+});
+
+test("opens a stable Project, isolates Project Threads, and resolves moved or copied identities", async () => {
+  test.setTimeout(90_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-f5-e2e-"));
+  const originalProject = mkdtempSync(join(tmpdir(), "vc-agent-f5-project-"));
+  const movedProject = `${originalProject}-moved`;
+  const copiedProject = `${originalProject}-copy`;
+  const root = resolve(import.meta.dirname, "../..");
+  const apiKey = "sk-invalid-f5-project-secret";
+  writeFileSync(join(originalProject, "company-notes.txt"), "Confidential fixture material");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: originalProject });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = originalProject.split(/[\\/]/).at(-1)!;
+    await expect(window.getByText(projectName, { exact: true })).toBeVisible();
+    const markerPath = join(originalProject, "outputs", "system", "project.json");
+    const firstMarker = JSON.parse(readFileSync(markerPath, "utf8")) as { projectId: string };
+    expect(Object.keys(JSON.parse(readFileSync(markerPath, "utf8"))).sort()).toEqual(["createdAt", "projectId", "schemaVersion"]);
+    expect(readdirSync(join(originalProject, "outputs", "system"))).toEqual(["project.json"]);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { entityCounts: { projects: 1 }, runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    await expect(window.getByRole("heading", { name: "Thread 1" })).toBeVisible();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Project Provider", provider: "anthropic", model: "claude-sonnet-4-5", apiKey });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Project Provider" });
+
+    const databaseBeforeWork = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const authorizationCount = Number((databaseBeforeWork.prepare("SELECT COUNT(*) AS count FROM project_provider_authorizations").get() as { count: number }).count);
+    databaseBeforeWork.close();
+    expect(authorizationCount).toBe(1);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByLabel("Message").fill("Discuss this project without loading local materials.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
+
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Project Provider" });
+    await window.getByLabel("Message").fill("Start an independent project discussion.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
+
+    const databaseAfterWork = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const projectThreads = databaseAfterWork.prepare("SELECT id FROM threads WHERE scope = 'project' ORDER BY created_at").all() as Array<{ id: string }>;
+    const contexts = databaseAfterWork.prepare("SELECT thread_id, session_file FROM physical_contexts ORDER BY thread_id").all() as Array<{ thread_id: string; session_file: string }>;
+    databaseAfterWork.close();
+    expect(projectThreads).toHaveLength(2);
+    expect(new Set(contexts.map((context) => context.thread_id))).toEqual(new Set(projectThreads.map((thread) => thread.id)));
+    expect(new Set(contexts.map((context) => context.session_file)).size).toBe(2);
+
+    await application.close();
+    renameSync(originalProject, movedProject);
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: movedProject });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const movedDialog = window.getByRole("dialog", { name: "Project identity collision" });
+    await expect(movedDialog).toBeVisible();
+    await movedDialog.getByRole("button", { name: "Moved Project" }).click();
+    await expect(window.getByText(movedProject.split(/[\\/]/).at(-1)!, { exact: true })).toBeVisible();
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await application.close();
+    cpSync(movedProject, copiedProject, { recursive: true });
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: copiedProject });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const copyDialog = window.getByRole("dialog", { name: "Project identity collision" });
+    await expect(copyDialog).toBeVisible();
+    await copyDialog.getByRole("button", { name: "Project Copy" }).click();
+    await expect(window.getByText(copiedProject.split(/[\\/]/).at(-1)!, { exact: true })).toBeVisible();
+    const copiedMarker = JSON.parse(readFileSync(join(copiedProject, "outputs", "system", "project.json"), "utf8")) as { projectId: string };
+    expect(copiedMarker.projectId).not.toBe(firstMarker.projectId);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { entityCounts: { projects: 2, threads: 2 }, runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(originalProject, { recursive: true, force: true });
+    rmSync(movedProject, { recursive: true, force: true });
+    rmSync(copiedProject, { recursive: true, force: true });
   }
 });
 

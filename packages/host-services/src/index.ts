@@ -10,6 +10,7 @@ import {
   type CapabilityDefinition,
   type CapabilityExecutionContext
 } from "@vc-agent/capabilities";
+export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

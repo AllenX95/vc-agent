@@ -43,6 +43,29 @@ export const unscopedThreadSchema = z.object({
 });
 export type UnscopedThread = z.infer<typeof unscopedThreadSchema>;
 
+export const projectSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string().min(1),
+  path: z.string().min(1),
+  identityStatus: z.enum(["stable", "path_bound"]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+export type Project = z.infer<typeof projectSchema>;
+
+export const projectThreadSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  scope: z.literal("project"),
+  projectId: z.string().uuid(),
+  activeProfileId: z.string().min(1).optional(),
+  stateVersion: z.number().int().positive(),
+  createdAt: z.string().datetime()
+});
+export type ProjectThread = z.infer<typeof projectThreadSchema>;
+export const threadSchema = z.discriminatedUnion("scope", [unscopedThreadSchema, projectThreadSchema]);
+export type Thread = z.infer<typeof threadSchema>;
+
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
@@ -119,6 +142,12 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
   })
 });
 const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
+const listProjectsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.list") });
+const openProjectCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.open") });
+const resolveProjectCollisionCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.collision.resolve"),
+  payload: z.object({ collisionId: z.string().min(1), action: z.enum(["moved_project", "project_copy"]) })
+});
 const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.trajectory.load"),
   payload: z.object({ threadId: z.string().min(1) })
@@ -126,6 +155,10 @@ const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
 const createThreadCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.create.unscoped"),
   payload: z.object({ title: z.string().trim().min(1).max(120) })
+});
+const createProjectThreadCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.create.project"),
+  payload: z.object({ projectId: z.string().uuid(), title: z.string().trim().min(1).max(120) })
 });
 const selectThreadProfileCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.profile.select"),
@@ -165,9 +198,13 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
   createProfileCommandSchema,
+  listProjectsCommandSchema,
+  openProjectCommandSchema,
+  resolveProjectCollisionCommandSchema,
   listThreadsCommandSchema,
   loadThreadTrajectoryCommandSchema,
   createThreadCommandSchema,
+  createProjectThreadCommandSchema,
   selectThreadProfileCommandSchema,
   resolveThreadProfileChangeCommandSchema,
   chooseOutputLocationCommandSchema,
@@ -232,7 +269,24 @@ const profileCreatedEventSchema = eventMetadataSchema.extend({
 });
 const threadsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("threads.listed"),
-  payload: z.object({ threads: z.array(unscopedThreadSchema) })
+  payload: z.object({ threads: z.array(threadSchema) })
+});
+const projectsListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("projects.listed"),
+  payload: z.object({ projects: z.array(projectSchema) })
+});
+const projectOpenedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("project.opened"),
+  payload: z.object({ project: projectSchema })
+});
+const projectCollisionDetectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("project.identity.collision"),
+  payload: z.object({
+    collisionId: z.string().min(1),
+    projectId: z.string().uuid(),
+    existingPath: z.string().min(1),
+    selectedPath: z.string().min(1)
+  })
 });
 const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.trajectory.loaded"),
@@ -240,11 +294,11 @@ const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
 });
 const threadCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.created"),
-  payload: z.object({ thread: unscopedThreadSchema })
+  payload: z.object({ thread: threadSchema })
 });
 const threadProfileSelectedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.profile.selected"),
-  payload: z.object({ thread: unscopedThreadSchema })
+  payload: z.object({ thread: threadSchema })
 });
 const threadProfileChangeRequiredEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.profile.change.required"),
@@ -259,7 +313,7 @@ const threadProfileChangeResolvedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.profile.change.resolved"),
   payload: z.object({
     sourceThreadId: z.string().min(1),
-    thread: unscopedThreadSchema,
+    thread: threadSchema,
     profile: modelProfileSchema,
     action: z.enum(["continue_current_thread", "start_new_thread"]),
     retainedContext: z.enum(["visible-retained-trajectory", "none"])
@@ -364,6 +418,9 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
+  projectsListedEventSchema,
+  projectOpenedEventSchema,
+  projectCollisionDetectedEventSchema,
   threadsListedEventSchema,
   threadTrajectoryLoadedEventSchema,
   threadCreatedEventSchema,

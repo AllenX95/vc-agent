@@ -7,7 +7,8 @@
   "scripts": { "typecheck": "tsc -p tsconfig.json" },
   "dependencies": {
     "@vc-agent/capabilities": "workspace:*",
-    "@vc-agent/contracts": "workspace:*"
+    "@vc-agent/contracts": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": { "@types/node": "26.1.1", "typescript": "7.0.2" }
 }

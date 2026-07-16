@@ -143,13 +143,13 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Opening a folder creates only `outputs/system/project.json` with a random identity and no path or business content.
-- [ ] Project registration and Thread browsing remain Host-only until work is submitted.
-- [ ] A Project Thread can run through the same Pi path while an Unscoped Thread cannot access Project State.
-- [ ] Selecting an external Profile for the Project records Project Provider Authorization without eagerly reading or uploading files.
-- [ ] Reopening a moved folder reconnects its Threads and metadata through Project Identity.
-- [ ] Detecting the same identity at two paths blocks registration until the User chooses `Moved Project` or `Project Copy`.
-- [ ] Two Threads in one Project retain independent conversation and Physical Model Context.
+- [x] Opening a folder creates only `outputs/system/project.json` with a random identity and no path or business content.
+- [x] Project registration and Thread browsing remain Host-only until work is submitted.
+- [x] A Project Thread can run through the same Pi path while an Unscoped Thread cannot access Project State.
+- [x] Selecting an external Profile for the Project records Project Provider Authorization without eagerly reading or uploading files.
+- [x] Reopening a moved folder reconnects its Threads and metadata through Project Identity.
+- [x] Detecting the same identity at two paths blocks registration until the User chooses `Moved Project` or `Project Copy`.
+- [x] Two Threads in one Project retain independent conversation and Physical Model Context.
 
 ## Dogfood Slices
 
