@@ -1,0 +1,7 @@
+# Retain Thread Trajectory Until Explicit Deletion
+
+Accepted: original Thread trajectory is retained locally without automatic expiry until the User explicitly deletes the Thread or its history. Archiving changes visibility but preserves the trajectory and its eligibility for bounded Dream recovery.
+
+This gives Dream and later Reflection a stable, auditable source while keeping the single User in control of deletion. The trade-off is unbounded local storage growth and the need for clear storage inspection and deletion controls. Explicit deletion removes the original trajectory from future recall and Dream scans, but does not silently delete or rewrite already approved Project Memory, Long-term Memory, Judgment Records, or Cognitive Evolution History. Surviving records retain their provenance metadata and visibly mark the deleted source as unavailable.
+
+Trajectory Deletion Cascade removes active Short-term Memory Candidates and Recovered Memory Candidates whose only source is the deleted trajectory, plus raw source excerpts copied into pending or archived Dream Batches. A processed Dream Batch may retain minimal non-content metadata such as candidate id, prior disposition, deletion timestamp, and `source deleted`, but not the user or assistant text. Candidates with another retained qualifying source survive with the deleted source reference removed. Approved Memory remains outside this cascade.

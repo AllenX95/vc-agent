@@ -1,0 +1,3 @@
+# Use One Primary Product Loop For The First Release
+
+Accepted: the first release is organized around one end-to-end loop from materials or a research question, through evidence-backed VC analysis and a purpose-specific VC Deliverable, into user-triggered Investment Reflection and durable personal Investment Learning. There is no canonical golden document type: industry research, project judgment, an investment memo, or another requested document may complete the output stage. Office, OCR, Provider, Skill, Memory, and runtime work support this loop instead of competing as parallel product lines. This preserves a usable vertical alpha while forcing breadth and implementation depth to be prioritized against concrete investor work rather than one fixed template.

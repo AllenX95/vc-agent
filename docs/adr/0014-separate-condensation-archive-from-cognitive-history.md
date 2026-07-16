@@ -1,0 +1,3 @@
+# Separate Condensation Archive From Cognitive Evolution History
+
+Accepted: Long-term Memory uses a retention-managed Condensation Archive for entries removed by merge, deduplication, or wording condensation, while prior judgments and rationale produced by Narrow, Revise, or Contradict are stored in Cognitive Evolution History and retained permanently by default. Neither history is loaded into ordinary model context; relevant cognitive versions are recalled only for Reflection, Retrospective, or explicit inspection. This supersedes ADR-0004's single-archive policy and trades a small amount of permanent local storage for an auditable record of how the User's investment judgment evolves.

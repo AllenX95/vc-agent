@@ -1,0 +1,3 @@
+# Use A Token-Efficient Controlled Pi MCP Adapter
+
+Accepted: MCP connectivity uses a reviewed, pinned `pi-mcp-adapter` integration rather than a native MCP manager or a direct-all-tools extension. Its proxy-first discovery, lazy lifecycle, metadata cache, OAuth support, and output guard reduce ordinary context cost, while VC Desktop keeps configuration and authorization in the Host, disables cross-Agent config import and server-initiated capabilities by default, and requires explicit User configuration before direct tools, automatic OAuth, sampling, elicitation, MCP Apps, or permission-expanding behavior can run.

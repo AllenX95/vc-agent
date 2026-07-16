@@ -1,0 +1,3 @@
+# Allow Reflection To Propose Direct Long-Term Memory
+
+Accepted: an explicit Investment Reflection Thread may produce a Long-term Learning Proposal and, after the User reviews its applicability, sources, limitations, maturity, and final patch, write it directly to Long-term Memory without another Dream run. Dream remains the batch path for ordinary memory candidates and the place for cross-project synthesis, deduplication, and condensation. This reduces friction after deliberate reflection while accepting that Long-term Memory now has two controlled entry paths that must share the same provenance and confirmation rules.

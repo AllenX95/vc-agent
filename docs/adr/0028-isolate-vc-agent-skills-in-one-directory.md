@@ -1,0 +1,3 @@
+# Isolate VC Agent Skills In One Dedicated Directory
+
+Accepted: vc-agent discovers and loads Skills only from one dedicated VC Agent Skills Directory, defaulting to app data and containing the reused Skill Creator plus future personal or first-party Skills. Compatible Claude Code, Codex, Pi, Mimo Code, or other Skill packages must be explicitly imported as complete copied directories; vc-agent never aggregates or reads those Agents' live Skill roots in place. This prevents coding-agent workflows, dependencies, and permissions from leaking into the VC product while preserving format-level reuse.

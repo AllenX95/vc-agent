@@ -1,0 +1,3 @@
+# Use PyMuPDF Before Page-Level PaddleOCR
+
+Accepted: the Personal Build uses pinned PyMuPDF as the single native PDF parser and page renderer, then invokes PaddleOCR only for pages whose encoded text is absent or unreliable. OCR failure preserves any usable native fragments with explicit page warnings but cannot recover image-only text; both stages stay behind one `material_parse` capability, so this improves PDF coverage without adding another model-visible tool, provider selector, daemon, or OCR fallback chain. PyMuPDF's AGPL/commercial licensing is acceptable only within the current Personal Build assumption and must be reviewed or replaced before any distributable release.

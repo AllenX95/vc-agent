@@ -1,0 +1,3 @@
+# Reuse An Existing Skill Creator Package In The First Release
+
+Accepted: the first usable release includes explicit Skill Creator by reusing a complete compatible Claude Code or Codex Skill Creator package rather than building a vc-agent-specific creator engine. The package's referenced scripts, resources, metadata, and license travel with `SKILL.md`, while vc-agent provides controlled execution, destination selection, compatibility diagnostics, diff review, and final write approval. This preserves MVP capability with less custom workflow design, at the cost of adapting host-specific dependencies without allowing the reused Skill to bypass product permissions.

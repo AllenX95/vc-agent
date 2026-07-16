@@ -1,0 +1,7 @@
+# Use Two Access Modes And Preserve Cognitive Review
+
+Accepted: VC Desktop provides two installation-wide Access Modes. Standard Access is the initial default and requires scoped confirmation for sensitive filesystem, deletion, command, installation, authenticated-network, credential, external-write, and permission-expanding tool actions. Full Access is explicitly selected by the User, persists across application restarts until changed, and suppresses all subsequent tool-level authorization prompts while keeping tool activity, paths, destinations, provenance, failures, and Unknown Tool Outcome visible.
+
+Full Access does not authorize the Agent to redefine the User's task and does not bypass the Cognitive Review Gate. Starting or resuming Investment Reflection or Dream, applying Project Memory or Long-term Memory changes, and performing Thread Scope Elevation remain explicit User decisions in both modes. These actions shape the User's durable investment cognition or conversation scope rather than merely exercising computer permissions.
+
+This supersedes the single-level tool-confirmation policy in ADR-0025 and conditionalizes tool confirmations referenced by later Office, MCP, OCR, Skill, Extension, installation, and Output decisions. It preserves ADR-0025's User Intent and Dream/Memory review requirements. The trade-off is that Full Access can cause unrestricted local or external side effects, which is acceptable for this single-user Personal Build because the mode is explicitly selected, persistently visible, and reversible by the User.

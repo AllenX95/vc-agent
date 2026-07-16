@@ -1,0 +1,9 @@
+# Launch Empty And Activate Pi Only On Submitted Work
+
+Accepted: first launch contains no default Project, Thread, Model Profile, Task Model Assignment, sample data, setup wizard, or Pi session. Opening Projects, creating or viewing Threads, inspecting trajectory, and editing settings are local Host operations. An ordinary Pi worker and Thread session start only after the User submits model-backed work and the Host resolves an effective Model Profile; existing Threads reopened after restart remain dormant until continued.
+
+If execution cannot resolve a Model Profile, vc-agent starts no worker and makes no Provider call. The submitted text remains visible and retryable beside a local inline configuration error and actions to configure or select a Profile. No missing-Profile reminder appears before attempted work, no default Provider is invented, and configuration does not trigger an automatic retry.
+
+Explicit model-backed workflows activate their own bounded runtime only when launched and follow the same missing-assignment behavior. This minimizes idle resource use and avoids onboarding friction or implied Provider choices, at the cost of surfacing configuration failure at the first attempted conversation rather than before it.
+
+Host-only Operations remain available without Pi or a Model Profile: local Project and Thread management, Context and Memory editing, inventory, deterministic baseline parsing and local OCR, index rebuilds, settings, backup, migration, and diagnostics. They may use bounded local utility processes but never a model or Provider. Submitted Turns, Dream, Reflection, Sub-Agent Runs, visual model analysis, and model-orchestrated Skills are Pi-backed Work; a Host-only action that reaches a model requirement stops at that boundary rather than silently activating Pi.

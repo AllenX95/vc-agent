@@ -1,0 +1,3 @@
+# Authorize External Model Access At The Project And Profile Boundary
+
+Accepted: opening a folder as a Project and selecting an external Model Profile establishes default authorization for that Profile's Provider to receive task-relevant Project material without per-file or per-excerpt confirmation. The app must still use On-demand Parsing and Progressive Material Disclosure, record Provider and material provenance, and must not eagerly upload the Project or extend authorization to another Project, Provider, OCR service, MCP server, or outside file. This favors a Codex-like low-friction workflow while making the Project boundary and visible Profile selection the User's explicit trust decision.

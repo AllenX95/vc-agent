@@ -1,0 +1,5 @@
+# Use One Output Namespace Without Lifecycle Classification
+
+Accepted: Project deliverables and intermediate files use one determined Output Location, `<project>/outputs/` by default. The product does not classify Outputs as work or final, provide a promotion workflow, or require lifecycle metadata. The User may specify the destination and document purpose in the prompt; when omitted, the LLM selects a task-appropriate filename and optional subdirectory inside the authorized Output Location.
+
+This supersedes the Work Output / Final Output distinction referenced by ADR-0001, ADR-0007, ADR-0020, and ADR-0035 without changing their decisions about reusable Parsed Material Artifacts, vertical VC deliverables, material judgment disagreement, or task-specific structure. It favors a small, prompt-driven file model over a document state machine. Existing Output deletion requires a direct User instruction, Original Source File replacement retains its second confirmation, and external transmission remains separately authorized.

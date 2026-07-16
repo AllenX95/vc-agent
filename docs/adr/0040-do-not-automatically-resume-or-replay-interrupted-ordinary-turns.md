@@ -1,0 +1,5 @@
+# Do Not Automatically Resume Or Replay Interrupted Ordinary Turns
+
+Accepted: an interrupted ordinary Thread retains every completed message, tool result, finalized Output, latest durable visible partial response, and unsent draft, but reopening it never automatically resumes the model request or replays a tool. Streaming deltas are displayed immediately and coalesced by the Host into one atomically replaced In-flight Turn Checkpoint rather than appended per token to Thread Trajectory. After terminal events are durably appended, the checkpoint is removed; stable Turn and event ids make a leftover checkpoint harmless and prevent duplicate recovery.
+
+On restart, an orphaned checkpoint without a matching terminal event becomes one Interrupted Turn containing its latest durable partial Assistant text and known tool state. Host-owned Outputs finalize atomically, while dispatched external writes with unconfirmed completion become Unknown Tool Outcomes that require target inspection or explicit duplicate-risk acknowledgment before retry; only Dream and Investment Reflection retain stage-level resumable execution.

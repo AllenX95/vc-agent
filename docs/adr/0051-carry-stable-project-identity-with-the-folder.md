@@ -1,0 +1,7 @@
+# Carry Stable Project Identity With The Folder
+
+Accepted: first Project registration creates a minimal `outputs/system/project.json` containing a random stable Project Identity and schema metadata, but no path, Project name, credential, or investment content. App-level Threads, Dream state, memory candidates, provenance, and Project Provider Authorization bind to this identity, while the local registry treats the absolute path as an updateable locator. Project-relative references are preferred so a user-opened moved or renamed folder can reconnect to the same Project without losing continuity.
+
+vc-agent does not scan the disk to discover moved Projects. The User opens the new location, and the carried identity updates the registered path. If the folder cannot retain a readable identity marker, the app warns that continuity is path-bound rather than pretending move recovery is available.
+
+Folder copies create a Project Identity Collision. The User must classify the new location as `Moved Project`, which transfers the existing registration to that path, or `Project Copy`, which writes a new identity and starts independent app-level state while retaining copied folder-local files. Neither the Host nor the LLM infers this choice from content. Personal Cognition Backup continues to exclude all Project identity and registry data. This preserves move continuity without disk-wide search or content fingerprints, at the cost of one visible metadata file and an explicit collision decision for copies.

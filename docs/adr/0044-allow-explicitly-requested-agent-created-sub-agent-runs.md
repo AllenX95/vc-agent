@@ -1,0 +1,7 @@
+# Allow Explicitly Requested Agent-Created Sub-Agent Runs
+
+Accepted: ordinary Turns remain single-primary-Agent by default. Only explicit User intent for the current task starts a Sub-Agent Run. Within that run, the primary Agent autonomously chooses the number, roles, objectives, context boundaries, ordering, and synthesis of isolated Sub-Agent Tasks, including task-specific temporary roles. The authorization ends with the task and does not become a standing Thread mode.
+
+Each Model Profile may map user-configurable common Sub-Agent roles, plus Default Sub-Agent, to other Model Profiles. Child model resolution uses the matching role, then Default Sub-Agent, then the primary Thread's Active Model Profile. Missing, cyclic, or failed Profiles never cause automatic Provider fallback. The task tree exposes each child's role, objective, resolved Provider and Model, status, token usage, failure, and bounded result.
+
+Sub-Agent Tasks share the bounded global execution capacity, stop with the primary Turn, retain completed results across interruption, and never resume automatically. Their contexts and raw trajectories remain internal and are not direct Memory or Dream sources. A result becomes eligible only after it is presented in user-visible conversation and meaningfully adopted, corrected, or confirmed by the User. This adds deliberate multi-Agent depth for complex VC work while preserving the Minimal Default Harness for ordinary tasks and making additional model cost explicit.

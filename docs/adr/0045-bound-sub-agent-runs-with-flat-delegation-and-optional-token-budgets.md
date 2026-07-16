@@ -1,0 +1,7 @@
+# Bound Sub-Agent Runs With Flat Delegation And Optional Token Budgets
+
+Accepted: first-release Sub-Agent Runs are flat. Only the primary Agent creates Sub-Agent Tasks; children cannot recursively delegate, although they may use authorized tools and ordinary model calls for their bounded objectives. Each primary Model Profile supplies a default maximum child-task count, explicitly overridable by the User for one run, and may supply an optional shared Token Budget across the primary Turn and all child calls.
+
+When no shared Token Budget is configured, resolved Profiles retain their individual context and output limits without an extra run-wide cap. When configured, observed or Provider-reported usage is accumulated across the run; an in-flight request may complete above the remaining estimate, but no later model request starts after exhaustion. Completed results remain available and the User chooses whether to raise the limit, narrow work, or synthesize with incomplete coverage. Manual retries consume the same budget, and neither the Agent nor Full Access can enlarge it silently.
+
+The first release reports request counts and input/output tokens but does not enforce a monetary budget because third-party pricing, cache accounting, and reasoning-token semantics are not reliably uniform. This bounds autonomous delegation and protects the product's token-efficiency goal without creating a recursive multi-Agent platform or a fragile cross-Provider cost engine.

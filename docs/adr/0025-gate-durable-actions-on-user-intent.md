@@ -1,0 +1,9 @@
+# Gate Durable And Permission-Changing Actions On User Intent
+
+Accepted: the Agent may autonomously perform read-only analysis and runtime maintenance inside an already authorized task scope, while durable writes, Memory changes, workflow launches, and permission expansion require the User Intent Gate. Authorization may come from a direct user instruction or approval of a scoped Action Proposal, but never from inferred consent or Agent self-authorization; stricter actions such as Original Source File replacement retain their additional confirmation. This keeps a proactive Codex-like Agent useful without allowing suggestions to become unreviewed persistent change.
+
+Dream refines this boundary with an automatic, model-free Dream Due Check. The Host may check the configured review interval and surface a Dream Action Proposal when due, but it must not call a model, inspect Thread trajectory for consolidation, or start Dream until the User approves. Approval to run Dream does not authorize its proposed Memory writes; the final patch requires separate confirmation.
+
+If an approved Dream is interrupted, completed scope results and review state may persist as a Resumable Dream Run, but the prior approval does not authorize automatic model continuation after restart. The User explicitly resumes the run. Unchanged results may be reused; results whose relevant trajectory, candidate, or Memory inputs changed become Stale Dream Results and must be refreshed before downstream synthesis or write review.
+
+Dream Carryover and Resumable Dream Runs bypass the seven-day scheduling delay only for visibility. The Host may show an immediate Pending Dream Reminder on startup, but the reminder is non-blocking, can be deferred, and does not create a new batch or call a model. When a Resumable Dream Run exists, its Resume action takes precedence over starting another periodic Dream.

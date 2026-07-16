@@ -1,0 +1,7 @@
+# Use Transparent Local Content And OS-Protected Credentials
+
+Accepted: the Personal Build stores project content, Outputs, parsed artifacts, Context, Memory, Thread trajectory, Sub-Agent records, and review state through Transparent Local Storage without a separate vc-agent content-encryption vault. Directly editable project and Memory files remain plaintext, while app-owned state stays within the current operating-system user's app-data boundary. Device, account, filesystem, backup, and optional whole-disk protection remain the real local content-security boundary.
+
+Provider keys, OAuth tokens, authenticated-capability cookies, and comparable secrets are stored through the operating system's protected credential facility; configuration contains only credential references and non-secret metadata. Remote content telemetry is disabled by default, and persistent or displayed logs remove secrets, raw request bodies, and unnecessary user content.
+
+Deletion is Logical Deletion from vc-agent storage, indexes, recall, and UI, not guaranteed physical erasure from SSDs, journals, backups, synchronized folders, Provider retention, or external copies. This avoids an incomplete encryption layer that would complicate direct editing, recovery, and portability while leaving plaintext source Projects exposed, at the cost of requiring the User to secure the Windows account and device appropriately.

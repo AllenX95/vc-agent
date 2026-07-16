@@ -1,0 +1,5 @@
+# Use One Workspace With Directed Runtime Boundaries
+
+Accepted: vc-agent is one TypeScript workspace containing the Electron desktop application, Agent Worker, Utility Worker, pure core, versioned contracts, Host services, persistence, capabilities, and a single Pi Adapter, plus one locked Python utility runtime. It does not split Dream, Memory, Office, parsing, or other product features into local services or repositories.
+
+Dependencies follow the runtime ownership boundary: Renderer imports only UI code and contracts; Electron Main composes core, Host services, persistence, and capability adapters; Agent Worker imports contracts and the Pi Adapter; Utility Worker imports contracts and bounded capability implementations; only the Pi Adapter imports the Pi SDK; and the core imports no Electron, Pi, database, filesystem, or Python runtime types. Python communicates only through versioned Job Manifests and staged results. This accepts explicit ports and mapping code to prevent framework types and executable dependencies from collapsing the Host, Worker, and product-state boundaries into one process-coupled codebase.
