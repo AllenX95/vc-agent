@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
 import {
@@ -20,7 +20,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, estimateTokens, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityGateway, detectOutputIntent, estimateTokens, inventoryProjectFiles, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -63,6 +63,7 @@ const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
+const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout> }>();
 const credentials = new ProtectedCredentialService();
 const projectIdentities = new ProjectIdentityStore();
 
@@ -192,6 +193,19 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return openProject(command.correlationId);
       case "project.collision.resolve":
         return resolveProjectCollision(command.correlationId, command.payload.collisionId, command.payload.action);
+      case "project.material.list":
+        return { ...eventMetadata(command.correlationId), event: "project.materials.listed", payload: { projectId: command.payload.projectId, materials: stateStore.listMaterials(command.payload.projectId) } };
+      case "project.material.refresh":
+        return refreshProjectInventory(command.correlationId, command.payload.projectId, false);
+      case "material.need": {
+        const context = stateStore.getStaleMaterialRefreshContext(command.payload.materialId);
+        if (context === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "This Material does not require a Parse Refresh Choice.");
+        return { ...eventMetadata(command.correlationId), event: "material.parse.refresh.choice.required", payload: { ...context, currentSourceHash: context.material.sourceHash } };
+      }
+      case "material.parse.refresh.resolve": {
+        const result = stateStore.resolveParseRefreshChoice(command.payload.materialId, command.payload.choice);
+        return { ...eventMetadata(command.correlationId), event: "material.parse.refresh.choice.resolved", payload: { materialId: command.payload.materialId, choice: command.payload.choice, status: result.status } };
+      }
       case "thread.list":
         return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listThreads() } };
       case "thread.trajectory.load":
@@ -287,9 +301,13 @@ async function openProject(correlationId: string): Promise<HostEvent> {
   const existing = stateStore!.getProject(marker.projectId);
   if (existing === undefined) {
     const project = stateStore!.registerProject({ id: marker.projectId, displayName: basename(projectPath), path: projectPath, createdAt: marker.createdAt });
+    await refreshProjectInventory(correlationId, project.id, false);
+    startMaterialWatcher(project.id);
     return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
   }
   if (resolve(existing.path) === projectPath) {
+    await refreshProjectInventory(correlationId, existing.id, false);
+    startMaterialWatcher(existing.id);
     return { ...eventMetadata(correlationId), event: "project.opened", payload: { project: existing } };
   }
   const collisionId = randomUUID();
@@ -301,21 +319,67 @@ async function openProject(correlationId: string): Promise<HostEvent> {
   };
 }
 
-function resolveProjectCollision(
+async function resolveProjectCollision(
   correlationId: string,
   collisionId: string,
   action: "moved_project" | "project_copy"
-): HostEvent {
+): Promise<HostEvent> {
   const collision = pendingProjectCollisions.get(collisionId);
   pendingProjectCollisions.delete(collisionId);
   if (collision === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The Project Identity Collision is no longer active.");
   if (action === "moved_project") {
     const project = stateStore!.moveProject(collision.projectId, basename(collision.selectedPath), collision.selectedPath);
+    await refreshProjectInventory(correlationId, project.id, false);
+    startMaterialWatcher(project.id);
     return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
   }
   const marker = projectIdentities.replaceForCopy(collision.selectedPath);
   const project = stateStore!.registerProject({ id: marker.projectId, displayName: basename(collision.selectedPath), path: collision.selectedPath, createdAt: marker.createdAt });
+  await refreshProjectInventory(correlationId, project.id, false);
+  startMaterialWatcher(project.id);
   return { ...eventMetadata(correlationId), event: "project.opened", payload: { project } };
+}
+
+async function refreshProjectInventory(correlationId: string, projectId: string, broadcast: boolean): Promise<HostEvent> {
+  const project = stateStore!.getProject(projectId);
+  if (project === undefined) throw new Error("Project not found");
+  const previous = stateStore!.listMaterials(projectId).filter((item) => item.availability === "active");
+  const records = await inventoryProjectFiles(project.path, previous);
+  const refreshed = stateStore!.refreshMaterialInventory(projectId, records);
+  const event: HostEvent = {
+    ...eventMetadata(correlationId),
+    event: broadcast ? "project.materials.updated" : "project.materials.listed",
+    payload: broadcast
+      ? { projectId, materials: refreshed.materials, changedMaterialIds: refreshed.changedMaterialIds }
+      : { projectId, materials: refreshed.materials }
+  } as HostEvent;
+  if (broadcast && refreshed.changedMaterialIds.length > 0) emit(event);
+  return event;
+}
+
+function startMaterialWatcher(projectId: string): void {
+  const project = stateStore!.getProject(projectId);
+  if (project === undefined) return;
+  const current = materialWatchers.get(projectId);
+  if (current !== undefined) {
+    if (current.path === project.path) return;
+    current.watcher.close();
+    if (current.timer !== undefined) clearTimeout(current.timer);
+  }
+  try {
+    const watcher = watch(project.path, { recursive: true }, () => {
+      const state = materialWatchers.get(projectId);
+      if (state === undefined) return;
+      if (state.timer !== undefined) clearTimeout(state.timer);
+      state.timer = setTimeout(() => {
+        void refreshProjectInventory(randomUUID(), projectId, true).catch(() => undefined);
+      }, 750);
+    });
+    watcher.on("error", () => watcher.close());
+    materialWatchers.set(projectId, { path: project.path, watcher });
+  } catch {
+    // A manual refresh remains available when recursive watching is unavailable.
+  }
 }
 
 function selectThreadProfile(correlationId: string, threadId: string, profileId: string): HostEvent {
@@ -921,6 +985,10 @@ app.whenReady().then(() => {
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
+  for (const project of stateStore.listProjects()) {
+    startMaterialWatcher(project.id);
+    void refreshProjectInventory(randomUUID(), project.id, false).catch(() => undefined);
+  }
   workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
   ipcMain.handle(COMMAND_CHANNEL, handleCommand);
   mainWindow = createMainWindow();
@@ -934,6 +1002,11 @@ app.on("before-quit", () => {
   for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
   ipcMain.removeHandler(COMMAND_CHANNEL);
   workerSupervisor?.closeAll();
+  for (const state of materialWatchers.values()) {
+    state.watcher.close();
+    if (state.timer !== undefined) clearTimeout(state.timer);
+  }
+  materialWatchers.clear();
   workerSupervisor = null;
   stateStore?.close();
   stateStore = null;

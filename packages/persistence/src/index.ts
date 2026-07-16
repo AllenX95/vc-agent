@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, Project, ProjectThread, SystemPromptRevision, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
+import type { AccessMode, ArtifactRecord, BootstrapState, MaterialInventoryItem, ModelProfile, Project, ProjectThread, SystemPromptRevision, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 
-const STATE_SCHEMA_VERSION = 6;
+const STATE_SCHEMA_VERSION = 7;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -51,6 +51,20 @@ interface PromptRevisionRow {
   diff: string;
   source: SystemPromptRevision["source"];
   created_at: string;
+}
+
+interface MaterialRow {
+  id: string; project_id: string; relative_path: string; extension: string; media_type: string;
+  size: number; modified_at: string; source_hash: string; availability: "active" | "deleted";
+}
+
+export interface RefreshInventoryRecord {
+  readonly relativePath: string;
+  readonly extension: string;
+  readonly mediaType: string;
+  readonly size: number;
+  readonly modifiedAt: string;
+  readonly sourceHash: string;
 }
 
 export interface CreateModelProfileInput {
@@ -165,6 +179,40 @@ export class HostStateStore {
         source TEXT NOT NULL CHECK(source IN ('shipped_default', 'user_edit', 'restore_default')),
         created_at TEXT NOT NULL
       ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS materials (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        relative_path TEXT NOT NULL,
+        extension TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        modified_at TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        availability TEXT NOT NULL CHECK(availability IN ('active', 'deleted')),
+        last_seen_at TEXT NOT NULL,
+        UNIQUE(project_id, relative_path)
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS parsed_material_versions (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+        source_hash TEXT NOT NULL,
+        parser_id TEXT NOT NULL,
+        artifact_path TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('active', 'source_unavailable')),
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS parse_refresh_requests (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+        prior_parse_id TEXT NOT NULL REFERENCES parsed_material_versions(id),
+        choice TEXT NOT NULL CHECK(choice IN ('create_new_version', 'replace_previous', 'cancel')),
+        status TEXT NOT NULL CHECK(status IN ('pending_parse', 'cancelled', 'failed', 'completed')),
+        created_at TEXT NOT NULL,
+        failure TEXT
+      ) STRICT;
     `);
     if (!this.#columnExists("threads", "output_location")) this.#database.exec("ALTER TABLE threads ADD COLUMN output_location TEXT");
     if (!this.#columnExists("threads", "state_version")) this.#database.exec("ALTER TABLE threads ADD COLUMN state_version INTEGER NOT NULL DEFAULT 1");
@@ -185,6 +233,9 @@ export class HostStateStore {
       .run(new Date().toISOString());
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, ?)")
+      .run(new Date().toISOString());
+    this.#database
+      .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?)")
       .run(new Date().toISOString());
   }
 
@@ -358,6 +409,102 @@ export class HostStateStore {
     this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
       .run(thread.id, thread.title, projectId, thread.createdAt);
     return thread;
+  }
+
+  refreshMaterialInventory(projectId: string, records: readonly RefreshInventoryRecord[]): { materials: MaterialInventoryItem[]; changedMaterialIds: string[] } {
+    if (this.getProject(projectId) === undefined) throw new Error("Project not found");
+    const previous = new Map((this.#database.prepare("SELECT * FROM materials WHERE project_id = ?").all(projectId) as unknown as MaterialRow[]).map((row) => [row.relative_path, row]));
+    const changed = new Set<string>();
+    const now = new Date().toISOString();
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.prepare("UPDATE materials SET availability = 'deleted' WHERE project_id = ?").run(projectId);
+      const insert = this.#database.prepare(`
+        INSERT INTO materials(id, project_id, relative_path, extension, media_type, size, modified_at, source_hash, availability, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        ON CONFLICT(project_id, relative_path) DO UPDATE SET
+          extension = excluded.extension, media_type = excluded.media_type, size = excluded.size,
+          modified_at = excluded.modified_at, source_hash = excluded.source_hash,
+          availability = 'active', last_seen_at = excluded.last_seen_at
+      `);
+      for (const record of records) {
+        const prior = previous.get(record.relativePath);
+        const id = prior?.id ?? randomUUID();
+        if (prior === undefined || prior.source_hash !== record.sourceHash || prior.availability !== "active") changed.add(id);
+        insert.run(id, projectId, record.relativePath, record.extension, record.mediaType, record.size, record.modifiedAt, record.sourceHash, now);
+        previous.delete(record.relativePath);
+      }
+      for (const prior of previous.values()) if (prior.availability === "active") changed.add(prior.id);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return { materials: this.listMaterials(projectId), changedMaterialIds: [...changed] };
+  }
+
+  listMaterials(projectId: string): MaterialInventoryItem[] {
+    const rows = this.#database.prepare("SELECT * FROM materials WHERE project_id = ? ORDER BY relative_path").all(projectId) as unknown as MaterialRow[];
+    return rows.map((row) => this.#mapMaterial(row));
+  }
+
+  getMaterial(id: string): MaterialInventoryItem | undefined {
+    const row = this.#database.prepare("SELECT * FROM materials WHERE id = ?").get(id) as MaterialRow | undefined;
+    return row === undefined ? undefined : this.#mapMaterial(row);
+  }
+
+  recordParsedMaterialVersion(materialId: string, parserId: string, artifactPath: string): string {
+    const material = this.getMaterial(materialId);
+    if (material === undefined) throw new Error("Material not found");
+    const id = randomUUID();
+    this.#database.prepare(`
+      INSERT INTO parsed_material_versions(id, material_id, source_hash, parser_id, artifact_path, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'active', ?)
+    `).run(id, materialId, material.sourceHash, parserId, artifactPath, new Date().toISOString());
+    return id;
+  }
+
+  getStaleMaterialRefreshContext(materialId: string): { material: MaterialInventoryItem; previousSourceHash: string; parserId: string; priorReferences: number } | undefined {
+    const material = this.getMaterial(materialId);
+    if (material?.parseStatus !== "stale") return undefined;
+    const prior = this.#database.prepare(`
+      SELECT source_hash, parser_id FROM parsed_material_versions
+      WHERE material_id = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(materialId) as { source_hash: string; parser_id: string } | undefined;
+    return prior === undefined ? undefined : { material, previousSourceHash: prior.source_hash, parserId: prior.parser_id, priorReferences: 0 };
+  }
+
+  resolveParseRefreshChoice(materialId: string, choice: "create_new_version" | "replace_previous" | "cancel"): { requestId: string; status: "pending_parse" | "cancelled" } {
+    const context = this.getStaleMaterialRefreshContext(materialId);
+    if (context === undefined) throw new Error("Material does not require Parse Refresh Choice");
+    const prior = this.#database.prepare(`SELECT id FROM parsed_material_versions WHERE material_id = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(materialId) as { id: string };
+    const requestId = randomUUID();
+    const status = choice === "cancel" ? "cancelled" as const : "pending_parse" as const;
+    this.#database.prepare(`INSERT INTO parse_refresh_requests(id, material_id, prior_parse_id, choice, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(requestId, materialId, prior.id, choice, status, new Date().toISOString());
+    return { requestId, status };
+  }
+
+  failParseRefreshRequest(requestId: string, failure: string): void {
+    const result = this.#database.prepare("UPDATE parse_refresh_requests SET status = 'failed', failure = ? WHERE id = ? AND status = 'pending_parse'").run(failure, requestId);
+    if (result.changes !== 1) throw new Error("Pending Parse Refresh Request not found");
+  }
+
+  #mapMaterial(row: MaterialRow): MaterialInventoryItem {
+    const versions = this.#database.prepare("SELECT source_hash FROM parsed_material_versions WHERE material_id = ? AND status = 'active'").all(row.id) as Array<{ source_hash: string }>;
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      relativePath: row.relative_path,
+      extension: row.extension,
+      mediaType: row.media_type,
+      size: row.size,
+      modifiedAt: row.modified_at,
+      sourceHash: row.source_hash,
+      parseStatus: versions.length === 0 ? "unparsed" : versions.some((version) => version.source_hash === row.source_hash) ? "available" : "stale",
+      parsedVersionCount: versions.length,
+      availability: row.availability
+    };
   }
 
   listThreads(): Thread[] {

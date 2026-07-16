@@ -180,12 +180,12 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Opening a Project inventories metadata without parsing or sending file bodies.
-- [ ] Stable external changes update inventory metadata but do not alter an Active Turn.
-- [ ] A changed previously parsed Material becomes visibly stale when next needed.
-- [ ] The User chooses `Create New Parse Version`, `Replace Previous Parse`, or cancel under both Access Modes.
-- [ ] Failed replacement preserves the prior parse and historical references.
-- [ ] Generated Outputs and reserved system/cache paths are excluded from ordinary Material discovery as specified.
+- [x] Opening a Project inventories metadata without parsing or sending file bodies.
+- [x] Stable external changes update inventory metadata but do not alter an Active Turn.
+- [x] A changed previously parsed Material becomes visibly stale when next needed.
+- [x] The User chooses `Create New Parse Version`, `Replace Previous Parse`, or cancel under both Access Modes.
+- [x] Failed replacement preserves the prior parse and historical references.
+- [x] Generated Outputs and reserved system/cache paths are excluded from ordinary Material discovery as specified.
 
 ### D3. Produce Reusable Canonical Parses
 

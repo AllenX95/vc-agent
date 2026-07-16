@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 6,
+      stateSchemaVersion: 7,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -33,7 +33,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["application_settings", "artifacts", "model_profiles", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "system_prompt_revisions", "threads"]);
+    expect(tables).toEqual(["application_settings", "artifacts", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "system_prompt_revisions", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -142,4 +142,32 @@ describe("HostStateStore", () => {
     expect(store.listSystemPromptRevisions()).toHaveLength(3);
     store.close();
   });
+
+  it("marks changed parsed Materials stale and preserves the prior parse after replacement failure", () => {
+    const { store } = createStore();
+    const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Deal", path: "C:\\deal", createdAt: new Date().toISOString() });
+    const firstHash = "a".repeat(64);
+    const secondHash = "b".repeat(64);
+    let result = store.refreshMaterialInventory(project.id, [{ relativePath: "memo.md", extension: ".md", mediaType: "text/markdown", size: 10, modifiedAt: new Date(1).toISOString(), sourceHash: firstHash }]);
+    const materialId = result.materials[0]!.id;
+    const parseId = store.recordParsedMaterialVersion(materialId, "markdown@1", "outputs/parsed/memo/parsed.json");
+    expect(store.getMaterial(materialId)?.parseStatus).toBe("available");
+
+    result = store.refreshMaterialInventory(project.id, [{ relativePath: "memo.md", extension: ".md", mediaType: "text/markdown", size: 20, modifiedAt: new Date(2).toISOString(), sourceHash: secondHash }]);
+    expect(result.changedMaterialIds).toEqual([materialId]);
+    expect(store.getMaterial(materialId)).toMatchObject({ parseStatus: "stale", parsedVersionCount: 1, sourceHash: secondHash });
+    expect(store.getStaleMaterialRefreshContext(materialId)).toMatchObject({ previousSourceHash: firstHash, parserId: "markdown@1" });
+    const refresh = store.resolveParseRefreshChoice(materialId, "replace_previous");
+    store.failParseRefreshRequest(refresh.requestId, "Parser failed validation");
+    expect(store.getMaterial(materialId)).toMatchObject({ parseStatus: "stale", parsedVersionCount: 1 });
+    const database = new DatabaseSync(databasePathFor(store), { readOnly: true });
+    const prior = database.prepare("SELECT status FROM parsed_material_versions WHERE id = ?").get(parseId) as { status: string };
+    database.close();
+    expect(prior.status).toBe("active");
+    store.close();
+  });
 });
+
+function databasePathFor(store: HostStateStore): string {
+  return store.getBootstrapState("0.1.0", idleActivity).storagePath;
+}

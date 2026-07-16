@@ -89,6 +89,21 @@ export const promptContributionSchema = z.object({
 });
 export type PromptContribution = z.infer<typeof promptContributionSchema>;
 
+export const materialInventoryItemSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  relativePath: z.string().min(1),
+  extension: z.string().min(1),
+  mediaType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  modifiedAt: z.string().datetime(),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  parseStatus: z.enum(["unparsed", "available", "stale"]),
+  parsedVersionCount: z.number().int().nonnegative(),
+  availability: z.enum(["active", "deleted"])
+});
+export type MaterialInventoryItem = z.infer<typeof materialInventoryItemSchema>;
+
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
@@ -183,6 +198,19 @@ const resolveProjectCollisionCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.collision.resolve"),
   payload: z.object({ collisionId: z.string().min(1), action: z.enum(["moved_project", "project_copy"]) })
 });
+const listProjectMaterialsCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.material.list"), payload: z.object({ projectId: z.string().uuid() })
+});
+const refreshProjectMaterialsCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.material.refresh"), payload: z.object({ projectId: z.string().uuid() })
+});
+const needMaterialCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("material.need"), payload: z.object({ materialId: z.string().uuid() })
+});
+const resolveParseRefreshCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("material.parse.refresh.resolve"),
+  payload: z.object({ materialId: z.string().uuid(), choice: z.enum(["create_new_version", "replace_previous", "cancel"]) })
+});
 const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.trajectory.load"),
   payload: z.object({ threadId: z.string().min(1) })
@@ -240,6 +268,10 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   listProjectsCommandSchema,
   openProjectCommandSchema,
   resolveProjectCollisionCommandSchema,
+  listProjectMaterialsCommandSchema,
+  refreshProjectMaterialsCommandSchema,
+  needMaterialCommandSchema,
+  resolveParseRefreshCommandSchema,
   listThreadsCommandSchema,
   loadThreadTrajectoryCommandSchema,
   createThreadCommandSchema,
@@ -340,6 +372,28 @@ const projectCollisionDetectedEventSchema = eventMetadataSchema.extend({
     existingPath: z.string().min(1),
     selectedPath: z.string().min(1)
   })
+});
+const projectMaterialsListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("project.materials.listed"),
+  payload: z.object({ projectId: z.string().uuid(), materials: z.array(materialInventoryItemSchema) })
+});
+const projectMaterialsUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("project.materials.updated"),
+  payload: z.object({ projectId: z.string().uuid(), materials: z.array(materialInventoryItemSchema), changedMaterialIds: z.array(z.string().uuid()) })
+});
+const parseRefreshChoiceRequiredEventSchema = eventMetadataSchema.extend({
+  event: z.literal("material.parse.refresh.choice.required"),
+  payload: z.object({
+    material: materialInventoryItemSchema,
+    previousSourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    currentSourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    parserId: z.string().min(1),
+    priorReferences: z.number().int().nonnegative()
+  })
+});
+const parseRefreshChoiceResolvedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("material.parse.refresh.choice.resolved"),
+  payload: z.object({ materialId: z.string().uuid(), choice: z.enum(["create_new_version", "replace_previous", "cancel"]), status: z.enum(["pending_parse", "cancelled"]) })
 });
 const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.trajectory.loaded"),
@@ -479,6 +533,10 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   projectsListedEventSchema,
   projectOpenedEventSchema,
   projectCollisionDetectedEventSchema,
+  projectMaterialsListedEventSchema,
+  projectMaterialsUpdatedEventSchema,
+  parseRefreshChoiceRequiredEventSchema,
+  parseRefreshChoiceResolvedEventSchema,
   threadsListedEventSchema,
   threadTrajectoryLoadedEventSchema,
   threadCreatedEventSchema,

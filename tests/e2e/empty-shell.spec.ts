@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test } from "@playwright/test";
 import { join, resolve } from "node:path";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
@@ -318,6 +318,84 @@ test("opens a stable Project, isolates Project Threads, and resolves moved or co
     rmSync(originalProject, { recursive: true, force: true });
     rmSync(movedProject, { recursive: true, force: true });
     rmSync(copiedProject, { recursive: true, force: true });
+  }
+});
+
+test("inventories Project Materials and requires explicit stale parse refresh choices", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d2-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d2-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const memoPath = join(projectDirectory, "memo.md");
+  mkdirSync(join(projectDirectory, "outputs"), { recursive: true });
+  mkdirSync(join(projectDirectory, ".cache"), { recursive: true });
+  writeFileSync(memoPath, "Initial investment thesis");
+  writeFileSync(join(projectDirectory, "outputs", "generated.md"), "Generated output must not be inventoried");
+  writeFileSync(join(projectDirectory, ".cache", "cached.txt"), "Reserved cache content");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    const inventory = window.locator(".material-inventory");
+    await expect(inventory.getByText("memo.md", { exact: true })).toBeVisible();
+    await expect(inventory).toContainText("metadata only");
+    await expect(inventory).not.toContainText("Initial investment thesis");
+    await expect(inventory).not.toContainText("generated.md");
+    await expect(inventory).not.toContainText("cached.txt");
+    expect(await invokeBootstrap(window)).toMatchObject({
+      payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0, externalNetworkRequests: 0 } }
+    });
+
+    await application.close();
+    const databasePath = join(userDataDirectory, "state.db");
+    const database = new DatabaseSync(databasePath);
+    const material = database.prepare("SELECT id, source_hash FROM materials WHERE relative_path = 'memo.md'").get() as { id: string; source_hash: string };
+    const priorParseId = crypto.randomUUID();
+    database.prepare(`
+      INSERT INTO parsed_material_versions(id, material_id, source_hash, parser_id, artifact_path, status, created_at)
+      VALUES (?, ?, ?, 'markdown@1', 'outputs/parsed/memo/parse.json', 'active', ?)
+    `).run(priorParseId, material.id, material.source_hash, new Date().toISOString());
+    database.close();
+
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await expect(window.locator(".material-row").filter({ hasText: "memo.md" })).toContainText("available");
+    writeFileSync(memoPath, "Externally revised investment thesis with a changed source hash");
+    const materialRow = window.locator(".material-row").filter({ hasText: "memo.md" });
+    await expect(materialRow).toContainText("stale", { timeout: 10_000 });
+
+    await materialRow.getByRole("button", { name: "Refresh parse" }).click();
+    let choice = window.getByRole("dialog", { name: "Parse refresh choice" });
+    await expect(choice.getByRole("button", { name: "Create New Parse Version" })).toBeVisible();
+    await expect(choice.getByRole("button", { name: "Replace Previous Parse" })).toBeVisible();
+    await choice.getByRole("button", { name: "Cancel" }).click();
+    await expect(choice).toBeHidden();
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Full Access" }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await materialRow.getByRole("button", { name: "Refresh parse" }).click();
+    choice = window.getByRole("dialog", { name: "Parse refresh choice" });
+    await choice.getByRole("button", { name: "Replace Previous Parse" }).click();
+    await expect(choice).toBeHidden();
+
+    const persisted = new DatabaseSync(databasePath, { readOnly: true });
+    const requests = persisted.prepare("SELECT choice, status FROM parse_refresh_requests ORDER BY created_at, rowid").all();
+    const priorParse = persisted.prepare("SELECT status FROM parsed_material_versions WHERE id = ?").get(priorParseId);
+    persisted.close();
+    expect(requests).toMatchObject([{ choice: "cancel", status: "cancelled" }, { choice: "replace_previous", status: "pending_parse" }]);
+    expect(priorParse).toMatchObject({ status: "active" });
+    expect(await invokeBootstrap(window)).toMatchObject({
+      payload: { accessMode: "full", runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0, externalNetworkRequests: 0 } }
+    });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
   }
 });
 

@@ -6,6 +6,7 @@ import {
   type BootstrapState,
   type HostCommand,
   type HostEvent,
+  type MaterialInventoryItem,
   type ModelProfile,
   type Project,
   type PromptContribution,
@@ -23,6 +24,7 @@ import {
   MessageSquare,
   PanelRight,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -82,6 +84,8 @@ export function App() {
   const [profileChange, setProfileChange] = useState<Extract<HostEvent, { event: "thread.profile.change.required" }> | null>(null);
   const [confirmations, setConfirmations] = useState<Record<string, Extract<HostEvent, { event: "capability.confirmation.required" }>>>({});
   const [projectCollision, setProjectCollision] = useState<Extract<HostEvent, { event: "project.identity.collision" }> | null>(null);
+  const [materialsByProject, setMaterialsByProject] = useState<Record<string, MaterialInventoryItem[]>>({});
+  const [parseRefreshChoice, setParseRefreshChoice] = useState<Extract<HostEvent, { event: "material.parse.refresh.choice.required" }> | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -105,6 +109,10 @@ export function App() {
         setProjectCollision(null);
         break;
       case "project.identity.collision": setProjectCollision(event); break;
+      case "project.materials.listed":
+      case "project.materials.updated": setMaterialsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.materials })); break;
+      case "material.parse.refresh.choice.required": setParseRefreshChoice(event); break;
+      case "material.parse.refresh.choice.resolved": setParseRefreshChoice(null); break;
       case "profile.created":
         setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]);
         setProfileFormOpen(false);
@@ -206,6 +214,10 @@ export function App() {
     return unsubscribe;
   }, [applyEvent, invoke]);
 
+  useEffect(() => {
+    if (activeThread?.scope === "project") void invoke(createCommand({ command: "project.material.list", payload: { projectId: activeThread.projectId } }));
+  }, [activeThread?.id, activeThread?.scope === "project" ? activeThread.projectId : null, invoke]);
+
   const createThread = () => {
     void invoke(createCommand({ command: "thread.create.unscoped", payload: { title: `Thread ${threads.length + 1}` } }));
   };
@@ -220,6 +232,11 @@ export function App() {
   const resolveProjectCollision = (action: "moved_project" | "project_copy") => {
     if (projectCollision === null) return;
     void invoke(createCommand({ command: "project.collision.resolve", payload: { collisionId: projectCollision.payload.collisionId, action } }));
+  };
+
+  const resolveParseRefresh = (choice: "create_new_version" | "replace_previous" | "cancel") => {
+    if (parseRefreshChoice === null) return;
+    void invoke(createCommand({ command: "material.parse.refresh.resolve", payload: { materialId: parseRefreshChoice.payload.material.id, choice } }));
   };
 
   const selectProfile = (profileId: string) => {
@@ -324,6 +341,9 @@ export function App() {
         {view === "workspace" && projectCollision && <div className="workspace-dialog" role="dialog" aria-label="Project identity collision">
           <strong>Project Identity Collision</strong><p>{projectCollision.payload.selectedPath}</p><span>This identity is already registered at {projectCollision.payload.existingPath}. Classify the folder explicitly.</span><div><button type="button" onClick={() => resolveProjectCollision("moved_project")}>Moved Project</button><button type="button" onClick={() => resolveProjectCollision("project_copy")}>Project Copy</button><button type="button" onClick={() => setProjectCollision(null)}>Cancel</button></div>
         </div>}
+        {view === "workspace" && parseRefreshChoice && <div className="workspace-dialog" role="dialog" aria-label="Parse refresh choice">
+          <strong>Material changed</strong><p>{parseRefreshChoice.payload.material.relativePath}</p><span>Previous {parseRefreshChoice.payload.previousSourceHash.slice(0, 12)} · Current {parseRefreshChoice.payload.currentSourceHash.slice(0, 12)} · {parseRefreshChoice.payload.parserId}</span><div><button className="primary-button" type="button" onClick={() => resolveParseRefresh("create_new_version")}>Create New Parse Version</button><button type="button" onClick={() => resolveParseRefresh("replace_previous")}>Replace Previous Parse</button><button type="button" onClick={() => resolveParseRefresh("cancel")}>Cancel</button></div>
+        </div>}
 
         {view === "workspace" && activeThread !== undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -342,7 +362,7 @@ export function App() {
 
       <aside className="right-panel" aria-label="Project state">
         <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className="active" role="tab" aria-selected="true">Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" role="tab" disabled>Context</button><button type="button" role="tab" disabled>Memory</button></div>
-        <div className="panel-empty"><PanelRight size={20} /><h2>{activeThread?.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project" : "No project selected"}</h2><p>{activeThread?.scope === "project" ? "Project registered. Materials are not loaded until requested." : "Unscoped threads have no project state."}</p></div>
+        {activeThread?.scope === "project" ? <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span></div>{material.parseStatus === "stale" && <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button>}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
         <div className="status-strip"><span><span className="status-dot" /> Host ready</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>
@@ -512,4 +532,10 @@ function failTurn(current: Record<string, ConversationItem[]>, payload: Extract<
 
 function localDiagnostic(message: string): Extract<HostEvent, { event: "diagnostic.raised" }> {
   return { schemaVersion: 1, eventId: crypto.randomUUID(), correlationId: crypto.randomUUID(), sequence: 0, actor: { actorType: "host", actorId: "renderer-validation" }, provenance: { producerType: "host", producerId: "renderer-validation" }, occurredAt: new Date().toISOString(), event: "diagnostic.raised", payload: { code: "INVALID_COMMAND", message, recoverable: true } };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
