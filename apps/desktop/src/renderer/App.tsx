@@ -86,6 +86,7 @@ export function App() {
   const [projectCollision, setProjectCollision] = useState<Extract<HostEvent, { event: "project.identity.collision" }> | null>(null);
   const [materialsByProject, setMaterialsByProject] = useState<Record<string, MaterialInventoryItem[]>>({});
   const [parseRefreshChoice, setParseRefreshChoice] = useState<Extract<HostEvent, { event: "material.parse.refresh.choice.required" }> | null>(null);
+  const [materialParseState, setMaterialParseState] = useState<Record<string, string>>({});
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -113,6 +114,12 @@ export function App() {
       case "project.materials.updated": setMaterialsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.materials })); break;
       case "material.parse.refresh.choice.required": setParseRefreshChoice(event); break;
       case "material.parse.refresh.choice.resolved": setParseRefreshChoice(null); break;
+      case "material.parse.started": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: "Parsing..." })); break;
+      case "material.parse.completed":
+        setMaterialParseState((current) => ({ ...current, [event.payload.material.id]: event.payload.warningCount > 0 ? `Parsed with ${event.payload.warningCount} warning(s)` : event.payload.reused ? "Reused current parse" : "Parsed" }));
+        setMaterialsByProject((current) => ({ ...current, [event.payload.material.projectId]: (current[event.payload.material.projectId] ?? []).map((item) => item.id === event.payload.material.id ? event.payload.material : item) }));
+        break;
+      case "material.parse.failed": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: `${event.payload.code}: ${event.payload.message}` })); break;
       case "profile.created":
         setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]);
         setProfileFormOpen(false);
@@ -362,7 +369,7 @@ export function App() {
 
       <aside className="right-panel" aria-label="Project state">
         <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className="active" role="tab" aria-selected="true">Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" role="tab" disabled>Context</button><button type="button" role="tab" disabled>Memory</button></div>
-        {activeThread?.scope === "project" ? <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span></div>{material.parseStatus === "stale" && <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button>}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
+        {activeThread?.scope === "project" ? <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
         <div className="status-strip"><span><span className="status-dot" /> Host ready</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>

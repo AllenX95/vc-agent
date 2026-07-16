@@ -197,14 +197,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Parsing starts only from explicit Host action or task need and runs without Pi when invoked locally.
-- [ ] Each parse records source hash, parser identity/version, blocks, stable source references, warnings, and provenance.
-- [ ] Canonical Parse blocks, tables, page references, warnings, and parser provenance are independent of a concrete parser package and do not contain PyMuPDF-, Office-, or OCR-specific runtime objects.
-- [ ] Identical source and parser identities reuse the current parse.
-- [ ] Native PDF extraction reports image-only or unreliable pages as requiring unavailable OCR rather than inventing text.
-- [ ] A native parser can request bounded page recovery through the Material Pipeline without knowing which future OCR adapter will satisfy it.
-- [ ] Parser crashes and malformed files are contained to the Utility Worker and do not corrupt Host or Agent Worker state.
-- [ ] Parsed artifacts are written under the reserved Project output structure and remain distinguishable from User Outputs.
+- [x] Parsing starts only from explicit Host action or task need and runs without Pi when invoked locally.
+- [x] Each parse records source hash, parser identity/version, blocks, stable source references, warnings, and provenance.
+- [x] Canonical Parse blocks, tables, page references, warnings, and parser provenance are independent of a concrete parser package and do not contain PyMuPDF-, Office-, or OCR-specific runtime objects.
+- [x] Identical source and parser identities reuse the current parse.
+- [x] Native PDF extraction reports image-only or unreliable pages as requiring unavailable OCR rather than inventing text.
+- [x] A native parser can request bounded page recovery through the Material Pipeline without knowing which future OCR adapter will satisfy it.
+- [x] Parser crashes and malformed files are contained to the Utility Worker and do not corrupt Host or Agent Worker state.
+- [x] Parsed artifacts are written under the reserved Project output structure and remain distinguishable from User Outputs.
 
 ### D4. Recall Materials Within A Bounded Model Context
 

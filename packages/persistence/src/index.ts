@@ -58,6 +58,11 @@ interface MaterialRow {
   size: number; modified_at: string; source_hash: string; availability: "active" | "deleted";
 }
 
+interface ParsedMaterialRow {
+  id: string; material_id: string; source_hash: string; parser_id: string; artifact_path: string;
+  status: "active" | "source_unavailable"; created_at: string;
+}
+
 export interface RefreshInventoryRecord {
   readonly relativePath: string;
   readonly extension: string;
@@ -453,15 +458,47 @@ export class HostStateStore {
     return row === undefined ? undefined : this.#mapMaterial(row);
   }
 
-  recordParsedMaterialVersion(materialId: string, parserId: string, artifactPath: string): string {
+  recordParsedMaterialVersion(materialId: string, parserId: string, artifactPath: string, parseId: string = randomUUID()): string {
     const material = this.getMaterial(materialId);
     if (material === undefined) throw new Error("Material not found");
-    const id = randomUUID();
     this.#database.prepare(`
       INSERT INTO parsed_material_versions(id, material_id, source_hash, parser_id, artifact_path, status, created_at)
       VALUES (?, ?, ?, ?, ?, 'active', ?)
-    `).run(id, materialId, material.sourceHash, parserId, artifactPath, new Date().toISOString());
-    return id;
+    `).run(parseId, materialId, material.sourceHash, parserId, artifactPath, new Date().toISOString());
+    return parseId;
+  }
+
+  getReusableParsedMaterial(materialId: string, parserId: string): ParsedMaterialRow | undefined {
+    const material = this.getMaterial(materialId);
+    if (material === undefined) return undefined;
+    return this.#database.prepare(`
+      SELECT * FROM parsed_material_versions
+      WHERE material_id = ? AND source_hash = ? AND parser_id = ? AND status = 'active'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(materialId, material.sourceHash, parserId) as ParsedMaterialRow | undefined;
+  }
+
+  completeParseRefresh(requestId: string, parseId: string, parserId: string, artifactPath: string): { parseId: string; replacedArtifactPath?: string } {
+    const request = this.#database.prepare(`
+      SELECT id, material_id, prior_parse_id, choice FROM parse_refresh_requests WHERE id = ? AND status = 'pending_parse'
+    `).get(requestId) as { id: string; material_id: string; prior_parse_id: string; choice: "create_new_version" | "replace_previous" } | undefined;
+    if (request === undefined) throw new Error("Pending Parse Refresh Request not found");
+    const material = this.getMaterial(request.material_id);
+    if (material === undefined) throw new Error("Material not found");
+    const prior = this.#database.prepare("SELECT artifact_path FROM parsed_material_versions WHERE id = ? AND status = 'active'").get(request.prior_parse_id) as { artifact_path: string } | undefined;
+    if (prior === undefined) throw new Error("Prior Parse is no longer active");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.prepare(`INSERT INTO parsed_material_versions(id, material_id, source_hash, parser_id, artifact_path, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)`)
+        .run(parseId, material.id, material.sourceHash, parserId, artifactPath, new Date().toISOString());
+      if (request.choice === "replace_previous") this.#database.prepare("UPDATE parsed_material_versions SET status = 'source_unavailable' WHERE id = ?").run(request.prior_parse_id);
+      this.#database.prepare("UPDATE parse_refresh_requests SET status = 'completed' WHERE id = ?").run(requestId);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return { parseId, ...(request.choice === "replace_previous" ? { replacedArtifactPath: prior.artifact_path } : {}) };
   }
 
   getStaleMaterialRefreshContext(materialId: string): { material: MaterialInventoryItem; previousSourceHash: string; parserId: string; priorReferences: number } | undefined {

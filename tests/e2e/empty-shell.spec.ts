@@ -382,16 +382,68 @@ test("inventories Project Materials and requires explicit stale parse refresh ch
     choice = window.getByRole("dialog", { name: "Parse refresh choice" });
     await choice.getByRole("button", { name: "Replace Previous Parse" }).click();
     await expect(choice).toBeHidden();
+    await expect(materialRow).toContainText("available", { timeout: 20_000 });
 
     const persisted = new DatabaseSync(databasePath, { readOnly: true });
     const requests = persisted.prepare("SELECT choice, status FROM parse_refresh_requests ORDER BY created_at, rowid").all();
     const priorParse = persisted.prepare("SELECT status FROM parsed_material_versions WHERE id = ?").get(priorParseId);
     persisted.close();
-    expect(requests).toMatchObject([{ choice: "cancel", status: "cancelled" }, { choice: "replace_previous", status: "pending_parse" }]);
-    expect(priorParse).toMatchObject({ status: "active" });
+    expect(requests).toMatchObject([{ choice: "cancel", status: "cancelled" }, { choice: "replace_previous", status: "completed" }]);
+    expect(priorParse).toMatchObject({ status: "source_unavailable" });
     expect(await invokeBootstrap(window)).toMatchObject({
       payload: { accessMode: "full", runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0, externalNetworkRequests: 0 } }
     });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
+test("produces and reuses a local Canonical Parse without starting Pi", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d3-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d3-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  writeFileSync(join(projectDirectory, "memo.md"), "# Investment thesis\nCanonical source evidence");
+  writeFileSync(join(projectDirectory, "broken.json"), "{not-json");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    const brokenRow = window.locator(".material-row").filter({ hasText: "broken.json" });
+    await brokenRow.getByRole("button", { name: "Parse" }).click();
+    await expect(brokenRow.locator(".parse-result")).toContainText("PARSER_FAILED", { timeout: 20_000 });
+    await expect(brokenRow).toContainText("unparsed");
+    const row = window.locator(".material-row").filter({ hasText: "memo.md" });
+    await row.getByRole("button", { name: "Parse" }).click();
+    await expect(row).toContainText("available", { timeout: 20_000 });
+    await expect(row.locator(".parse-result")).toHaveText("Parsed");
+
+    const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const parsed = database.prepare(`
+      SELECT m.id AS material_id, p.id AS parse_id, p.parser_id, p.artifact_path
+      FROM materials m JOIN parsed_material_versions p ON p.material_id = m.id WHERE m.relative_path = 'memo.md' AND p.status = 'active'
+    `).get() as { material_id: string; parse_id: string; parser_id: string; artifact_path: string };
+    database.close();
+    expect(parsed.parser_id).toBe("text@1.0.0");
+    const artifact = JSON.parse(readFileSync(join(projectDirectory, parsed.artifact_path), "utf8"));
+    expect(artifact).toMatchObject({ parseId: parsed.parse_id, material: { relativePath: "memo.md" }, parser: { id: "text", version: "1.0.0" }, provenance: { localOnly: true } });
+    expect(artifact.blocks[0]).toMatchObject({ type: "heading", text: "Investment thesis", source: { locator: { kind: "line", index: 1 } } });
+    const registry = readFileSync(join(projectDirectory, "outputs", "system", "artifacts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(registry).toMatchObject([{ id: parsed.parse_id, type: "canonical_parse", path: parsed.artifact_path, source: { relativePath: "memo.md" }, parserId: "text@1.0.0", producer: "utility-worker" }]);
+
+    const reused = await window.evaluate(async (materialId) => {
+      return (window as unknown as { vcAgent: { invoke(command: unknown): Promise<unknown> } }).vcAgent.invoke({
+        schemaVersion: 1, command: "material.parse.request", commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(),
+        actor: { actorType: "user", actorId: "e2e" }, sentAt: new Date().toISOString(), payload: { materialId }
+      });
+    }, parsed.material_id);
+    expect(reused).toMatchObject({ event: "material.parse.completed", payload: { parseId: parsed.parse_id, reused: true } });
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0, externalNetworkRequests: 0 } } });
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });

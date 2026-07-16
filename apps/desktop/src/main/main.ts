@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
 import {
   IPC_SCHEMA_VERSION,
@@ -9,6 +9,7 @@ import {
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
   type HostEvent,
+  type MaterialInventoryItem,
   type ModelProfile,
   type ProvenanceRef,
   type ProviderFailure,
@@ -20,10 +21,11 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, estimateTokens, inventoryProjectFiles, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityGateway, detectOutputIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
+import { UtilityJobRunner } from "./utility-job-runner.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
@@ -54,6 +56,7 @@ let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
+let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
@@ -202,9 +205,14 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (context === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "This Material does not require a Parse Refresh Choice.");
         return { ...eventMetadata(command.correlationId), event: "material.parse.refresh.choice.required", payload: { ...context, currentSourceHash: context.material.sourceHash } };
       }
+      case "material.parse.request":
+        return parseMaterial(command.correlationId, command.payload.materialId);
       case "material.parse.refresh.resolve": {
         const result = stateStore.resolveParseRefreshChoice(command.payload.materialId, command.payload.choice);
-        return { ...eventMetadata(command.correlationId), event: "material.parse.refresh.choice.resolved", payload: { materialId: command.payload.materialId, choice: command.payload.choice, status: result.status } };
+        const resolved: HostEvent = { ...eventMetadata(command.correlationId), event: "material.parse.refresh.choice.resolved", payload: { materialId: command.payload.materialId, choice: command.payload.choice, status: result.status } };
+        if (command.payload.choice === "cancel") return resolved;
+        emit(resolved);
+        return parseMaterial(command.correlationId, command.payload.materialId, result.requestId);
       }
       case "thread.list":
         return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listThreads() } };
@@ -380,6 +388,103 @@ function startMaterialWatcher(projectId: string): void {
   } catch {
     // A manual refresh remains available when recursive watching is unavailable.
   }
+}
+
+async function parseMaterial(correlationId: string, materialId: string, refreshRequestId?: string): Promise<HostEvent> {
+  let material = stateStore!.getMaterial(materialId);
+  if (material === undefined || material.availability !== "active") return materialParseFailure(correlationId, materialId, "MATERIAL_UNAVAILABLE", "Material is unavailable.");
+  const project = stateStore!.getProject(material.projectId);
+  if (project === undefined) return materialParseFailure(correlationId, materialId, "PROJECT_UNAVAILABLE", "Project is unavailable.");
+  await refreshProjectInventory(correlationId, project.id, false);
+  material = stateStore!.getMaterial(materialId);
+  if (material === undefined || material.availability !== "active") return materialParseFailure(correlationId, materialId, "MATERIAL_UNAVAILABLE", "Material changed before parsing started.");
+  if (material.parseStatus === "stale" && refreshRequestId === undefined) return materialParseFailure(correlationId, materialId, "PARSE_REFRESH_CHOICE_REQUIRED", "Choose how to refresh the stale parse before continuing.");
+  const expectedParser = expectedParserIdentity(material.extension);
+  if (expectedParser === undefined) return materialParseFailure(correlationId, materialId, "PARSER_UNAVAILABLE", "No baseline parser is registered for this Material.");
+  const reusable = stateStore!.getReusableParsedMaterial(materialId, expectedParser);
+  if (refreshRequestId === undefined && reusable !== undefined && existsSync(join(project.path, reusable.artifact_path))) {
+    return { ...eventMetadata(correlationId), event: "material.parse.completed", payload: { material, parseId: reusable.id, parserId: reusable.parser_id, artifactPath: reusable.artifact_path, warningCount: 0, reused: true } };
+  }
+
+  const jobId = randomUUID();
+  const stagingDirectory = join(project.path, "outputs", "parsed", ".staging", jobId);
+  emit({ ...eventMetadata(correlationId), event: "material.parse.started", payload: { materialId, jobId } });
+  const result = await utilityJobRunner!.run({
+    schemaVersion: 1, command: "material.parse", jobId,
+    material: { id: material.id, projectId: material.projectId, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash, absolutePath: join(project.path, material.relativePath) },
+    stagingDirectory, timeoutMs: 120_000, maxOutputBytes: 50_000_000
+  });
+  if (result.event === "material.parse.failed") {
+    if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, result.message);
+    removeStaging(stagingDirectory, project.path);
+    return materialParseFailure(correlationId, materialId, result.code, result.message);
+  }
+  const parserId = `${result.parse.parser.id}@${result.parse.parser.version}`;
+  if (parserId !== expectedParser) {
+    if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, "Parser identity did not match the registered adapter.");
+    removeStaging(stagingDirectory, project.path);
+    return materialParseFailure(correlationId, materialId, "PARSER_IDENTITY_MISMATCH", "Parser identity did not match the registered adapter.");
+  }
+  const concurrentlyCompleted = refreshRequestId === undefined ? stateStore!.getReusableParsedMaterial(materialId, expectedParser) : undefined;
+  if (concurrentlyCompleted !== undefined && existsSync(join(project.path, concurrentlyCompleted.artifact_path))) {
+    removeStaging(stagingDirectory, project.path);
+    return { ...eventMetadata(correlationId), event: "material.parse.completed", payload: { material, parseId: concurrentlyCompleted.id, parserId: concurrentlyCompleted.parser_id, artifactPath: concurrentlyCompleted.artifact_path, warningCount: 0, reused: true } };
+  }
+  await refreshProjectInventory(correlationId, project.id, false);
+  const current = stateStore!.getMaterial(materialId);
+  if (current?.sourceHash !== result.parse.material.sourceHash) {
+    if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, "Source changed while parsing.");
+    removeStaging(stagingDirectory, project.path);
+    return materialParseFailure(correlationId, materialId, "SOURCE_CHANGED_DURING_PARSE", "Source changed while parsing; retry from the current version.");
+  }
+
+  const relativeArtifactPath = `outputs/parsed/${material.id}/${result.parse.parseId}/parse.json`;
+  const finalDirectory = join(project.path, dirname(relativeArtifactPath));
+  mkdirSync(dirname(finalDirectory), { recursive: true });
+  let replacedArtifactPath: string | undefined;
+  try {
+    renameSync(stagingDirectory, finalDirectory);
+    if (refreshRequestId === undefined) stateStore!.recordParsedMaterialVersion(materialId, parserId, relativeArtifactPath, result.parse.parseId);
+    else ({ replacedArtifactPath } = stateStore!.completeParseRefresh(refreshRequestId, result.parse.parseId, parserId, relativeArtifactPath));
+  } catch (error) {
+    removeParsedArtifact(project.path, relativeArtifactPath);
+    if (refreshRequestId !== undefined) {
+      try { stateStore!.failParseRefreshRequest(refreshRequestId, error instanceof Error ? error.message : "Parse commit failed"); } catch { /* request may already be completed */ }
+    }
+    return materialParseFailure(correlationId, materialId, "PARSE_COMMIT_FAILED", "Parsed artifact could not be committed.");
+  }
+  let registryWarning = 0;
+  try { recordParsedArtifact(project.path, result.parse.parseId, material, parserId, relativeArtifactPath, result.parse.warnings.length); }
+  catch { registryWarning = 1; }
+  if (replacedArtifactPath !== undefined) removeParsedArtifact(project.path, replacedArtifactPath);
+  const updated = stateStore!.getMaterial(materialId)!;
+  return { ...eventMetadata(correlationId), event: "material.parse.completed", payload: { material: updated, parseId: result.parse.parseId, parserId, artifactPath: relativeArtifactPath, warningCount: result.parse.warnings.length + registryWarning, reused: false } };
+}
+
+function materialParseFailure(correlationId: string, materialId: string, code: string, message: string): HostEvent {
+  return { ...eventMetadata(correlationId), event: "material.parse.failed", payload: { materialId, code, message } };
+}
+
+function removeStaging(stagingDirectory: string, projectPath: string): void {
+  const root = resolve(projectPath, "outputs", "parsed", ".staging");
+  const target = resolve(stagingDirectory);
+  if (target.startsWith(`${root}${sep}`)) rmSync(target, { recursive: true, force: true });
+}
+
+function removeParsedArtifact(projectPath: string, artifactPath: string): void {
+  const root = resolve(projectPath, "outputs", "parsed");
+  const target = resolve(projectPath, artifactPath);
+  if (target.startsWith(`${root}${sep}`)) rmSync(dirname(target), { recursive: true, force: true });
+}
+
+function recordParsedArtifact(projectPath: string, parseId: string, material: MaterialInventoryItem, parserId: string, artifactPath: string, warningCount: number): void {
+  const registryPath = join(projectPath, "outputs", "system", "artifacts.jsonl");
+  mkdirSync(dirname(registryPath), { recursive: true });
+  appendFileSync(registryPath, `${JSON.stringify({
+    schemaVersion: 1, id: parseId, type: "canonical_parse", path: artifactPath,
+    source: { materialId: material.id, relativePath: material.relativePath, sourceHash: material.sourceHash },
+    parserId, warningCount, producer: "utility-worker", createdAt: new Date().toISOString()
+  })}\n`, "utf8");
 }
 
 function selectThreadProfile(correlationId: string, threadId: string, profileId: string): HostEvent {
@@ -985,6 +1090,7 @@ app.whenReady().then(() => {
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
+  utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
   for (const project of stateStore.listProjects()) {
     startMaterialWatcher(project.id);
     void refreshProjectInventory(randomUUID(), project.id, false).catch(() => undefined);
@@ -1002,6 +1108,8 @@ app.on("before-quit", () => {
   for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
   ipcMain.removeHandler(COMMAND_CHANNEL);
   workerSupervisor?.closeAll();
+  utilityJobRunner?.close();
+  utilityJobRunner = null;
   for (const state of materialWatchers.values()) {
     state.watcher.close();
     if (state.timer !== undefined) clearTimeout(state.timer);

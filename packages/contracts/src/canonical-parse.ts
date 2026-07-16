@@ -1,0 +1,90 @@
+import { z } from "zod";
+
+export const sourceReferenceSchema = z.object({
+  relativePath: z.string().min(1),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  locator: z.object({
+    kind: z.enum(["document", "page", "slide", "sheet", "path", "line"]),
+    index: z.number().int().positive().optional(),
+    name: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
+    range: z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]).optional(),
+    geometry: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional()
+  })
+});
+export type SourceReference = z.infer<typeof sourceReferenceSchema>;
+
+export const canonicalParseBlockSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(["heading", "paragraph", "table", "note", "image"]),
+  text: z.string().optional(),
+  level: z.number().int().min(1).max(6).optional(),
+  rows: z.array(z.array(z.string())).optional(),
+  tokens: z.array(z.object({ text: z.string(), geometry: z.tuple([z.number(), z.number(), z.number(), z.number()]) })).optional(),
+  source: sourceReferenceSchema
+}).refine((block) => block.text !== undefined || block.rows !== undefined, "A block requires text or rows");
+export type CanonicalParseBlock = z.infer<typeof canonicalParseBlockSchema>;
+
+export const parseWarningSchema = z.object({
+  code: z.string().min(1),
+  severity: z.enum(["info", "warning", "error"]),
+  message: z.string().min(1),
+  source: sourceReferenceSchema.optional()
+});
+
+export const canonicalParseSchema = z.object({
+  schemaVersion: z.literal(1),
+  parseId: z.string().uuid(),
+  material: z.object({
+    id: z.string().uuid(),
+    projectId: z.string().uuid(),
+    relativePath: z.string().min(1),
+    mediaType: z.string().min(1),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/)
+  }),
+  parser: z.object({ id: z.string().min(1), version: z.string().min(1), runtime: z.string().min(1) }),
+  createdAt: z.string().datetime(),
+  structure: z.object({
+    kind: z.enum(["document", "pages", "slides", "workbook", "table", "structured_text"]),
+    unitCount: z.number().int().nonnegative(),
+    units: z.array(z.object({ index: z.number().int().positive(), name: z.string().optional(), blockIds: z.array(z.string().min(1)) }))
+  }),
+  blocks: z.array(canonicalParseBlockSchema),
+  warnings: z.array(parseWarningSchema),
+  recoveryRequests: z.array(z.object({
+    source: sourceReferenceSchema,
+    reason: z.enum(["missing_text", "unreliable_text", "complex_structure"]),
+    status: z.literal("unavailable")
+  })),
+  provenance: z.object({
+    localOnly: z.literal(true),
+    stages: z.array(z.object({
+      id: z.string().min(1), version: z.string().min(1), durationMs: z.number().int().nonnegative(),
+      status: z.enum(["completed", "warning", "failed"]), warningCodes: z.array(z.string().min(1))
+    }))
+  })
+});
+export type CanonicalParse = z.infer<typeof canonicalParseSchema>;
+
+const utilityJobBaseSchema = z.object({
+  schemaVersion: z.literal(1),
+  jobId: z.string().uuid()
+});
+
+export const utilityJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("material.parse"),
+  material: z.object({
+    id: z.string().uuid(), projectId: z.string().uuid(), relativePath: z.string().min(1),
+    mediaType: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), absolutePath: z.string().min(1)
+  }),
+  stagingDirectory: z.string().min(1),
+  timeoutMs: z.number().int().min(1_000).max(300_000),
+  maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
+});
+export type UtilityJobCommand = z.infer<typeof utilityJobCommandSchema>;
+
+export const utilityJobEventSchema = z.discriminatedUnion("event", [
+  utilityJobBaseSchema.extend({ event: z.literal("material.parse.completed"), artifactPath: z.string().min(1), parse: canonicalParseSchema }),
+  utilityJobBaseSchema.extend({ event: z.literal("material.parse.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
+]);
+export type UtilityJobEvent = z.infer<typeof utilityJobEventSchema>;

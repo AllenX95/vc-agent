@@ -207,6 +207,9 @@ const refreshProjectMaterialsCommandSchema = commandMetadataSchema.extend({
 const needMaterialCommandSchema = commandMetadataSchema.extend({
   command: z.literal("material.need"), payload: z.object({ materialId: z.string().uuid() })
 });
+const parseMaterialCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("material.parse.request"), payload: z.object({ materialId: z.string().uuid() })
+});
 const resolveParseRefreshCommandSchema = commandMetadataSchema.extend({
   command: z.literal("material.parse.refresh.resolve"),
   payload: z.object({ materialId: z.string().uuid(), choice: z.enum(["create_new_version", "replace_previous", "cancel"]) })
@@ -271,6 +274,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   listProjectMaterialsCommandSchema,
   refreshProjectMaterialsCommandSchema,
   needMaterialCommandSchema,
+  parseMaterialCommandSchema,
   resolveParseRefreshCommandSchema,
   listThreadsCommandSchema,
   loadThreadTrajectoryCommandSchema,
@@ -394,6 +398,16 @@ const parseRefreshChoiceRequiredEventSchema = eventMetadataSchema.extend({
 const parseRefreshChoiceResolvedEventSchema = eventMetadataSchema.extend({
   event: z.literal("material.parse.refresh.choice.resolved"),
   payload: z.object({ materialId: z.string().uuid(), choice: z.enum(["create_new_version", "replace_previous", "cancel"]), status: z.enum(["pending_parse", "cancelled"]) })
+});
+const materialParseStartedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("material.parse.started"), payload: z.object({ materialId: z.string().uuid(), jobId: z.string().uuid() })
+});
+const materialParseCompletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("material.parse.completed"),
+  payload: z.object({ material: materialInventoryItemSchema, parseId: z.string().uuid(), parserId: z.string().min(1), artifactPath: z.string().min(1), warningCount: z.number().int().nonnegative(), reused: z.boolean() })
+});
+const materialParseFailedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("material.parse.failed"), payload: z.object({ materialId: z.string().uuid(), code: z.string().min(1), message: z.string().min(1) })
 });
 const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.trajectory.loaded"),
@@ -537,6 +551,9 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   projectMaterialsUpdatedEventSchema,
   parseRefreshChoiceRequiredEventSchema,
   parseRefreshChoiceResolvedEventSchema,
+  materialParseStartedEventSchema,
+  materialParseCompletedEventSchema,
+  materialParseFailedEventSchema,
   threadsListedEventSchema,
   threadTrajectoryLoadedEventSchema,
   threadCreatedEventSchema,
