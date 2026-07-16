@@ -71,11 +71,24 @@ button { font: inherit; letter-spacing: 0; }
 .provider-failure span { margin-top: 3px; color: #7d5b49; font-size: 10px; }
 .provider-failure div { display: flex; gap: 8px; margin-top: 9px; }
 .provider-failure button { min-height: 28px; padding: 0 9px; border: 1px solid #d6b5a2; border-radius: 5px; background: #fffaf7; color: #654331; font-size: 11px; }
+.tool-activity { max-width: 720px; margin: 8px 0 18px; padding: 9px 11px; border: 1px solid #d7dcd6; border-left: 3px solid #728176; background: #f3f5f2; color: #4c554e; font-size: 10px; }
+.tool-activity > div { display: flex; justify-content: space-between; gap: 12px; text-transform: capitalize; }
+.tool-activity p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.tool-activity a { display: block; margin-top: 5px; color: #356047; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-activity.failed, .tool-activity.rejected, .tool-activity.unknown_outcome { border-left-color: #a3694a; background: #f7f0eb; }
+.action-proposal { margin: 10px 0 20px; padding: 12px 13px; border: 1px solid #d4b981; border-radius: 7px; background: #fff8e8; white-space: normal; }
+.action-proposal strong, .action-proposal p, .action-proposal span { display: block; }
+.action-proposal p { margin: 4px 0; color: #4d4433; font-size: 11px; overflow-wrap: anywhere; }
+.action-proposal span { color: #74654a; font-size: 10px; }
+.action-proposal div { display: flex; gap: 7px; margin-top: 9px; }
+.action-proposal button { min-height: 28px; padding: 0 9px; border: 1px solid #cdb783; border-radius: 5px; background: #fff; color: #51452e; font-size: 10px; }
 
 .composer { position: absolute; left: max(24px, calc((100% - 780px) / 2)); right: max(24px, calc((100% - 780px) / 2)); bottom: 18px; min-height: 88px; border: 1px solid #cfd5ce; border-radius: 8px; background: #fff; box-shadow: 0 6px 22px rgba(37, 49, 40, .08); }
 .composer textarea { display: block; width: 100%; height: 52px; resize: none; padding: 12px 13px 4px; border: 0; outline: 0; background: transparent; color: #292e2a; font: inherit; font-size: 13px; }
-.composer-footer { display: flex; align-items: center; justify-content: space-between; padding: 4px 7px 7px 10px; }
+.composer-footer { display: flex; align-items: center; gap: 9px; padding: 4px 7px 7px 10px; }
 .composer-footer select { max-width: 220px; height: 28px; border: 0; background: transparent; color: #5e675f; font-size: 11px; }
+.output-location { flex: 1; min-width: 0; overflow: hidden; color: #7a817a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.full-access-indicator { flex: none; padding: 3px 6px; border: 1px solid #9e735e; border-radius: 4px; background: #f5e9e2; color: #704936; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .send-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: #294a37; color: #fff; }
 .send-button:disabled { background: #d9ddd8; color: #8c938d; }
 .stop-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: #78483c; color: #fff; }
@@ -120,6 +133,10 @@ button { font: inherit; letter-spacing: 0; }
 .settings-section dl div { display: flex; justify-content: space-between; min-height: 34px; align-items: center; font-size: 13px; }
 .settings-section dt { color: #666e67; }
 .settings-section dd { margin: 0; color: #262b27; font-variant-numeric: tabular-nums; }
+.access-mode-control { display: inline-grid; grid-template-columns: 1fr 1fr; min-width: 220px; padding: 3px; border: 1px solid #ccd2cb; border-radius: 6px; background: #eef1ed; }
+.access-mode-control button { min-height: 30px; border: 0; border-radius: 4px; background: transparent; color: #616961; font-size: 11px; }
+.access-mode-control button.active { background: #fff; color: #29352e; box-shadow: 0 1px 4px rgba(36, 48, 40, .1); }
+.access-mode-control button.active.full { background: #704b3b; color: #fff; }
 
 .right-panel { display: flex; flex-direction: column; border-left: 1px solid #d5d9d2; min-width: 0; }
 .panel-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 58px; border-bottom: 1px solid #d5d9d2; padding: 0 8px; }

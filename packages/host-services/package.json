@@ -2,5 +2,12 @@
   "name": "@vc-agent/host-services",
   "version": "0.1.0",
   "private": true,
-  "description": "Host-owned services are introduced by the first slice that exercises them."
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@vc-agent/capabilities": "workspace:*",
+    "@vc-agent/contracts": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "26.1.1", "typescript": "7.0.2" }
 }

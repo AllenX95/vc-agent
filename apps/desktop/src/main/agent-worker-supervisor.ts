@@ -51,6 +51,10 @@ export class AgentWorkerSupervisor {
     this.#workers.get(command.threadId)?.process.postMessage(command);
   }
 
+  resolveCapability(command: Extract<WorkerCommand, { command: "capability.execution.resolve" }>): void {
+    this.#workers.get(command.threadId)?.process.postMessage(command);
+  }
+
   #startWorker(threadId: string): WorkerRecord {
     const child = utilityProcess.fork(this.#workerEntry, [], {
       serviceName: `vc-agent-unscoped-${threadId}`,

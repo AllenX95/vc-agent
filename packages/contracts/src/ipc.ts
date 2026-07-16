@@ -37,6 +37,8 @@ export const unscopedThreadSchema = z.object({
   title: z.string().min(1),
   scope: z.literal("unscoped"),
   activeProfileId: z.string().min(1).optional(),
+  outputLocation: z.string().min(1).optional(),
+  stateVersion: z.number().int().positive(),
   createdAt: z.string().datetime()
 });
 export type UnscopedThread = z.infer<typeof unscopedThreadSchema>;
@@ -77,7 +79,19 @@ const ipcTrajectoryTurnSchema = z.object({
   usage: usageSchema.optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
+  submittedSequence: z.number().int().positive(),
   lastSequence: z.number().int().positive()
+});
+const ipcTrajectoryActivitySchema = z.object({
+  id: z.string().min(1),
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+  sequence: z.number().int().positive(),
+  kind: z.enum(["tool", "artifact", "context"]),
+  label: z.string().min(1),
+  status: z.enum(["started", "completed", "failed", "unknown_outcome"]),
+  content: z.string(),
+  artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
 });
 
 const commandMetadataSchema = z.object({
@@ -90,6 +104,10 @@ const commandMetadataSchema = z.object({
 
 const bootstrapCommandSchema = commandMetadataSchema.extend({ command: z.literal("app.bootstrap") });
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
+const setAccessModeCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("access.mode.set"),
+  payload: z.object({ mode: z.enum(["standard", "full"]) })
+});
 const createProfileCommandSchema = commandMetadataSchema.extend({
   command: z.literal("profile.create"),
   payload: z.object({
@@ -121,6 +139,10 @@ const resolveThreadProfileChangeCommandSchema = commandMetadataSchema.extend({
     action: z.enum(["continue_current_thread", "start_new_thread"])
   })
 });
+const chooseOutputLocationCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.output.location.choose"),
+  payload: z.object({ threadId: z.string().min(1) })
+});
 const submitTurnCommandSchema = commandMetadataSchema.extend({
   command: z.literal("turn.submit"),
   payload: z.object({
@@ -133,9 +155,14 @@ const stopTurnCommandSchema = commandMetadataSchema.extend({
   command: z.literal("turn.stop"),
   payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1) })
 });
+const resolveCapabilityConfirmationCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("capability.confirmation.resolve"),
+  payload: z.object({ requestId: z.string().min(1), approved: z.boolean() })
+});
 
 export const hostCommandSchema = z.discriminatedUnion("command", [
   bootstrapCommandSchema,
+  setAccessModeCommandSchema,
   listProfilesCommandSchema,
   createProfileCommandSchema,
   listThreadsCommandSchema,
@@ -143,8 +170,10 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   createThreadCommandSchema,
   selectThreadProfileCommandSchema,
   resolveThreadProfileChangeCommandSchema,
+  chooseOutputLocationCommandSchema,
   submitTurnCommandSchema,
-  stopTurnCommandSchema
+  stopTurnCommandSchema,
+  resolveCapabilityConfirmationCommandSchema
 ]);
 export type HostCommand = z.infer<typeof hostCommandSchema>;
 
@@ -162,6 +191,7 @@ export const bootstrapStateSchema = z.object({
   applicationVersion: z.string().min(1),
   stateSchemaVersion: z.number().int().positive(),
   storagePath: z.string().min(1),
+  accessMode: z.enum(["standard", "full"]),
   entityCounts: z.object({
     projects: z.number().int().nonnegative(),
     threads: z.number().int().nonnegative(),
@@ -179,6 +209,10 @@ export const bootstrapStateSchema = z.object({
 const bootstrapCompletedEventSchema = eventMetadataSchema.extend({
   event: z.literal("app.bootstrap.completed"),
   payload: bootstrapStateSchema
+});
+const accessModeChangedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("access.mode.changed"),
+  payload: z.object({ mode: z.enum(["standard", "full"]) })
 });
 const diagnosticRaisedEventSchema = eventMetadataSchema.extend({
   event: z.literal("diagnostic.raised"),
@@ -202,7 +236,7 @@ const threadsListedEventSchema = eventMetadataSchema.extend({
 });
 const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.trajectory.loaded"),
-  payload: z.object({ threadId: z.string().min(1), turns: z.array(ipcTrajectoryTurnSchema) })
+  payload: z.object({ threadId: z.string().min(1), turns: z.array(ipcTrajectoryTurnSchema), activities: z.array(ipcTrajectoryActivitySchema) })
 });
 const threadCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.created"),
@@ -230,6 +264,10 @@ const threadProfileChangeResolvedEventSchema = eventMetadataSchema.extend({
     action: z.enum(["continue_current_thread", "start_new_thread"]),
     retainedContext: z.enum(["visible-retained-trajectory", "none"])
   })
+});
+const threadOutputLocationSelectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.output.location.selected"),
+  payload: z.object({ thread: unscopedThreadSchema })
 });
 const turnAcceptedEventSchema = eventMetadataSchema.extend({
   event: z.literal("turn.accepted"),
@@ -294,9 +332,35 @@ const physicalContextRebuiltEventSchema = eventMetadataSchema.extend({
     retainedTurnCount: z.number().int().nonnegative()
   })
 });
+const capabilityConfirmationRequiredEventSchema = eventMetadataSchema.extend({
+  event: z.literal("capability.confirmation.required"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    requestId: z.string().min(1),
+    capabilityId: z.string().min(1),
+    action: z.string().min(1),
+    target: z.string().min(1),
+    reason: z.string().min(1),
+    expectedEffect: z.string().min(1)
+  })
+});
+const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("capability.execution.updated"),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    requestId: z.string().min(1),
+    capabilityId: z.string().min(1),
+    status: z.enum(["started", "completed", "rejected", "failed", "unknown_outcome"]),
+    content: z.string().max(20_000),
+    artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
+  })
+});
 
 export const hostEventSchema = z.discriminatedUnion("event", [
   bootstrapCompletedEventSchema,
+  accessModeChangedEventSchema,
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
@@ -306,6 +370,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   threadProfileSelectedEventSchema,
   threadProfileChangeRequiredEventSchema,
   threadProfileChangeResolvedEventSchema,
+  threadOutputLocationSelectedEventSchema,
   turnAcceptedEventSchema,
   turnStartedEventSchema,
   messageDeltaEventSchema,
@@ -313,7 +378,9 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   turnFailedEventSchema,
   turnInterruptedEventSchema,
   turnStopRequestedEventSchema,
-  physicalContextRebuiltEventSchema
+  physicalContextRebuiltEventSchema,
+  capabilityConfirmationRequiredEventSchema,
+  capabilityExecutionUpdatedEventSchema
 ]);
 
 export type HostEvent = z.infer<typeof hostEventSchema>;

@@ -187,11 +187,60 @@ test("persists an interrupted trajectory, requires cross-Provider authorization,
   }
 });
 
-async function launchApplication(root: string, userDataDirectory: string) {
+test("gates text Outputs on explicit intent and a selected Unscoped Output Location", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-f4-e2e-"));
+  const outputDirectory = mkdtempSync(join(tmpdir(), "vc-agent-f4-output-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_OUTPUT_LOCATION: outputDirectory });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Message").fill("Analyze the company and discuss the risks.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Model Profile not configured")).toBeVisible();
+    expect(readdirSync(outputDirectory)).toEqual([]);
+
+    await window.getByLabel("Message").fill("Create a memo file for this investment view.");
+    await window.getByRole("button", { name: "Send" }).click();
+    const outputFailure = window.locator(".provider-failure").filter({ hasText: "OUTPUT_LOCATION_NOT_CONFIGURED" });
+    await expect(outputFailure).toBeVisible();
+    await outputFailure.getByRole("button", { name: "Choose output location" }).click();
+    await expect(window.getByTitle(outputDirectory)).toBeVisible();
+    expect(readdirSync(outputDirectory)).toEqual([]);
+
+    await outputFailure.getByRole("button", { name: "Retry" }).click();
+    await expect(window.getByText("Model Profile not configured")).toHaveCount(2);
+    const bootstrapBeforeProfile = await invokeBootstrap(window);
+    expect(bootstrapBeforeProfile).toMatchObject({
+      payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } }
+    });
+    expect(readdirSync(outputDirectory)).toEqual([]);
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Full Access" }).click();
+    await application.close();
+
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_OUTPUT_LOCATION: outputDirectory });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await expect(window.getByText("Full access", { exact: true })).toBeVisible();
+    const bootstrapAfterRestart = await invokeBootstrap(window);
+    expect(bootstrapAfterRestart).toMatchObject({
+      payload: { accessMode: "full", runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } }
+    });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(outputDirectory, { recursive: true, force: true });
+  }
+});
+
+async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory }
+    env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory, ...extraEnvironment }
   });
 }
 

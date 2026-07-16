@@ -3,12 +3,14 @@ import { resolve, sep } from "node:path";
 import { InMemoryCredentialStore, type AssistantMessage, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
+  defineTool,
   ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
-import type { PhysicalContextHistoryItem } from "@vc-agent/contracts";
+import { Type } from "typebox";
+import type { CapabilityExecutionResult, PhysicalContextHistoryItem } from "@vc-agent/contracts";
 import {
   SnapshotResourceLoader,
   type ExtensionInventorySnapshot,
@@ -31,6 +33,12 @@ export interface PiSessionConfig {
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
   readonly extensions: ExtensionInventorySnapshot;
+  readonly capabilityProxy?: (
+    toolCallId: string,
+    capabilityId: string,
+    arguments_: Record<string, unknown>,
+    signal?: AbortSignal
+  ) => Promise<CapabilityExecutionResult>;
 }
 
 export type PiSessionEvent =
@@ -45,7 +53,7 @@ export interface PiSessionHandle {
   readonly sessionFile: string;
   readonly reconciliation: PiSessionReconciliation;
   readonly retainedTurnCount: number;
-  submit(prompt: string): Promise<void>;
+  submit(prompt: string, options?: { readonly activeCapabilities?: readonly string[] }): Promise<void>;
   abort(): Promise<void>;
   acknowledge(eventId: string, sequence: number): string;
   dispose(): void;
@@ -84,6 +92,14 @@ export async function createPiSession(
     modelsPath: null,
     allowModelNetwork: false
   });
+  return createPiSessionUsingRuntime(config, onEvent, modelRuntime);
+}
+
+export async function createPiSessionUsingRuntime(
+  config: PiSessionConfig,
+  onEvent: (event: PiSessionEvent) => void,
+  modelRuntime: ModelRuntime
+): Promise<PiSessionHandle> {
   await modelRuntime.setRuntimeApiKey(config.profile.provider, config.profile.apiKey);
 
   const model = modelRuntime.getModel(config.profile.provider, config.profile.model);
@@ -107,12 +123,14 @@ export async function createPiSession(
     { projectTrusted: false }
   );
   const physicalContext = reconcilePhysicalContext(config, model);
+  const customTools = config.capabilityProxy === undefined ? [] : [createTextOutputProxy(config.capabilityProxy)];
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
     model,
     thinkingLevel: config.profile.thinkingLevel ?? "off",
-    noTools: "all",
+    noTools: "builtin",
+    customTools,
     resourceLoader,
     sessionManager: physicalContext.sessionManager,
     settingsManager
@@ -130,7 +148,9 @@ export async function createPiSession(
     sessionFile: session.sessionFile ?? physicalContext.sessionManager.getSessionFile() ?? "",
     reconciliation: physicalContext.reconciliation,
     retainedTurnCount: config.contextHistory.length,
-    submit: async (prompt) => {
+    submit: async (prompt, options) => {
+      const activeCapabilities = options?.activeCapabilities ?? [];
+      session.setActiveToolsByName(activeCapabilities.filter((id) => id === "output.write_text"));
       failureEmitted = false;
       let timedOut = false;
       const timeout = setTimeout(() => {
@@ -151,6 +171,30 @@ export async function createPiSession(
     acknowledge: (eventId, sequence) => session.sessionManager.appendCustomEntry("vc-agent.trajectory-high-water", { eventId, sequence }),
     dispose: () => session.dispose()
   };
+}
+
+function createTextOutputProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: "output.write_text",
+    label: "Write text output",
+    description: "Create a requested text deliverable in the current Thread's authorized Output Location. Use only when the User explicitly requested a file or document.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Relative output filename or path" }),
+      content: Type.String({ description: "Complete UTF-8 text content" }),
+      mediaType: Type.Optional(Type.String({ description: "Format-neutral media type" })),
+      replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" }))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => {
+      const result = await proxy(toolCallId, "output.write_text", params, signal);
+      return {
+        content: [{ type: "text" as const, text: result.content }],
+        details: { requestId: result.requestId, status: result.status, artifact: result.artifact }
+      };
+    }
+  });
 }
 
 function reconcilePhysicalContext(config: PiSessionConfig, activeModel: Model<any>): {

@@ -80,6 +80,15 @@ const toolTerminal = trajectoryEventBase.extend({
     artifactIds: z.array(z.string().min(1))
   })
 });
+const toolStarted = trajectoryEventBase.extend({
+  event: z.literal("tool.started"),
+  payload: z.object({
+    toolCallId: z.string().min(1),
+    capabilityId: z.string().min(1),
+    arguments: z.record(z.string(), z.unknown()),
+    expectedStateVersion: z.number().int().positive()
+  })
+});
 const artifactCreated = trajectoryEventBase.extend({
   event: z.literal("artifact.created"),
   payload: z.object({
@@ -112,6 +121,7 @@ export const trajectoryEventSchema = z.discriminatedUnion("event", [
   turnCompleted,
   turnFailed,
   turnInterrupted,
+  toolStarted,
   toolTerminal,
   artifactCreated,
   contextRebuilt,
@@ -129,9 +139,23 @@ export const trajectoryTurnSchema = z.object({
   usage: usageSchema.optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
+  submittedSequence: z.number().int().positive(),
   lastSequence: z.number().int().positive()
 });
 export type TrajectoryTurn = z.infer<typeof trajectoryTurnSchema>;
+
+export const trajectoryActivitySchema = z.object({
+  id: z.string().min(1),
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+  sequence: z.number().int().positive(),
+  kind: z.enum(["tool", "artifact", "context"]),
+  label: z.string().min(1),
+  status: z.enum(["started", "completed", "failed", "unknown_outcome"]),
+  content: z.string(),
+  artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
+});
+export type TrajectoryActivity = z.infer<typeof trajectoryActivitySchema>;
 
 export const inflightTurnCheckpointSchema = z.object({
   schemaVersion: z.literal(1),

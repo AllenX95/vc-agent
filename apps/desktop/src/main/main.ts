@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, session, type IpcMainInvokeEvent } from "electron";
+import { existsSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
 import {
   IPC_SCHEMA_VERSION,
   hostCommandSchema,
   type ActorRef,
+  type CapabilityExecutionRequest,
+  type CapabilityExecutionResult,
   type HostEvent,
   type ModelProfile,
   type ProvenanceRef,
@@ -14,6 +17,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
+import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { CapabilityGateway, detectOutputIntent, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -34,6 +39,9 @@ interface TurnContext {
   readonly turnId: string;
   readonly text: string;
   readonly profile: ModelProfile;
+  readonly outputIntent: boolean;
+  readonly activeCapabilities: readonly string[];
+  readonly expectedStateVersion: number;
   readonly retryOfTurnId?: string;
 }
 
@@ -42,11 +50,13 @@ let stateStore: HostStateStore | null = null;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
+let capabilityGateway: CapabilityGateway | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
 const activeTurnByThread = new Map<string, string>();
+const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const credentials = new ProtectedCredentialService();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
@@ -123,7 +133,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
     event.sender.send(EVENT_CHANNEL, result);
     return result;
   }
-  if (stateStore === null || trajectoryStore === null || inflight === null || workerSupervisor === null) {
+  if (stateStore === null || trajectoryStore === null || inflight === null || workerSupervisor === null || capabilityGateway === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
   }
 
@@ -136,6 +146,9 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           event: "app.bootstrap.completed",
           payload: stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests })
         };
+      case "access.mode.set":
+        stateStore.setAccessMode(command.payload.mode);
+        return { ...eventMetadata(command.correlationId), event: "access.mode.changed", payload: { mode: command.payload.mode } };
       case "profile.list":
         return { ...eventMetadata(command.correlationId), event: "profiles.listed", payload: { profiles: stateStore.listModelProfiles() } };
       case "profile.create": {
@@ -157,7 +170,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return {
           ...eventMetadata(command.correlationId, command.payload.threadId),
           event: "thread.trajectory.loaded",
-          payload: { threadId: command.payload.threadId, turns: trajectoryStore.projectTurns(command.payload.threadId) }
+          payload: {
+            threadId: command.payload.threadId,
+            turns: trajectoryStore.projectTurns(command.payload.threadId),
+            activities: trajectoryStore.projectActivities(command.payload.threadId)
+          }
         };
       case "thread.create.unscoped": {
         const thread = stateStore.createUnscopedThread(command.payload.title);
@@ -167,6 +184,29 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return selectThreadProfile(command.correlationId, command.payload.threadId, command.payload.profileId);
       case "thread.profile.change.resolve":
         return resolveThreadProfileChange(command.correlationId, command.payload);
+      case "thread.output.location.choose": {
+        if (activeTurnByThread.has(command.payload.threadId)) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Output Location.");
+        }
+        const thread = stateStore.getUnscopedThread(command.payload.threadId);
+        if (thread === undefined) throw new Error("Thread not found");
+        let outputLocation = process.env.VC_AGENT_TEST_OUTPUT_LOCATION;
+        if (outputLocation === undefined) {
+          const selection = await dialog.showOpenDialog(mainWindow!, {
+            title: "Choose Output Location",
+            ...(thread.outputLocation === undefined ? {} : { defaultPath: thread.outputLocation }),
+            properties: ["openDirectory", "createDirectory"]
+          });
+          outputLocation = selection.canceled ? undefined : selection.filePaths[0];
+        }
+        if (outputLocation === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Output Location selection was cancelled.");
+        const absolute = resolve(outputLocation);
+        if (!isAbsolute(absolute) || !existsSync(absolute) || !statSync(absolute).isDirectory()) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", "The selected Output Location is not an existing directory.");
+        }
+        const updated = stateStore.setThreadOutputLocation(thread.id, absolute);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.output.location.selected", payload: { thread: updated } };
+      }
       case "turn.submit":
         return submitTurn(command.correlationId, command.payload);
       case "turn.stop": {
@@ -185,6 +225,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         });
         return { ...eventMetadata(command.correlationId, context.threadId), event: "turn.stop.requested", payload: { threadId: context.threadId, turnId: context.turnId } };
       }
+      case "capability.confirmation.resolve":
+        return resolveCapabilityConfirmation(command.correlationId, command.payload.requestId, command.payload.approved);
     }
   } catch {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host could not complete the command.");
@@ -264,6 +306,7 @@ function submitTurn(
   if (activeTurnByThread.has(input.threadId)) {
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
+  const outputIntent = detectOutputIntent(input.text);
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   const submitted: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, input.threadId, turnId, USER_ACTOR, USER_PROVENANCE),
@@ -276,6 +319,21 @@ function submitTurn(
     }
   };
   trajectoryStore!.append(submitted);
+
+  if (outputIntent && thread.outputLocation === undefined) {
+    const failure: ProviderFailure = { kind: "configuration", code: "OUTPUT_LOCATION_NOT_CONFIGURED", message: "Choose an Output Location before creating a file." };
+    const failed: TrajectoryEvent = {
+      ...trajectoryMetadata(correlationId, input.threadId, turnId, HOST_ACTOR, HOST_PROVENANCE),
+      event: "turn.failed",
+      payload: { ...(profile === undefined ? {} : { profile: toTrajectoryProfile(profile) }), failure }
+    };
+    trajectoryStore!.append(failed);
+    return {
+      ...ipcMetadata(failed),
+      event: "turn.failed",
+      payload: { threadId: input.threadId, turnId, text: input.text, ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }), ...(profile === undefined ? {} : { profile }), failure }
+    };
+  }
 
   if (profile === undefined) {
     const failure: ProviderFailure = { kind: "configuration", code: "MODEL_PROFILE_NOT_CONFIGURED", message: "Model Profile not configured" };
@@ -300,6 +358,9 @@ function submitTurn(
     turnId,
     text: input.text,
     profile,
+    outputIntent,
+    activeCapabilities: outputIntent ? ["output.write_text"] : [],
+    expectedStateVersion: thread.stateVersion,
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   turnContexts.set(turnId, context);
@@ -332,6 +393,8 @@ function submitTurn(
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
     contextHistory: trajectoryStore!.contextHistory(input.threadId),
+    activeCapabilities: [...context.activeCapabilities],
+    expectedStateVersion: context.expectedStateVersion,
     prompt: input.text,
     profile: {
       provider: profile.provider,
@@ -362,6 +425,11 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   }
   const context = turnContexts.get(workerEvent.turnId);
   if (context === undefined) return;
+
+  if (workerEvent.event === "capability.execution.requested") {
+    void processCapabilityRequest(context, workerEvent);
+    return;
+  }
 
   if (workerEvent.event === "physical_context.ready") {
     stateStore!.setPhysicalContextSession(workerEvent.threadId, workerEvent.sessionFile);
@@ -448,6 +516,169 @@ function acknowledgeTrajectory(context: TurnContext, record: TrajectoryEvent): v
   });
 }
 
+async function processCapabilityRequest(
+  context: TurnContext,
+  workerEvent: Extract<WorkerEvent, { event: "capability.execution.requested" }>
+): Promise<void> {
+  const request = workerEvent.request;
+  if (
+    request.threadId !== context.threadId ||
+    request.turnId !== context.turnId ||
+    request.correlationId !== context.correlationId
+  ) {
+    resolveCapabilityInWorker(context, {
+      schemaVersion: 1,
+      requestId: request.requestId,
+      status: "rejected",
+      code: "REQUEST_CONTEXT_MISMATCH",
+      content: "Capability request does not match the active Turn."
+    });
+    return;
+  }
+  const started: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, request.actor, request.provenance),
+    event: "tool.started",
+    payload: {
+      toolCallId: request.toolCallId,
+      capabilityId: request.capabilityId,
+      arguments: summarizeCapabilityArguments(request.arguments),
+      expectedStateVersion: request.expectedStateVersion
+    }
+  };
+  trajectoryStore!.append(started);
+  inflight!.startTool(context.turnId, { toolCallId: request.toolCallId, capabilityId: request.capabilityId }, workerEvent.workerSequence, started.sequence);
+  capabilityRequests.set(request.requestId, { context, request });
+  emit({
+    ...ipcMetadata(started),
+    event: "capability.execution.updated",
+    payload: { threadId: context.threadId, turnId: context.turnId, requestId: request.requestId, capabilityId: request.capabilityId, status: "started", content: "Capability execution requested." }
+  });
+
+  const decision = await capabilityGateway!.request(request, capabilityAuthorization(context));
+  if (decision.type === "confirmation_required") {
+    emit({
+      ...eventMetadata(context.correlationId, context.threadId, HOST_ACTOR, HOST_PROVENANCE),
+      event: "capability.confirmation.required",
+      payload: { threadId: context.threadId, turnId: context.turnId, ...decision.proposal }
+    });
+    return;
+  }
+  finalizeCapability(context, request, decision.result, true);
+}
+
+async function resolveCapabilityConfirmation(correlationId: string, requestId: string, approved: boolean): Promise<HostEvent> {
+  const pending = capabilityRequests.get(requestId);
+  if (pending === undefined || capabilityGateway === null) {
+    return diagnostic(correlationId, "HOST_FAILURE", "The scoped capability confirmation is no longer active.");
+  }
+  const result = await capabilityGateway.resolve(requestId, approved, capabilityAuthorization(pending.context));
+  return finalizeCapability(pending.context, pending.request, result, false);
+}
+
+function finalizeCapability(
+  context: TurnContext,
+  request: CapabilityExecutionRequest,
+  initialResult: CapabilityExecutionResult,
+  emitToRenderer: boolean
+): HostEvent {
+  let result = initialResult;
+  if (result.artifact !== undefined) {
+    try {
+      stateStore!.recordArtifact(result.artifact);
+    } catch {
+      result = {
+        schemaVersion: 1,
+        requestId: result.requestId,
+        status: "unknown_outcome",
+        code: "ARTIFACT_COMMIT_UNKNOWN",
+        content: "The file write completed but artifact registration could not be confirmed. Inspect the target before retrying."
+      };
+    }
+  }
+  const eventName = result.status === "completed"
+    ? "tool.completed"
+    : result.status === "unknown_outcome"
+      ? "tool.unknown_outcome"
+      : "tool.failed";
+  const terminal: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, request.actor, request.provenance),
+    event: eventName,
+    payload: {
+      toolCallId: request.toolCallId,
+      capabilityId: request.capabilityId,
+      summary: result.content,
+      artifactIds: result.artifact === undefined ? [] : [result.artifact.id]
+    }
+  };
+  trajectoryStore!.append(terminal);
+  if (result.artifact !== undefined && result.status === "completed") {
+    const artifactEvent: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, request.actor, request.provenance),
+      event: "artifact.created",
+      payload: {
+        artifactId: result.artifact.id,
+        mediaType: result.artifact.mediaType,
+        destination: result.artifact.destination,
+        sourceTurnId: context.turnId
+      }
+    };
+    trajectoryStore!.append(artifactEvent);
+  }
+  inflight!.finishTool(context.turnId, request.toolCallId, terminal.sequence);
+  capabilityRequests.delete(request.requestId);
+  resolveCapabilityInWorker(context, result);
+  const hostEvent: HostEvent = {
+    ...ipcMetadata(terminal),
+    event: "capability.execution.updated",
+    payload: {
+      threadId: context.threadId,
+      turnId: context.turnId,
+      requestId: request.requestId,
+      capabilityId: request.capabilityId,
+      status: result.status,
+      content: result.content,
+      ...(result.artifact === undefined ? {} : { artifact: { id: result.artifact.id, mediaType: result.artifact.mediaType, destination: result.artifact.destination } })
+    }
+  };
+  if (emitToRenderer) emit(hostEvent);
+  return hostEvent;
+}
+
+function resolveCapabilityInWorker(context: TurnContext, result: CapabilityExecutionResult): void {
+  workerSupervisor?.resolveCapability({
+    schemaVersion: 1,
+    command: "capability.execution.resolve",
+    commandId: randomUUID(),
+    correlationId: context.correlationId,
+    threadId: context.threadId,
+    turnId: context.turnId,
+    result
+  });
+}
+
+function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationSnapshot {
+  const thread = stateStore!.getUnscopedThread(context.threadId);
+  if (thread === undefined) throw new Error("Thread not found");
+  return {
+    accessMode: stateStore!.getAccessMode(),
+    scope: "unscoped",
+    stateVersion: thread.stateVersion,
+    activeCapabilityIds: context.activeCapabilities,
+    outputIntent: context.outputIntent,
+    ...(thread.outputLocation === undefined ? {} : { outputLocation: thread.outputLocation })
+  };
+}
+
+function summarizeCapabilityArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
+  const content = typeof arguments_.content === "string" ? arguments_.content : "";
+  return {
+    path: typeof arguments_.path === "string" ? arguments_.path : "",
+    mediaType: typeof arguments_.mediaType === "string" ? arguments_.mediaType : "text/plain; charset=utf-8",
+    replaceExisting: arguments_.replaceExisting === true,
+    contentBytes: Buffer.byteLength(content, "utf8")
+  };
+}
+
 function interruptTurn(
   context: TurnContext,
   reason: "user_stop" | "worker_exit" | "application_restart" | "provider_interrupted",
@@ -474,6 +705,12 @@ function interruptTurn(
 }
 
 function finishTurn(context: TurnContext): void {
+  for (const [requestId, pending] of capabilityRequests) {
+    if (pending.context.turnId !== context.turnId) continue;
+    const result = capabilityGateway?.cancel(requestId);
+    if (result !== undefined) resolveCapabilityInWorker(context, result);
+    capabilityRequests.delete(requestId);
+  }
   inflight!.complete(context.turnId);
   turnContexts.delete(context.turnId);
   activeTurnByThread.delete(context.threadId);
@@ -527,6 +764,9 @@ app.whenReady().then(() => {
     sequenceByThread.set(thread.id, lastSequence);
   }
   inflight = new InflightTurnCoordinator(trajectoryStore);
+  const capabilityRegistry = new CapabilityRegistry();
+  capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
+  capabilityGateway = new CapabilityGateway(capabilityRegistry);
   workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
   ipcMain.handle(COMMAND_CHANNEL, handleCommand);
   mainWindow = createMainWindow();

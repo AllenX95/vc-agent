@@ -1,6 +1,7 @@
 import {
   IPC_SCHEMA_VERSION,
   workerCommandSchema,
+  type CapabilityExecutionResult,
   type TokenUsage,
   type WorkerCommand,
   type WorkerEvent
@@ -18,6 +19,7 @@ let activeCommand: ExecuteCommand | null = null;
 let stopRequested = false;
 let interruptionSent = false;
 const sequenceByTurn = new Map<string, number>();
+const capabilityResolvers = new Map<string, (result: CapabilityExecutionResult) => void>();
 
 type WorkerEventWithoutSequence = WorkerEvent extends infer T
   ? T extends WorkerEvent
@@ -36,7 +38,8 @@ parentPort.on("message", (messageEvent) => {
   if (!parsed.success) return;
   if (parsed.data.command === "turn.execute") void executeTurn(parsed.data);
   else if (parsed.data.command === "turn.stop") void stopTurn(parsed.data);
-  else acknowledgeTrajectory(parsed.data);
+  else if (parsed.data.command === "trajectory.acknowledge") acknowledgeTrajectory(parsed.data);
+  else resolveCapabilityExecution(parsed.data);
 });
 
 async function executeTurn(command: ExecuteCommand): Promise<void> {
@@ -74,7 +77,8 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
           contextHistory: command.contextHistory,
           profile: command.profile,
           resources: command.resources,
-          extensions: command.extensions
+          extensions: command.extensions,
+          capabilityProxy: requestCapability
         },
         (event) => {
           if (event.type === "text_delta") {
@@ -112,7 +116,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       return;
     }
     send({ ...workerMetadata(command), event: "turn.started" });
-    await session.submit(command.prompt);
+    await session.submit(command.prompt, { activeCapabilities: command.activeCapabilities });
     if (stopRequested) sendInterrupted(command, "user_stop");
   } catch (error) {
     if (stopRequested) sendInterrupted(command, "user_stop");
@@ -147,6 +151,50 @@ function acknowledgeTrajectory(command: Extract<WorkerCommand, { command: "traje
   if (session === null) return;
   session.acknowledge(command.eventId, command.sequence);
   send({ ...workerMetadata(command), event: "trajectory.acknowledged", eventId: command.eventId, sequence: command.sequence });
+}
+
+function resolveCapabilityExecution(command: Extract<WorkerCommand, { command: "capability.execution.resolve" }>): void {
+  const resolve = capabilityResolvers.get(command.result.requestId);
+  if (resolve === undefined) return;
+  capabilityResolvers.delete(command.result.requestId);
+  resolve(command.result);
+}
+
+function requestCapability(
+  toolCallId: string,
+  capabilityId: string,
+  arguments_: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<CapabilityExecutionResult> {
+  const command = activeCommand;
+  if (command === null) {
+    return Promise.resolve({ schemaVersion: 1, requestId: crypto.randomUUID(), status: "rejected", code: "TURN_NOT_ACTIVE", content: "The Turn is no longer active." });
+  }
+  const requestId = crypto.randomUUID();
+  const request = {
+    schemaVersion: 1 as const,
+    requestId,
+    correlationId: command.correlationId,
+    threadId: command.threadId,
+    turnId: command.turnId,
+    toolCallId,
+    capabilityId,
+    scope: { kind: "unscoped" as const, threadId: command.threadId },
+    arguments: arguments_,
+    expectedStateVersion: command.expectedStateVersion,
+    actor: { actorType: "agent" as const, actorId: "primary-agent" },
+    provenance: { producerType: "agent" as const, producerId: "primary-agent" }
+  };
+  send({ ...workerMetadata(command), event: "capability.execution.requested", request });
+  return new Promise((resolve) => {
+    capabilityResolvers.set(requestId, resolve);
+    const abort = () => {
+      if (!capabilityResolvers.delete(requestId)) return;
+      resolve({ schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "Capability execution was interrupted." });
+    };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function workerMetadata(command: { correlationId: string; threadId: string; turnId: string }) {

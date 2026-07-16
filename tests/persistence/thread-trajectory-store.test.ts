@@ -120,6 +120,30 @@ describe("ThreadTrajectoryStore", () => {
     expect(store.loadEvents("thread-1")).toHaveLength(2);
   });
 
+  it("projects durable tool and Artifact activity for restart inspection", () => {
+    const { store } = fixture();
+    store.append(submitted());
+    store.append({
+      ...metadata(2),
+      event: "tool.started",
+      payload: { toolCallId: "tool-1", capabilityId: "output.write_text", arguments: { path: "memo.txt", contentBytes: 12 }, expectedStateVersion: 2 }
+    });
+    store.append({
+      ...metadata(3),
+      event: "tool.completed",
+      payload: { toolCallId: "tool-1", capabilityId: "output.write_text", summary: "Created Output", artifactIds: ["artifact-1"] }
+    });
+    store.append({
+      ...metadata(4),
+      event: "artifact.created",
+      payload: { artifactId: "artifact-1", mediaType: "text/plain", destination: "C:\\outputs\\memo.txt", sourceTurnId: "turn-1" }
+    });
+    expect(store.projectActivities("thread-1")).toMatchObject([
+      { kind: "tool", label: "output.write_text", status: "completed", content: "Created Output", sequence: 3 },
+      { kind: "artifact", artifact: { id: "artifact-1", mediaType: "text/plain" }, sequence: 4 }
+    ]);
+  });
+
   it("rejects non-monotonic trajectory sequence numbers", () => {
     const { store } = fixture();
     store.append(submitted());

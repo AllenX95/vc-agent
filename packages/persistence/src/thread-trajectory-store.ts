@@ -19,6 +19,7 @@ import {
   type InflightTurnCheckpoint,
   type PhysicalContextHistoryItem,
   type TrajectoryEvent,
+  type TrajectoryActivity,
   type TrajectoryProfile,
   type TrajectoryTurn
 } from "@vc-agent/contracts";
@@ -158,6 +159,7 @@ export class ThreadTrajectoryStore {
           assistantText: "",
           status: "submitted",
           ...(event.payload.profile === undefined ? {} : { profile: event.payload.profile }),
+          submittedSequence: event.sequence,
           lastSequence: event.sequence
         });
         continue;
@@ -175,6 +177,60 @@ export class ThreadTrajectoryStore {
       }
     }
     return [...turns.values()];
+  }
+
+  projectActivities(threadId: string): TrajectoryActivity[] {
+    const activities = new Map<string, TrajectoryActivity>();
+    for (const event of this.loadEvents(threadId)) {
+      if (event.event === "tool.started") {
+        activities.set(`tool:${event.payload.toolCallId}`, {
+          id: `tool:${event.payload.toolCallId}`,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "tool",
+          label: event.payload.capabilityId,
+          status: "started",
+          content: "Capability execution requested."
+        });
+      } else if (event.event === "tool.completed" || event.event === "tool.failed" || event.event === "tool.unknown_outcome") {
+        const id = `tool:${event.payload.toolCallId}`;
+        activities.set(id, {
+          id,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "tool",
+          label: event.payload.capabilityId,
+          status: event.event === "tool.completed" ? "completed" : event.event === "tool.unknown_outcome" ? "unknown_outcome" : "failed",
+          content: event.payload.summary
+        });
+      } else if (event.event === "artifact.created") {
+        activities.set(`artifact:${event.payload.artifactId}`, {
+          id: `artifact:${event.payload.artifactId}`,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "artifact",
+          label: "Artifact created",
+          status: "completed",
+          content: event.payload.destination,
+          artifact: { id: event.payload.artifactId, mediaType: event.payload.mediaType, destination: event.payload.destination }
+        });
+      } else if (event.event === "physical_context.rebuilt") {
+        activities.set(`context:${event.eventId}`, {
+          id: `context:${event.eventId}`,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "context",
+          label: "Physical context rebuilt",
+          status: "completed",
+          content: `Rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`
+        });
+      }
+    }
+    return [...activities.values()].sort((a, b) => a.sequence - b.sequence);
   }
 
   contextHistory(threadId: string): PhysicalContextHistoryItem[] {

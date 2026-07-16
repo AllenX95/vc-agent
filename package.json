@@ -18,7 +18,9 @@
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@types/node": "26.1.1",
+    "@vc-agent/capabilities": "workspace:*",
     "@vc-agent/contracts": "workspace:*",
+    "@vc-agent/host-services": "workspace:*",
     "@vc-agent/persistence": "workspace:*",
     "@vc-agent/pi-adapter": "workspace:*",
     "electron": "43.1.1",

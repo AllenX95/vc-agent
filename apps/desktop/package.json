@@ -8,8 +8,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@vc-agent/capabilities": "workspace:*",
     "@vc-agent/contracts": "workspace:*",
     "@vc-agent/core": "workspace:*",
+    "@vc-agent/host-services": "workspace:*",
     "@vc-agent/persistence": "workspace:*",
     "lucide-react": "1.24.0",
     "react": "19.2.7",

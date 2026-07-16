@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Versioned vc-agent boundary around the real Pi SDK.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
@@ -13,7 +14,8 @@
   "dependencies": {
     "@vc-agent/contracts": "workspace:*",
     "@earendil-works/pi-ai": "0.80.8",
-    "@earendil-works/pi-coding-agent": "0.80.8"
+    "@earendil-works/pi-coding-agent": "0.80.8",
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

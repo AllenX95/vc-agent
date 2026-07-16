@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
+import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema } from "./capability.js";
 
 export const runtimeResourceSnapshotSchema = z.object({
   schemaVersion: z.literal(1),
@@ -39,6 +40,8 @@ const executeTurn = workerCommandBase.extend({
   previousSessionFile: z.string().min(1).optional(),
   hostHighWater: z.object({ eventId: z.string().min(1), sequence: z.number().int().positive() }).optional(),
   contextHistory: z.array(physicalContextHistoryItemSchema),
+  activeCapabilities: z.array(z.string().min(1)),
+  expectedStateVersion: z.number().int().positive(),
   prompt: z.string().min(1),
   profile: z.object({
     provider: z.string().min(1),
@@ -55,8 +58,12 @@ const acknowledgeTrajectory = workerCommandBase.extend({
   eventId: z.string().min(1),
   sequence: z.number().int().positive()
 });
+const resolveCapabilityExecution = workerCommandBase.extend({
+  command: z.literal("capability.execution.resolve"),
+  result: capabilityExecutionResultSchema
+});
 
-export const workerCommandSchema = z.discriminatedUnion("command", [executeTurn, stopTurn, acknowledgeTrajectory]);
+export const workerCommandSchema = z.discriminatedUnion("command", [executeTurn, stopTurn, acknowledgeTrajectory, resolveCapabilityExecution]);
 export type WorkerCommand = z.infer<typeof workerCommandSchema>;
 
 const workerEventBase = z.object({
@@ -87,6 +94,7 @@ const interrupted = workerEventBase.extend({
   reason: z.enum(["user_stop", "provider_interrupted"])
 });
 const acknowledged = workerEventBase.extend({ event: z.literal("trajectory.acknowledged"), eventId: z.string().min(1), sequence: z.number().int().positive() });
+const capabilityRequested = workerEventBase.extend({ event: z.literal("capability.execution.requested"), request: capabilityExecutionRequestSchema });
 
-export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, completed, failed, interrupted, acknowledged]);
+export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, completed, failed, interrupted, acknowledged, capabilityRequested]);
 export type WorkerEvent = z.infer<typeof workerEventSchema>;

@@ -59,7 +59,7 @@ describe("workspace dependency direction", () => {
       "@vc-agent/core": new Set(),
       "@vc-agent/contracts": new Set(),
       "@vc-agent/persistence": new Set(["@vc-agent/core", "@vc-agent/contracts"]),
-      "@vc-agent/host-services": new Set(["@vc-agent/core", "@vc-agent/contracts"]),
+      "@vc-agent/host-services": new Set(["@vc-agent/core", "@vc-agent/contracts", "@vc-agent/capabilities"]),
       "@vc-agent/capabilities": new Set(["@vc-agent/core", "@vc-agent/contracts"]),
       "@vc-agent/pi-adapter": new Set(["@vc-agent/contracts"]),
       "@vc-agent/agent-worker": new Set(["@vc-agent/contracts", "@vc-agent/pi-adapter"]),

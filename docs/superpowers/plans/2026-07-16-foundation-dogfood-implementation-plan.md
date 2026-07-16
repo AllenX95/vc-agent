@@ -124,14 +124,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] A model tool invocation crosses versioned IPC with Thread, Turn, capability, scope, arguments, correlation id, and expected state version.
-- [ ] Capability metadata declares activation class, input/output schema, side-effect class, scope requirements, and executor identity; adding a later capability does not require a new Pi-to-Host IPC method or Renderer branch.
-- [ ] The Host rejects inactive, unauthorized, stale, or out-of-scope requests before side effects.
-- [ ] Ordinary conversation creates no file without Output Intent.
-- [ ] An explicit save request prompts for an Unscoped Output Location when absent and atomically creates a visible file there.
-- [ ] Standard Access confirms sensitive out-of-scope or replacement actions; Full Access suppresses tool-level prompts but keeps events and provenance visible.
-- [ ] Unknown completion after a dispatched non-stageable write becomes Unknown Tool Outcome and is not automatically retried.
-- [ ] The first text Output records a format-neutral media type, producer, destination, and source/provenance relation rather than defining Markdown as the Output domain model.
+- [x] A model tool invocation crosses versioned IPC with Thread, Turn, capability, scope, arguments, correlation id, and expected state version.
+- [x] Capability metadata declares activation class, input/output schema, side-effect class, scope requirements, and executor identity; adding a later capability does not require a new Pi-to-Host IPC method or Renderer branch.
+- [x] The Host rejects inactive, unauthorized, stale, or out-of-scope requests before side effects.
+- [x] Ordinary conversation creates no file without Output Intent.
+- [x] An explicit save request prompts for an Unscoped Output Location when absent and atomically creates a visible file there.
+- [x] Standard Access confirms sensitive out-of-scope or replacement actions; Full Access suppresses tool-level prompts but keeps events and provenance visible.
+- [x] Unknown completion after a dispatched non-stageable write becomes Unknown Tool Outcome and is not automatically retried.
+- [x] The first text Output records a format-neutral media type, producer, destination, and source/provenance relation rather than defining Markdown as the Output domain model.
 
 ### F5. Open A Stable Project And Run A Project Thread
 

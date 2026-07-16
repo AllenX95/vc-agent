@@ -50,6 +50,36 @@ export class InflightTurnCoordinator {
     this.flush(turnId);
   }
 
+  startTool(
+    turnId: string,
+    tool: { readonly toolCallId: string; readonly capabilityId: string },
+    lastWorkerSequence: number,
+    lastHostSequence: number
+  ): void {
+    const active = this.#active.get(turnId);
+    if (active === undefined) return;
+    active.checkpoint = {
+      ...active.checkpoint,
+      startedTools: [...active.checkpoint.startedTools.filter((item) => item.toolCallId !== tool.toolCallId), { ...tool, status: "started" }],
+      lastWorkerSequence,
+      lastHostSequence,
+      updatedAt: new Date().toISOString()
+    };
+    this.flush(turnId);
+  }
+
+  finishTool(turnId: string, toolCallId: string, lastHostSequence: number): void {
+    const active = this.#active.get(turnId);
+    if (active === undefined) return;
+    active.checkpoint = {
+      ...active.checkpoint,
+      startedTools: active.checkpoint.startedTools.filter((item) => item.toolCallId !== toolCallId),
+      lastHostSequence,
+      updatedAt: new Date().toISOString()
+    };
+    this.flush(turnId);
+  }
+
   get(turnId: string): InflightTurnCheckpoint | undefined {
     return this.#active.get(turnId)?.checkpoint;
   }

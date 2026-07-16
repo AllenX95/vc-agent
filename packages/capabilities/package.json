@@ -2,5 +2,15 @@
   "name": "@vc-agent/capabilities",
   "version": "0.1.0",
   "private": true,
-  "description": "Capability adapters are introduced in Foundation slice F4."
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@vc-agent/contracts": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
+  }
 }

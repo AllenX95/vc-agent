@@ -10,6 +10,7 @@ import {
   type ExtensionInventorySnapshot,
   type RuntimeResourceSnapshot
 } from "@vc-agent/pi-adapter";
+import { createFauxPiSession, fauxAssistantMessage, fauxToolCall } from "@vc-agent/pi-adapter/testing";
 
 const temporaryDirectories: string[] = [];
 const resources: RuntimeResourceSnapshot = {
@@ -154,5 +155,56 @@ describe("real Pi SDK tracer", () => {
       model: "claude-sonnet-4-5"
     });
     expect(JSON.stringify(failure)).not.toContain(apiKey);
+  });
+
+  it("executes an active Host capability proxy through a real Pi tool-call turn", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-tool-proxy-"));
+    temporaryDirectories.push(cwd);
+    const events: string[] = [];
+    const requests: Array<{ toolCallId: string; capabilityId: string; arguments_: Record<string, unknown> }> = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        capabilityProxy: async (toolCallId, capabilityId, arguments_) => {
+          requests.push({ toolCallId, capabilityId, arguments_ });
+          return {
+            schemaVersion: 1,
+            requestId: "capability-request-1",
+            status: "completed",
+            content: "Created text Output",
+            artifact: {
+              schemaVersion: 1,
+              id: "artifact-1",
+              mediaType: "text/plain",
+              producer: { type: "agent", id: "primary-agent" },
+              destination: "C:\\outputs\\memo.txt",
+              source: { threadId: "thread-1", turnId: "turn-1", capabilityRequestId: "capability-request-1" },
+              createdAt: new Date().toISOString()
+            }
+          };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(
+          fauxToolCall("output.write_text", { path: "memo.txt", content: "Investment view", mediaType: "text/plain" }),
+          { stopReason: "toolUse" }
+        ),
+        fauxAssistantMessage("The requested Output was created.")
+      ],
+      onEvent: (event) => events.push(event.type === "text_delta" ? `delta:${event.delta}` : event.type)
+    });
+
+    await handle.submit("Create a memo file.", { activeCapabilities: ["output.write_text"] });
+    expect(requests).toMatchObject([{
+      capabilityId: "output.write_text",
+      arguments_: { path: "memo.txt", content: "Investment view", mediaType: "text/plain" }
+    }]);
+    expect(events.some((event) => event.startsWith("delta:"))).toBe(true);
+    expect(events.at(-1)).toBe("completed");
+    handle.dispose();
   });
 });

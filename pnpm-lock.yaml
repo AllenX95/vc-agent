@@ -14,9 +14,15 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+      '@vc-agent/capabilities':
+        specifier: workspace:*
+        version: link:packages/capabilities
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:packages/contracts
+      '@vc-agent/host-services':
+        specifier: workspace:*
+        version: link:packages/host-services
       '@vc-agent/persistence':
         specifier: workspace:*
         version: link:packages/persistence
@@ -63,12 +69,18 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@vc-agent/capabilities':
+        specifier: workspace:*
+        version: link:../../packages/capabilities
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@vc-agent/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vc-agent/host-services':
+        specifier: workspace:*
+        version: link:../../packages/host-services
       '@vc-agent/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
@@ -109,7 +121,21 @@ importers:
 
   apps/utility-worker: {}
 
-  packages/capabilities: {}
+  packages/capabilities:
+    dependencies:
+      '@vc-agent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   packages/contracts:
     dependencies:
@@ -127,7 +153,21 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  packages/host-services: {}
+  packages/host-services:
+    dependencies:
+      '@vc-agent/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
+      '@vc-agent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   packages/persistence:
     dependencies:
@@ -156,6 +196,9 @@ importers:
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../contracts
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
     devDependencies:
       '@types/node':
         specifier: 26.1.1

@@ -23,7 +23,8 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 3,
+      stateSchemaVersion: 4,
+      accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
     });
@@ -32,7 +33,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["model_profiles", "physical_contexts", "protected_credentials", "schema_migrations", "threads"]);
+    expect(tables).toEqual(["application_settings", "artifacts", "model_profiles", "physical_contexts", "protected_credentials", "schema_migrations", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -48,12 +49,26 @@ describe("HostStateStore", () => {
     });
     const thread = store.createUnscopedThread("Thread 1");
     const selected = store.selectThreadProfile(thread.id, profile.id);
+    const withOutput = store.setThreadOutputLocation(thread.id, "C:\\outputs");
     store.setPhysicalContextSession(thread.id, "C:\\app\\threads\\thread-1\\pi\\session.jsonl");
     store.acknowledgePhysicalContext(thread.id, "event-7", 7);
 
     expect(profile).not.toHaveProperty("apiKey");
     expect(store.getEncryptedCredential(profile.credentialRef)).toEqual(encryptedCredential);
     expect(selected.activeProfileId).toBe(profile.id);
+    expect(withOutput).toMatchObject({ outputLocation: "C:\\outputs", stateVersion: 2 });
+    store.setAccessMode("full");
+    expect(store.getAccessMode()).toBe("full");
+    store.recordArtifact({
+      schemaVersion: 1,
+      id: "artifact-1",
+      mediaType: "text/plain; charset=utf-8",
+      producer: { type: "agent", id: "primary-agent" },
+      destination: "C:\\outputs\\memo.txt",
+      source: { threadId: thread.id, turnId: "turn-1", capabilityRequestId: "request-1" },
+      createdAt: new Date().toISOString()
+    });
+    expect(store.listArtifacts(thread.id)).toMatchObject([{ id: "artifact-1", mediaType: "text/plain; charset=utf-8", source: { turnId: "turn-1" } }]);
     expect(store.getPhysicalContext(thread.id)).toMatchObject({ highWaterEventId: "event-7", highWaterSequence: 7 });
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ threads: 1, modelProfiles: 1 });
     store.close();

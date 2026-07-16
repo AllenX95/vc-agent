@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import type { BootstrapState, ModelProfile, ThinkingLevel, UnscopedThread } from "@vc-agent/contracts";
+import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, ThinkingLevel, UnscopedThread } from "@vc-agent/contracts";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 
-const STATE_SCHEMA_VERSION = 3;
+const STATE_SCHEMA_VERSION = 4;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -26,6 +26,8 @@ interface ThreadRow {
   id: string;
   title: string;
   active_profile_id: string | null;
+  output_location: string | null;
+  state_version: number;
   created_at: string;
 }
 
@@ -99,6 +101,8 @@ export class HostStateStore {
         title TEXT NOT NULL,
         scope TEXT NOT NULL CHECK(scope = 'unscoped'),
         active_profile_id TEXT REFERENCES model_profiles(id),
+        output_location TEXT,
+        state_version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
       ) STRICT;
 
@@ -109,13 +113,42 @@ export class HostStateStore {
         high_water_sequence INTEGER,
         updated_at TEXT NOT NULL
       ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS application_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        media_type TEXT NOT NULL,
+        producer_type TEXT NOT NULL,
+        producer_id TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        source_thread_id TEXT NOT NULL REFERENCES threads(id),
+        source_turn_id TEXT NOT NULL,
+        capability_request_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      ) STRICT;
     `);
+    if (!this.#columnExists("threads", "output_location")) this.#database.exec("ALTER TABLE threads ADD COLUMN output_location TEXT");
+    if (!this.#columnExists("threads", "state_version")) this.#database.exec("ALTER TABLE threads ADD COLUMN state_version INTEGER NOT NULL DEFAULT 1");
+    this.#database.prepare("INSERT OR IGNORE INTO application_settings(key, value, updated_at) VALUES ('access_mode', 'standard', ?)").run(new Date().toISOString());
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)")
       .run(new Date().toISOString());
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)")
       .run(new Date().toISOString());
+    this.#database
+      .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?)")
+      .run(new Date().toISOString());
+  }
+
+  #columnExists(table: string, column: string): boolean {
+    const rows = this.#database.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{ name: string }>;
+    return rows.some((row) => row.name === column);
   }
 
   getBootstrapState(applicationVersion: string, activity: RuntimeActivitySnapshot): BootstrapState {
@@ -123,6 +156,7 @@ export class HostStateStore {
       applicationVersion,
       stateSchemaVersion: STATE_SCHEMA_VERSION,
       storagePath: this.#storagePath,
+      accessMode: this.getAccessMode(),
       entityCounts: {
         projects: 0,
         threads: this.#count("threads"),
@@ -190,6 +224,7 @@ export class HostStateStore {
       id: randomUUID(),
       title,
       scope: "unscoped",
+      stateVersion: 1,
       createdAt: new Date().toISOString()
     };
     this.#database
@@ -216,6 +251,59 @@ export class HostStateStore {
     const thread = this.getUnscopedThread(threadId);
     if (thread === undefined) throw new Error("Thread not found");
     return thread;
+  }
+
+  getAccessMode(): AccessMode {
+    const row = this.#database.prepare("SELECT value FROM application_settings WHERE key = 'access_mode'").get() as { value: string };
+    if (row.value !== "standard" && row.value !== "full") throw new Error("Invalid persisted Access Mode");
+    return row.value;
+  }
+
+  setAccessMode(mode: AccessMode): void {
+    this.#database.prepare("UPDATE application_settings SET value = ?, updated_at = ? WHERE key = 'access_mode'").run(mode, new Date().toISOString());
+  }
+
+  setThreadOutputLocation(threadId: string, outputLocation: string): UnscopedThread {
+    const result = this.#database.prepare(`
+      UPDATE threads SET output_location = ?, state_version = state_version + 1 WHERE id = ?
+    `).run(outputLocation, threadId);
+    if (result.changes !== 1) throw new Error("Thread not found");
+    return this.getUnscopedThread(threadId)!;
+  }
+
+  recordArtifact(artifact: ArtifactRecord): void {
+    this.#database.prepare(`
+      INSERT INTO artifacts(
+        id, media_type, producer_type, producer_id, destination, source_thread_id,
+        source_turn_id, capability_request_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      artifact.id,
+      artifact.mediaType,
+      artifact.producer.type,
+      artifact.producer.id,
+      artifact.destination,
+      artifact.source.threadId,
+      artifact.source.turnId,
+      artifact.source.capabilityRequestId,
+      artifact.createdAt
+    );
+  }
+
+  listArtifacts(threadId: string): ArtifactRecord[] {
+    const rows = this.#database.prepare("SELECT * FROM artifacts WHERE source_thread_id = ? ORDER BY created_at").all(threadId) as unknown as Array<{
+      id: string; media_type: string; producer_type: ArtifactRecord["producer"]["type"]; producer_id: string;
+      destination: string; source_thread_id: string; source_turn_id: string; capability_request_id: string; created_at: string;
+    }>;
+    return rows.map((row) => ({
+      schemaVersion: 1,
+      id: row.id,
+      mediaType: row.media_type,
+      producer: { type: row.producer_type, id: row.producer_id },
+      destination: row.destination,
+      source: { threadId: row.source_thread_id, turnId: row.source_turn_id, capabilityRequestId: row.capability_request_id },
+      createdAt: row.created_at
+    }));
   }
 
   getPhysicalContext(threadId: string): PhysicalContextState | undefined {
@@ -272,6 +360,8 @@ function mapThread(row: ThreadRow): UnscopedThread {
     title: row.title,
     scope: "unscoped",
     ...(row.active_profile_id === null ? {} : { activeProfileId: row.active_profile_id }),
+    ...(row.output_location === null ? {} : { outputLocation: row.output_location }),
+    stateVersion: row.state_version,
     createdAt: row.created_at
   };
 }
