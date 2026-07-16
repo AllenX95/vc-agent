@@ -1,0 +1,6 @@
+{
+  "name": "@vc-agent/host-services",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Host-owned services are introduced by the first slice that exercises them."
+}

@@ -1,0 +1,6 @@
+{
+  "name": "@vc-agent/utility-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Utility Worker execution begins with the first bounded local job."
+}

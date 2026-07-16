@@ -68,14 +68,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] The application launches and displays the empty shell and Settings.
-- [ ] Renderer code cannot import filesystem, Electron Main, persistence, Provider, or Pi modules.
-- [ ] Only `pi-adapter` can import the Pi SDK; `core` contains no Electron, Pi, SQLite, or Python types.
-- [ ] Architecture contract tests enforce the workspace dependency direction and prevent later feature packages or runtime adapters from being imported into `core` or the Renderer.
-- [ ] Versioned command and event envelopes support actor/provenance identity without encoding the primary Agent as an unchangeable singleton.
-- [ ] Launch, Settings navigation, and application exit create no Agent Worker and make no network request.
-- [ ] Unsupported IPC schema versions are rejected with a visible local diagnostic.
-- [ ] A Playwright smoke test launches and closes the packaged development application.
+- [x] The application launches and displays the empty shell and Settings.
+- [x] Renderer code cannot import filesystem, Electron Main, persistence, Provider, or Pi modules.
+- [x] Only `pi-adapter` can import the Pi SDK; `core` contains no Electron, Pi, SQLite, or Python types.
+- [x] Architecture contract tests enforce the workspace dependency direction and prevent later feature packages or runtime adapters from being imported into `core` or the Renderer.
+- [x] Versioned command and event envelopes support actor/provenance identity without encoding the primary Agent as an unchangeable singleton.
+- [x] Launch, Settings navigation, and application exit create no Agent Worker and make no network request.
+- [x] Unsupported IPC schema versions are rejected with a visible local diagnostic.
+- [x] A Playwright smoke test launches and closes the packaged development application.
 
 ### F2. Complete One Unscoped Pi Turn
 

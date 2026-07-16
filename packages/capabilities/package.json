@@ -1,0 +1,6 @@
+{
+  "name": "@vc-agent/capabilities",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capability adapters are introduced in Foundation slice F4."
+}

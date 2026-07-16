@@ -1,0 +1,6 @@
+{
+  "name": "@vc-agent/agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Worker execution begins lazily in Foundation slice F2."
+}

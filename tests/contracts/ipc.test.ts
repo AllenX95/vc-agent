@@ -1,0 +1,36 @@
+import { describe, expect, it } from "vitest";
+import {
+  IPC_SCHEMA_VERSION,
+  createBootstrapCommand,
+  hostCommandSchema,
+  hostEventSchema
+} from "@vc-agent/contracts";
+
+describe("versioned IPC contracts", () => {
+  it("creates a versioned command with explicit actor identity", () => {
+    const command = createBootstrapCommand();
+    expect(command.schemaVersion).toBe(IPC_SCHEMA_VERSION);
+    expect(command.actor).toEqual({ actorType: "user", actorId: "local-user" });
+    expect(hostCommandSchema.parse(command)).toEqual(command);
+  });
+
+  it("rejects unsupported schema versions", () => {
+    const command = { ...createBootstrapCommand(), schemaVersion: 2 };
+    expect(hostCommandSchema.safeParse(command).success).toBe(false);
+  });
+
+  it("supports non-singleton agent provenance", () => {
+    const event = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 4,
+      actor: { actorType: "sub_agent", actorId: "agent-2", parentActorId: "agent-1" },
+      provenance: { producerType: "sub_agent", producerId: "agent-2" },
+      occurredAt: new Date().toISOString(),
+      event: "diagnostic.raised",
+      payload: { code: "HOST_FAILURE", message: "Fixture failure", recoverable: true }
+    };
+    expect(hostEventSchema.parse(event).actor.actorId).toBe("agent-2");
+  });
+});

@@ -1,0 +1,6 @@
+{
+  "name": "@vc-agent/pi-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The real Pi SDK adapter begins with the F2 tracer; no substitute runtime is provided."
+}
