@@ -11,6 +11,7 @@ import {
   type CapabilityExecutionContext
 } from "@vc-agent/capabilities";
 export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
+export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

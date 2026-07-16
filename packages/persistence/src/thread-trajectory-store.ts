@@ -159,6 +159,7 @@ export class ThreadTrajectoryStore {
           assistantText: "",
           status: "submitted",
           ...(event.payload.profile === undefined ? {} : { profile: event.payload.profile }),
+          ...(event.payload.prompt === undefined ? {} : { prompt: event.payload.prompt }),
           submittedSequence: event.sequence,
           lastSequence: event.sequence
         });
@@ -227,6 +228,17 @@ export class ThreadTrajectoryStore {
           label: "Physical context rebuilt",
           status: "completed",
           content: `Rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`
+        });
+      } else if (event.event === "system_prompt.updated") {
+        activities.set(`prompt:${event.eventId}`, {
+          id: `prompt:${event.eventId}`,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "context",
+          label: "System prompt updated",
+          status: "completed",
+          content: `${event.payload.previousRevisionId} -> ${event.payload.nextRevisionId}`
         });
       }
     }

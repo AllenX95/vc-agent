@@ -321,6 +321,70 @@ test("opens a stable Project, isolates Project Threads, and resolves moved or co
   }
 });
 
+test("freezes a System Prompt revision until the next Prompt Load Boundary", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d1-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory);
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByLabel("Minimal VC System Prompt")).toHaveValue(/1\. VC identity:/);
+    await expect(window.getByLabel("Minimal VC System Prompt")).toHaveValue(/6\. Action boundary:/);
+    await createProfile(window, { name: "Prompt Boundary Provider", provider: "anthropic", model: "claude-sonnet-4-5", apiKey: "sk-invalid-d1-secret" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Prompt Boundary Provider" });
+    await window.getByLabel("Message").fill("Establish the first physical context.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Minimal VC System Prompt").fill("CUSTOM ACTIVE PROMPT REVISION");
+    await window.getByLabel("System Prompt change note").fill("Boundary test");
+    await window.getByRole("button", { name: "Save revision" }).click();
+    await expect(window.locator(".prompt-history details")).toHaveCount(2);
+    const newest = window.locator(".prompt-history details").first();
+    await newest.locator("summary").click();
+    await newest.getByRole("button", { name: "Activate" }).click();
+    await expect(newest.locator("summary")).toContainText("Active");
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".provider-failure").last().getByRole("button", { name: "Retry" }).click();
+    await expect(window.getByText("Establish the first physical context.", { exact: true })).toHaveCount(2);
+
+    const threadId = readdirSync(join(userDataDirectory, "threads"))[0]!;
+    const trajectoryPath = join(userDataDirectory, "threads", threadId, "trajectory.jsonl");
+    let submitted = readFileSync(trajectoryPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.event === "turn.submitted");
+    expect(submitted).toHaveLength(2);
+    expect(submitted[0].payload.prompt.revisionId).toBe(submitted[1].payload.prompt.revisionId);
+    expect(submitted[0].payload.prompt.contributions).toMatchObject({ toolSchemaEstimatedTokens: 0, contextEstimatedTokens: 0, materialEstimatedTokens: 0 });
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await window.locator(".provider-failure").last().getByRole("button", { name: "Retry" }).click();
+    await expect(window.getByText("Establish the first physical context.", { exact: true })).toHaveCount(3);
+    await expect(window.getByText(/System prompt updated:/)).toBeVisible();
+
+    submitted = readFileSync(trajectoryPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.event === "turn.submitted");
+    expect(submitted).toHaveLength(3);
+    expect(submitted[2].payload.prompt.revisionId).not.toBe(submitted[1].payload.prompt.revisionId);
+    const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const revisions = database.prepare("SELECT hash, diff, change_note FROM system_prompt_revisions ORDER BY created_at").all() as Array<{ hash: string; diff: string; change_note: string | null }>;
+    database.close();
+    expect(revisions).toHaveLength(2);
+    expect(revisions[1]).toMatchObject({ change_note: "Boundary test" });
+    expect(revisions[1]!.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(revisions[1]!.diff).toContain("CUSTOM ACTIVE PROMPT REVISION");
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],

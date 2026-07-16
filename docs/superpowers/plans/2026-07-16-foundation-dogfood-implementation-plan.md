@@ -163,12 +163,12 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Every ordinary Turn includes the active Minimal VC System Prompt revision and no Project-specific content by default.
-- [ ] The default prompt contains only the six accepted responsibility classes.
-- [ ] Saving creates a revision with hash, timestamp, optional note, and reviewable diff.
-- [ ] Active physical contexts do not hot-reload an edited prompt mid-context.
-- [ ] Application restart, new Thread, and compaction/rebuild apply the latest active revision at the defined boundary.
-- [ ] Turn provenance records prompt revision and estimated or observed prompt/tool/context contributions.
+- [x] Every ordinary Turn includes the active Minimal VC System Prompt revision and no Project-specific content by default.
+- [x] The default prompt contains only the six accepted responsibility classes.
+- [x] Saving creates a revision with hash, timestamp, optional note, and reviewable diff.
+- [x] Active physical contexts do not hot-reload an edited prompt mid-context.
+- [x] Application restart, new Thread, and compaction/rebuild apply the latest active revision at the defined boundary.
+- [x] Turn provenance records prompt revision and estimated or observed prompt/tool/context contributions.
 
 ### D2. Inventory Materials And Detect External Changes
 

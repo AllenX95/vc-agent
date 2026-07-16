@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, Project, ProjectThread, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
+import type { AccessMode, ArtifactRecord, BootstrapState, ModelProfile, Project, ProjectThread, SystemPromptRevision, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 
-const STATE_SCHEMA_VERSION = 5;
+const STATE_SCHEMA_VERSION = 6;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -42,6 +42,17 @@ interface ProjectRow {
   updated_at: string;
 }
 
+interface PromptRevisionRow {
+  id: string;
+  content: string;
+  hash: string;
+  source_revision_id: string | null;
+  change_note: string | null;
+  diff: string;
+  source: SystemPromptRevision["source"];
+  created_at: string;
+}
+
 export interface CreateModelProfileInput {
   readonly name: string;
   readonly provider: string;
@@ -62,6 +73,7 @@ export interface PhysicalContextState {
   readonly sessionFile: string;
   readonly highWaterEventId?: string;
   readonly highWaterSequence?: number;
+  readonly promptRevisionId?: string;
 }
 
 export class HostStateStore {
@@ -142,6 +154,17 @@ export class HostStateStore {
         capability_request_id TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL
       ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS system_prompt_revisions (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        source_revision_id TEXT REFERENCES system_prompt_revisions(id),
+        change_note TEXT,
+        diff TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('shipped_default', 'user_edit', 'restore_default')),
+        created_at TEXT NOT NULL
+      ) STRICT;
     `);
     if (!this.#columnExists("threads", "output_location")) this.#database.exec("ALTER TABLE threads ADD COLUMN output_location TEXT");
     if (!this.#columnExists("threads", "state_version")) this.#database.exec("ALTER TABLE threads ADD COLUMN state_version INTEGER NOT NULL DEFAULT 1");
@@ -156,8 +179,12 @@ export class HostStateStore {
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?)")
       .run(new Date().toISOString());
     if (!this.#columnExists("threads", "project_id")) this.#migrateProjects();
+    if (!this.#columnExists("physical_contexts", "prompt_revision_id")) this.#database.exec("ALTER TABLE physical_contexts ADD COLUMN prompt_revision_id TEXT");
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)")
+      .run(new Date().toISOString());
+    this.#database
+      .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, ?)")
       .run(new Date().toISOString());
   }
 
@@ -432,25 +459,95 @@ export class HostStateStore {
     }));
   }
 
+  ensureDefaultSystemPrompt(content: string): SystemPromptRevision {
+    const active = this.getActiveSystemPromptRevision();
+    if (active !== undefined) return active;
+    const revision = this.#createSystemPromptRevision({ content, source: "shipped_default" });
+    this.#database.prepare("INSERT OR REPLACE INTO application_settings(key, value, updated_at) VALUES ('active_prompt_revision_id', ?, ?)")
+      .run(revision.id, new Date().toISOString());
+    return revision;
+  }
+
+  createSystemPromptRevision(content: string, changeNote?: string): SystemPromptRevision {
+    const active = this.getActiveSystemPromptRevision();
+    if (active === undefined) throw new Error("System Prompt is not initialized");
+    return this.#createSystemPromptRevision({ content, source: "user_edit", sourceRevision: active, ...(changeNote === undefined ? {} : { changeNote }) });
+  }
+
+  restoreDefaultSystemPrompt(content: string, changeNote?: string): SystemPromptRevision {
+    const active = this.getActiveSystemPromptRevision();
+    if (active === undefined) throw new Error("System Prompt is not initialized");
+    const revision = this.#createSystemPromptRevision({ content, source: "restore_default", sourceRevision: active, ...(changeNote === undefined ? {} : { changeNote }) });
+    this.activateSystemPromptRevision(revision.id);
+    return revision;
+  }
+
+  listSystemPromptRevisions(): SystemPromptRevision[] {
+    const rows = this.#database.prepare("SELECT * FROM system_prompt_revisions ORDER BY created_at DESC, rowid DESC").all() as unknown as PromptRevisionRow[];
+    return rows.map(mapPromptRevision);
+  }
+
+  getSystemPromptRevision(id: string): SystemPromptRevision | undefined {
+    const row = this.#database.prepare("SELECT * FROM system_prompt_revisions WHERE id = ?").get(id) as PromptRevisionRow | undefined;
+    return row === undefined ? undefined : mapPromptRevision(row);
+  }
+
+  getActiveSystemPromptRevision(): SystemPromptRevision | undefined {
+    const setting = this.#database.prepare("SELECT value FROM application_settings WHERE key = 'active_prompt_revision_id'").get() as { value: string } | undefined;
+    return setting === undefined ? undefined : this.getSystemPromptRevision(setting.value);
+  }
+
+  activateSystemPromptRevision(id: string): SystemPromptRevision {
+    const revision = this.getSystemPromptRevision(id);
+    if (revision === undefined) throw new Error("System Prompt Revision not found");
+    this.#database.prepare("INSERT OR REPLACE INTO application_settings(key, value, updated_at) VALUES ('active_prompt_revision_id', ?, ?)")
+      .run(id, new Date().toISOString());
+    return revision;
+  }
+
+  #createSystemPromptRevision(input: {
+    content: string;
+    source: SystemPromptRevision["source"];
+    sourceRevision?: SystemPromptRevision;
+    changeNote?: string;
+  }): SystemPromptRevision {
+    const revision: SystemPromptRevision = {
+      id: randomUUID(),
+      content: input.content,
+      hash: createHash("sha256").update(input.content, "utf8").digest("hex"),
+      ...(input.sourceRevision === undefined ? {} : { sourceRevisionId: input.sourceRevision.id }),
+      ...(input.changeNote?.trim() ? { changeNote: input.changeNote.trim() } : {}),
+      diff: lineDiff(input.sourceRevision?.content ?? "", input.content),
+      source: input.source,
+      createdAt: new Date().toISOString()
+    };
+    this.#database.prepare(`
+      INSERT INTO system_prompt_revisions(id, content, hash, source_revision_id, change_note, diff, source, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(revision.id, revision.content, revision.hash, revision.sourceRevisionId ?? null, revision.changeNote ?? null, revision.diff, revision.source, revision.createdAt);
+    return revision;
+  }
+
   getPhysicalContext(threadId: string): PhysicalContextState | undefined {
     const row = this.#database.prepare("SELECT * FROM physical_contexts WHERE thread_id = ?").get(threadId) as
-      | { thread_id: string; session_file: string; high_water_event_id: string | null; high_water_sequence: number | null }
+      | { thread_id: string; session_file: string; high_water_event_id: string | null; high_water_sequence: number | null; prompt_revision_id: string | null }
       | undefined;
     if (row === undefined) return undefined;
     return {
       threadId: row.thread_id,
       sessionFile: row.session_file,
       ...(row.high_water_event_id === null ? {} : { highWaterEventId: row.high_water_event_id }),
-      ...(row.high_water_sequence === null ? {} : { highWaterSequence: row.high_water_sequence })
+      ...(row.high_water_sequence === null ? {} : { highWaterSequence: row.high_water_sequence }),
+      ...(row.prompt_revision_id === null ? {} : { promptRevisionId: row.prompt_revision_id })
     };
   }
 
-  setPhysicalContextSession(threadId: string, sessionFile: string): void {
+  setPhysicalContextSession(threadId: string, sessionFile: string, promptRevisionId?: string): void {
     this.#database.prepare(`
-      INSERT INTO physical_contexts(thread_id, session_file, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(thread_id) DO UPDATE SET session_file = excluded.session_file, updated_at = excluded.updated_at
-    `).run(threadId, sessionFile, new Date().toISOString());
+      INSERT INTO physical_contexts(thread_id, session_file, prompt_revision_id, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET session_file = excluded.session_file, prompt_revision_id = excluded.prompt_revision_id, updated_at = excluded.updated_at
+    `).run(threadId, sessionFile, promptRevisionId ?? null, new Date().toISOString());
   }
 
   acknowledgePhysicalContext(threadId: string, eventId: string, sequence: number): void {
@@ -504,4 +601,34 @@ function mapProject(row: ProjectRow): Project {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function mapPromptRevision(row: PromptRevisionRow): SystemPromptRevision {
+  return {
+    id: row.id,
+    content: row.content,
+    hash: row.hash,
+    ...(row.source_revision_id === null ? {} : { sourceRevisionId: row.source_revision_id }),
+    ...(row.change_note === null ? {} : { changeNote: row.change_note }),
+    diff: row.diff,
+    source: row.source,
+    createdAt: row.created_at
+  };
+}
+
+function lineDiff(previous: string, next: string): string {
+  if (previous === next) return "No content changes.";
+  const before = previous.split("\n");
+  const after = next.split("\n");
+  const lines = ["--- source", "+++ revision"];
+  const length = Math.max(before.length, after.length);
+  for (let index = 0; index < length; index += 1) {
+    if (before[index] === after[index]) {
+      if (before[index] !== undefined) lines.push(` ${before[index]}`);
+      continue;
+    }
+    if (before[index] !== undefined) lines.push(`-${before[index]}`);
+    if (after[index] !== undefined) lines.push(`+${after[index]}`);
+  }
+  return lines.join("\n");
 }

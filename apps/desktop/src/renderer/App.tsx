@@ -8,7 +8,9 @@ import {
   type HostEvent,
   type ModelProfile,
   type Project,
+  type PromptContribution,
   type ProviderFailure,
+  type SystemPromptRevision,
   type TrajectoryProfile,
   type TokenUsage,
   type Thread
@@ -49,6 +51,7 @@ type ConversationItem =
       status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
       profile?: TrajectoryProfile;
       usage?: TokenUsage;
+      prompt?: { revisionId: string; contributions: PromptContribution };
       failure?: ProviderFailure;
       retryText?: string;
     };
@@ -68,6 +71,8 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [diagnostic, setDiagnostic] = useState<HostEvent | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [promptRevisions, setPromptRevisions] = useState<SystemPromptRevision[]>([]);
+  const [activePromptRevisionId, setActivePromptRevisionId] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -91,6 +96,9 @@ export function App() {
       case "app.bootstrap.completed": setBootstrap(event.payload); break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
+      case "prompt.revisions.listed": setPromptRevisions(event.payload.revisions); setActivePromptRevisionId(event.payload.activeRevisionId); break;
+      case "prompt.revision.created": setPromptRevisions((current) => [event.payload.revision, ...current]); setActivePromptRevisionId(event.payload.activeRevisionId); break;
+      case "prompt.revision.activated": setPromptRevisions((current) => [event.payload.revision, ...current.filter((item) => item.id !== event.payload.revision.id)]); setActivePromptRevisionId(event.payload.revision.id); break;
       case "projects.listed": setProjects(event.payload.projects); break;
       case "project.opened":
         setProjects((current) => [...current.filter((project) => project.id !== event.payload.project.id), event.payload.project]);
@@ -127,7 +135,7 @@ export function App() {
         setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
         break;
       case "turn.accepted":
-        setConversations((current) => appendTurn(current, event.payload.threadId, event.payload.turnId, event.payload.text, event.payload.profile));
+        setConversations((current) => appendTurn(current, event.payload.threadId, event.payload.turnId, event.payload.text, event.payload.profile, event.payload.prompt));
         setPrompt("");
         break;
       case "turn.started":
@@ -153,6 +161,9 @@ export function App() {
         break;
       case "physical_context.rebuilt":
         setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Physical context rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`));
+        break;
+      case "system_prompt.updated":
+        setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `System prompt updated: ${event.payload.previousRevisionId.slice(0, 8)} -> ${event.payload.nextRevisionId.slice(0, 8)}`));
         break;
       case "capability.confirmation.required":
         setConfirmations((current) => ({ ...current, [event.payload.requestId]: event }));
@@ -189,6 +200,7 @@ export function App() {
     });
     void invoke(createBootstrapCommand());
     void invoke(createCommand({ command: "profile.list" }));
+    void invoke(createCommand({ command: "prompt.revision.list" }));
     void invoke(createCommand({ command: "project.list" }));
     void invoke(createCommand({ command: "thread.list" }));
     return unsubscribe;
@@ -286,7 +298,7 @@ export function App() {
       <main className="center-pane">
         <DiagnosticBanner event={diagnostic} />
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -337,9 +349,11 @@ export function App() {
   );
 }
 
-function SettingsView({ bootstrap, profiles, formOpen, setFormOpen, invoke }: {
+function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
+  promptRevisions: SystemPromptRevision[];
+  activePromptRevisionId: string | null;
   formOpen: boolean;
   setFormOpen(value: boolean): void;
   invoke(command: HostCommand): Promise<void>;
@@ -372,11 +386,38 @@ function SettingsView({ bootstrap, profiles, formOpen, setFormOpen, invoke }: {
         </form>}
         <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span></div><span>{profile.thinkingLevel}</span></div>)}</div>
       </div>
+      <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div></dl></div>
     </section>
   );
+}
+
+function PromptSettings({ revisions, activeRevisionId, invoke }: {
+  revisions: SystemPromptRevision[];
+  activeRevisionId: string | null;
+  invoke(command: HostCommand): Promise<void>;
+}) {
+  const active = revisions.find((revision) => revision.id === activeRevisionId);
+  const [content, setContent] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => setContent(active?.content ?? ""), [active?.id]);
+  const save = () => {
+    void invoke(createCommand({ command: "prompt.revision.create", payload: { content, ...(note.trim() ? { changeNote: note.trim() } : {}) } }));
+    setNote("");
+  };
+  return <div className="settings-section prompt-settings">
+    <div className="settings-section-header"><div><h2>Minimal VC System Prompt</h2><p>Edits apply at the next Prompt Load Boundary.</p></div><span className="revision-id">{active?.id.slice(0, 8) ?? "Loading"}</span></div>
+    <label>Prompt<textarea aria-label="Minimal VC System Prompt" value={content} onChange={(event) => setContent(event.target.value)} /></label>
+    <label>Change note<input aria-label="System Prompt change note" value={note} onChange={(event) => setNote(event.target.value)} /></label>
+    <div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "prompt.restore_default", payload: { changeNote: "Restore shipped default" } }))}>Restore default</button><button className="primary-button" type="button" onClick={save}>Save revision</button></div>
+    <div className="prompt-history">{revisions.map((revision) => <details key={revision.id}>
+      <summary><span>{revision.id.slice(0, 8)} · {revision.source}</span><span>{revision.id === activeRevisionId ? "Active" : new Date(revision.createdAt).toLocaleString()}</span></summary>
+      {revision.changeNote && <p>{revision.changeNote}</p>}<pre>{revision.diff}</pre>
+      {revision.id !== activeRevisionId && <button type="button" onClick={() => void invoke(createCommand({ command: "prompt.revision.activate", payload: { revisionId: revision.id } }))}>Activate</button>}
+    </details>)}</div>
+  </div>;
 }
 
 function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted }: { item: ConversationItem; configure(): void; chooseOutput(): void; retry(text: string, turnId: string): void; continueInterrupted(): void }) {
@@ -389,7 +430,7 @@ function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted
     {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">Working</div>}
     {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div>{item.failure.code === "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={chooseOutput}>Choose output location</button>}<button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button>{item.failure.code !== "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={configure}>Adjust profile</button>}</div></div>}
     {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
-    {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens</div>}
+    {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} est.)` : ""}</div>}
   </article>;
 }
 
@@ -406,6 +447,7 @@ function projectTrajectory(
       status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
       ...(turn.profile === undefined ? {} : { profile: turn.profile }),
       ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions } }),
       ...(turn.failure === undefined ? {} : { failure: turn.failure, retryText: turn.text })
     };
     return [
@@ -452,8 +494,8 @@ function updateToolActivity(current: Record<string, ConversationItem[]>, payload
   return { ...current, [payload.threadId]: exists ? items.map((item) => item.id === tool.id ? tool : item) : [...items, tool] };
 }
 
-function appendTurn(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string, profile: ModelProfile) {
-  return { ...current, [threadId]: [...(current[threadId] ?? []), { id: `${turnId}:user`, turnId, role: "user", text }, { id: `${turnId}:assistant`, turnId, role: "assistant", text: "", status: "queued", profile, retryText: text }] } satisfies Record<string, ConversationItem[]>;
+function appendTurn(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string, profile: ModelProfile, prompt: { revisionId: string; contributions: PromptContribution }) {
+  return { ...current, [threadId]: [...(current[threadId] ?? []), { id: `${turnId}:user`, turnId, role: "user", text }, { id: `${turnId}:assistant`, turnId, role: "assistant", text: "", status: "queued", profile, retryText: text, prompt }] } satisfies Record<string, ConversationItem[]>;
 }
 
 function updateAssistant(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, update: (item: Extract<ConversationItem, { role: "assistant" }>) => Extract<ConversationItem, { role: "assistant" }>) {

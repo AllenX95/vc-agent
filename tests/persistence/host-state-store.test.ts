@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 5,
+      stateSchemaVersion: 6,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -33,7 +33,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["application_settings", "artifacts", "model_profiles", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "threads"]);
+    expect(tables).toEqual(["application_settings", "artifacts", "model_profiles", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "system_prompt_revisions", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -123,6 +123,23 @@ describe("HostStateStore", () => {
     const store = new HostStateStore(databasePath);
     expect(store.getThread("legacy-thread")).toMatchObject({ id: "legacy-thread", title: "Legacy", scope: "unscoped" });
     expect(store.createProjectThread(store.registerProject({ id: crypto.randomUUID(), displayName: "New", path: "C:\\new", createdAt: new Date().toISOString() }).id, "Project thread")).toMatchObject({ scope: "project" });
+    store.close();
+  });
+
+  it("stores reviewable System Prompt revisions and activates or restores them explicitly", () => {
+    const { store } = createStore();
+    const initial = store.ensureDefaultSystemPrompt("1. Default responsibility");
+    const edited = store.createSystemPromptRevision("1. Revised responsibility", "Test a stricter posture");
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(initial.id);
+    expect(edited).toMatchObject({ sourceRevisionId: initial.id, changeNote: "Test a stricter posture", source: "user_edit" });
+    expect(edited.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(edited.diff).toContain("-1. Default responsibility");
+    expect(edited.diff).toContain("+1. Revised responsibility");
+    store.activateSystemPromptRevision(edited.id);
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(edited.id);
+    const restored = store.restoreDefaultSystemPrompt("1. Default responsibility", "Restore");
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(restored.id);
+    expect(store.listSystemPromptRevisions()).toHaveLength(3);
     store.close();
   });
 });

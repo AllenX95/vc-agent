@@ -139,6 +139,17 @@ button { font: inherit; letter-spacing: 0; }
 .profile-row strong { font-size: 12px; }
 .profile-row span, .empty-setting { color: #747c75; font-size: 10px; }
 .empty-setting { margin: 14px 0 0; }
+.prompt-settings { display: grid; gap: 10px; }
+.prompt-settings > label { display: grid; gap: 5px; color: #59615a; font-size: 11px; }
+.prompt-settings textarea { box-sizing: border-box; width: 100%; min-height: 210px; resize: vertical; padding: 10px; border: 1px solid #ccd2cb; border-radius: 6px; background: #fff; color: #202720; font: 11px/1.55 Consolas, monospace; }
+.prompt-settings input { min-height: 32px; padding: 0 8px; border: 1px solid #ccd2cb; border-radius: 5px; }
+.revision-id { color: #687069; font: 11px Consolas, monospace; }
+.prompt-history { display: grid; border-top: 1px solid #e0e3df; }
+.prompt-history details { padding: 8px 0; border-bottom: 1px solid #e0e3df; }
+.prompt-history summary { display: flex; cursor: pointer; justify-content: space-between; color: #3d463f; font-size: 11px; }
+.prompt-history p { color: #69716a; font-size: 11px; }
+.prompt-history pre { max-height: 210px; overflow: auto; padding: 8px; background: #eef1ed; color: #303832; font-size: 10px; white-space: pre-wrap; }
+.prompt-history button { min-height: 28px; padding: 0 9px; border: 1px solid #c5cbc4; border-radius: 5px; background: #fff; color: #36423a; font-size: 10px; }
 .settings-section dl { margin: 0; }
 .settings-section dl div { display: flex; justify-content: space-between; min-height: 34px; align-items: center; font-size: 13px; }
 .settings-section dt { color: #666e67; }

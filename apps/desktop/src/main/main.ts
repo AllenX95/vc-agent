@@ -12,6 +12,7 @@ import {
   type ModelProfile,
   type ProvenanceRef,
   type ProviderFailure,
+  type SystemPromptRevision,
   type Thread,
   type TrajectoryEvent,
   type TrajectoryProfile,
@@ -19,7 +20,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, ProjectIdentityStore, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityGateway, detectOutputIntent, estimateTokens, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -43,6 +44,7 @@ interface TurnContext {
   readonly outputIntent: boolean;
   readonly activeCapabilities: readonly string[];
   readonly expectedStateVersion: number;
+  readonly promptRevision: SystemPromptRevision;
   readonly retryOfTurnId?: string;
 }
 
@@ -52,6 +54,7 @@ let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
+let capabilityRegistry: CapabilityRegistry | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -59,6 +62,7 @@ const turnContexts = new Map<string, TurnContext>();
 const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
+const loadedPromptByThread = new Map<string, SystemPromptRevision>();
 const credentials = new ProtectedCredentialService();
 const projectIdentities = new ProjectIdentityStore();
 
@@ -163,6 +167,24 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           encryptedCredential: credentials.encrypt(command.payload.apiKey)
         });
         return { ...eventMetadata(command.correlationId), event: "profile.created", payload: { profile } };
+      }
+      case "prompt.revision.list": {
+        const active = stateStore.getActiveSystemPromptRevision();
+        if (active === undefined) throw new Error("System Prompt is not initialized");
+        return { ...eventMetadata(command.correlationId), event: "prompt.revisions.listed", payload: { activeRevisionId: active.id, revisions: stateStore.listSystemPromptRevisions() } };
+      }
+      case "prompt.revision.create": {
+        const revision = stateStore.createSystemPromptRevision(command.payload.content, command.payload.changeNote);
+        const active = stateStore.getActiveSystemPromptRevision()!;
+        return { ...eventMetadata(command.correlationId), event: "prompt.revision.created", payload: { revision, activeRevisionId: active.id } };
+      }
+      case "prompt.revision.activate": {
+        const revision = stateStore.activateSystemPromptRevision(command.payload.revisionId);
+        return { ...eventMetadata(command.correlationId), event: "prompt.revision.activated", payload: { revision } };
+      }
+      case "prompt.restore_default": {
+        const revision = stateStore.restoreDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, command.payload.changeNote);
+        return { ...eventMetadata(command.correlationId), event: "prompt.revision.activated", payload: { revision } };
       }
       case "project.list":
         return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
@@ -316,6 +338,7 @@ function selectThreadProfile(correlationId: string, threadId: string, profileId:
   }
   const selected = stateStore!.selectThreadProfile(threadId, profileId);
   authorizeProjectProfile(selected, requested);
+  if (previous !== undefined && (previous.provider !== requested.provider || previous.model !== requested.model)) loadedPromptByThread.delete(threadId);
   return { ...eventMetadata(correlationId, threadId), event: "thread.profile.selected", payload: { thread: selected } };
 }
 
@@ -341,6 +364,7 @@ function resolveThreadProfileChange(
     destination = stateStore!.selectThreadProfile(source.id, requested.id);
   }
   authorizeProjectProfile(destination, requested);
+  loadedPromptByThread.delete(destination.id);
 
   const record: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, source.id, randomUUID(), USER_ACTOR, USER_PROVENANCE),
@@ -379,6 +403,26 @@ function submitTurn(
   }
   const outputIntent = detectOutputIntent(input.text);
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
+  const activeCapabilities = outputIntent && thread.scope === "unscoped" ? ["output.write_text"] : [];
+  const physical = stateStore!.getPhysicalContext(input.threadId);
+  if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
+  const promptRevision = loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision();
+  if (promptRevision === undefined) throw new Error("System Prompt is not initialized");
+  const crossesPromptBoundary = !loadedPromptByThread.has(input.threadId);
+  const contextHistory = trajectoryStore!.contextHistory(input.threadId);
+  const promptTelemetry = {
+    revisionId: promptRevision.id,
+    hash: promptRevision.hash,
+    contributions: {
+      promptEstimatedTokens: estimateTokens(promptRevision.content),
+      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityRegistry!.inventory().filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
+      taskEstimatedTokens: estimateTokens(input.text),
+      contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
+      recalledStateEstimatedTokens: 0,
+      skillEstimatedTokens: 0,
+      materialEstimatedTokens: 0
+    }
+  };
   const submitted: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, input.threadId, turnId, USER_ACTOR, USER_PROVENANCE),
     event: "turn.submitted",
@@ -386,7 +430,8 @@ function submitTurn(
       text: input.text,
       idempotencyKey: randomUUID(),
       ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
-      ...(profile === undefined ? {} : { profile: toTrajectoryProfile(profile) })
+      ...(profile === undefined ? {} : { profile: toTrajectoryProfile(profile) }),
+      prompt: promptTelemetry
     }
   };
   trajectoryStore!.append(submitted);
@@ -432,6 +477,19 @@ function submitTurn(
     return { ...ipcMetadata(failed), event: "turn.failed", payload: { threadId: input.threadId, turnId, text: input.text, profile, failure } };
   }
 
+  if (crossesPromptBoundary) {
+    loadedPromptByThread.set(input.threadId, promptRevision);
+    if (physical?.promptRevisionId !== undefined && physical.promptRevisionId !== promptRevision.id) {
+      const updated: TrajectoryEvent = {
+        ...trajectoryMetadata(correlationId, input.threadId, turnId, HOST_ACTOR, HOST_PROVENANCE),
+        event: "system_prompt.updated",
+        payload: { previousRevisionId: physical.promptRevisionId, nextRevisionId: promptRevision.id }
+      };
+      trajectoryStore!.append(updated);
+      emit({ ...ipcMetadata(updated), event: "system_prompt.updated", payload: { threadId: input.threadId, turnId, ...updated.payload } });
+    }
+  }
+
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
   const context: TurnContext = {
@@ -441,8 +499,9 @@ function submitTurn(
     text: input.text,
     profile,
     outputIntent,
-    activeCapabilities: outputIntent && thread.scope === "unscoped" ? ["output.write_text"] : [],
+    activeCapabilities,
     expectedStateVersion: thread.stateVersion,
+    promptRevision,
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   turnContexts.set(turnId, context);
@@ -462,7 +521,6 @@ function submitTurn(
     updatedAt: new Date().toISOString()
   });
 
-  const physical = stateStore!.getPhysicalContext(input.threadId);
   const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
     schemaVersion: 1,
     command: "turn.execute",
@@ -474,7 +532,7 @@ function submitTurn(
     threadDirectory: trajectoryStore!.threadDirectory(input.threadId),
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
-    contextHistory: trajectoryStore!.contextHistory(input.threadId),
+    contextHistory,
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
     executionScope: thread.scope === "project"
@@ -489,8 +547,8 @@ function submitTurn(
     },
     resources: {
       schemaVersion: 1,
-      revisionId: "foundation-f3-v1",
-      systemPrompt: "You are vc-agent. Answer the user's request directly and clearly.",
+      revisionId: promptRevision.id,
+      systemPrompt: promptRevision.content,
       appendSystemPrompt: []
     },
     extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
@@ -499,7 +557,7 @@ function submitTurn(
   return {
     ...ipcMetadata(submitted),
     event: "turn.accepted",
-    payload: { threadId: input.threadId, turnId, text: input.text, ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }), profile }
+    payload: { threadId: input.threadId, turnId, text: input.text, ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }), profile, prompt: promptTelemetry }
   };
 }
 
@@ -517,7 +575,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   }
 
   if (workerEvent.event === "physical_context.ready") {
-    stateStore!.setPhysicalContextSession(workerEvent.threadId, workerEvent.sessionFile);
+    stateStore!.setPhysicalContextSession(workerEvent.threadId, workerEvent.sessionFile, context.promptRevision.id);
     if (workerEvent.reconciliation !== "resumed" && workerEvent.retainedTurnCount > 0) {
       const record: TrajectoryEvent = {
         ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, HOST_ACTOR, HOST_PROVENANCE),
@@ -795,6 +853,7 @@ function interruptTurn(
   };
   trajectoryStore!.append(record);
   finishTurn(context);
+  if (reason === "worker_exit") loadedPromptByThread.delete(context.threadId);
   emit({ ...ipcMetadata(record), event: "turn.interrupted", payload: { threadId: context.threadId, turnId: context.turnId, partialMessage: record.payload.partialMessage, reason, profile: context.profile } });
 }
 
@@ -858,7 +917,8 @@ app.whenReady().then(() => {
     sequenceByThread.set(thread.id, lastSequence);
   }
   inflight = new InflightTurnCoordinator(trajectoryStore);
-  const capabilityRegistry = new CapabilityRegistry();
+  stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
+  capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);

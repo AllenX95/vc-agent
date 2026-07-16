@@ -3,6 +3,7 @@ import {
   actorRefSchema,
   IPC_SCHEMA_VERSION,
   modelProfileSchema,
+  promptContributionSchema,
   provenanceRefSchema,
   providerFailureSchema,
   usageSchema
@@ -35,8 +36,13 @@ const turnSubmitted = trajectoryEventBase.extend({
     text: z.string(),
     idempotencyKey: z.string().min(1),
     retryOfTurnId: z.string().min(1).optional(),
-    profile: trajectoryProfileSchema.optional()
+    profile: trajectoryProfileSchema.optional(),
+    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
   })
+});
+const systemPromptUpdated = trajectoryEventBase.extend({
+  event: z.literal("system_prompt.updated"),
+  payload: z.object({ previousRevisionId: z.string().uuid(), nextRevisionId: z.string().uuid() })
 });
 const turnStarted = trajectoryEventBase.extend({
   event: z.literal("turn.started"),
@@ -117,6 +123,7 @@ const providerContinuation = trajectoryEventBase.extend({
 
 export const trajectoryEventSchema = z.discriminatedUnion("event", [
   turnSubmitted,
+  systemPromptUpdated,
   turnStarted,
   turnCompleted,
   turnFailed,
@@ -140,7 +147,8 @@ export const trajectoryTurnSchema = z.object({
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),
-  lastSequence: z.number().int().positive()
+  lastSequence: z.number().int().positive(),
+  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
 });
 export type TrajectoryTurn = z.infer<typeof trajectoryTurnSchema>;
 

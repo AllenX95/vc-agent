@@ -66,6 +66,29 @@ export type ProjectThread = z.infer<typeof projectThreadSchema>;
 export const threadSchema = z.discriminatedUnion("scope", [unscopedThreadSchema, projectThreadSchema]);
 export type Thread = z.infer<typeof threadSchema>;
 
+export const systemPromptRevisionSchema = z.object({
+  id: z.string().uuid(),
+  content: z.string().max(100_000),
+  hash: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceRevisionId: z.string().uuid().optional(),
+  changeNote: z.string().max(500).optional(),
+  diff: z.string().max(200_000),
+  source: z.enum(["shipped_default", "user_edit", "restore_default"]),
+  createdAt: z.string().datetime()
+});
+export type SystemPromptRevision = z.infer<typeof systemPromptRevisionSchema>;
+
+export const promptContributionSchema = z.object({
+  promptEstimatedTokens: z.number().int().nonnegative(),
+  toolSchemaEstimatedTokens: z.number().int().nonnegative(),
+  taskEstimatedTokens: z.number().int().nonnegative(),
+  contextEstimatedTokens: z.number().int().nonnegative(),
+  recalledStateEstimatedTokens: z.number().int().nonnegative(),
+  skillEstimatedTokens: z.number().int().nonnegative(),
+  materialEstimatedTokens: z.number().int().nonnegative()
+});
+export type PromptContribution = z.infer<typeof promptContributionSchema>;
+
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
@@ -103,7 +126,8 @@ const ipcTrajectoryTurnSchema = z.object({
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),
-  lastSequence: z.number().int().positive()
+  lastSequence: z.number().int().positive(),
+  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
 });
 const ipcTrajectoryActivitySchema = z.object({
   id: z.string().min(1),
@@ -140,6 +164,17 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
     apiKey: z.string().min(1).max(8192),
     thinkingLevel: thinkingLevelSchema
   })
+});
+const listPromptRevisionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("prompt.revision.list") });
+const createPromptRevisionCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("prompt.revision.create"),
+  payload: z.object({ content: z.string().max(100_000), changeNote: z.string().trim().max(500).optional() })
+});
+const activatePromptRevisionCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("prompt.revision.activate"), payload: z.object({ revisionId: z.string().uuid() })
+});
+const restoreDefaultPromptCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("prompt.restore_default"), payload: z.object({ changeNote: z.string().trim().max(500).optional() })
 });
 const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
 const listProjectsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.list") });
@@ -198,6 +233,10 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
   createProfileCommandSchema,
+  listPromptRevisionsCommandSchema,
+  createPromptRevisionCommandSchema,
+  activatePromptRevisionCommandSchema,
+  restoreDefaultPromptCommandSchema,
   listProjectsCommandSchema,
   openProjectCommandSchema,
   resolveProjectCollisionCommandSchema,
@@ -267,6 +306,20 @@ const profileCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("profile.created"),
   payload: z.object({ profile: modelProfileSchema })
 });
+const promptRevisionsListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("prompt.revisions.listed"),
+  payload: z.object({ activeRevisionId: z.string().uuid(), revisions: z.array(systemPromptRevisionSchema) })
+});
+const promptRevisionCreatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("prompt.revision.created"), payload: z.object({ revision: systemPromptRevisionSchema, activeRevisionId: z.string().uuid() })
+});
+const promptRevisionActivatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("prompt.revision.activated"), payload: z.object({ revision: systemPromptRevisionSchema })
+});
+const systemPromptUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("system_prompt.updated"),
+  payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), previousRevisionId: z.string().uuid(), nextRevisionId: z.string().uuid() })
+});
 const threadsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("threads.listed"),
   payload: z.object({ threads: z.array(threadSchema) })
@@ -330,7 +383,8 @@ const turnAcceptedEventSchema = eventMetadataSchema.extend({
     turnId: z.string().min(1),
     text: z.string(),
     retryOfTurnId: z.string().min(1).optional(),
-    profile: modelProfileSchema
+    profile: modelProfileSchema,
+    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema })
   })
 });
 const turnStartedEventSchema = eventMetadataSchema.extend({
@@ -418,6 +472,10 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
+  promptRevisionsListedEventSchema,
+  promptRevisionCreatedEventSchema,
+  promptRevisionActivatedEventSchema,
+  systemPromptUpdatedEventSchema,
   projectsListedEventSchema,
   projectOpenedEventSchema,
   projectCollisionDetectedEventSchema,
