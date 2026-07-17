@@ -288,3 +288,68 @@ export function createUnavailableCoreRecallCapability(id: "project_state_recall"
     }
   };
 }
+
+const webSearchInputSchema = z.object({
+  query: z.string().trim().min(1).max(500),
+  maxResults: z.number().int().min(1).max(6).default(6),
+  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+});
+const webFetchInputSchema = z.object({
+  url: z.string().url().max(2_000).refine((value) => {
+    try {
+      const url = new URL(value);
+      return (url.protocol === "http:" || url.protocol === "https:") && url.username === "" && url.password === "";
+    } catch { return false; }
+  }, "Only unauthenticated public HTTP(S) URLs are allowed."),
+  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+});
+
+type WebCapabilityResult = Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>;
+
+export function createWebSearchCapability(
+  search: (input: z.infer<typeof webSearchInputSchema>, context: CapabilityExecutionContext) => WebCapabilityResult
+): CapabilityDefinition<z.infer<typeof webSearchInputSchema>> {
+  return {
+    metadata: {
+      id: "web_search", version: "1.0.0", label: "Search public web",
+      description: "Search the current public web without login, browser state, writes, or durable snapshots.",
+      activationClass: "ordinary_task", sideEffectClass: "network_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { query: { type: "string" }, maxResults: { type: "integer" }, maxChars: { type: "integer" } }, required: ["query"] },
+      outputSchema: webOutputSchema()
+    },
+    inputSchema: webSearchInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const result = await search(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: result.body, retrieval: result.retrieval };
+    }
+  };
+}
+
+export function createWebFetchCapability(
+  fetchPublic: (input: z.infer<typeof webFetchInputSchema>, context: CapabilityExecutionContext) => WebCapabilityResult
+): CapabilityDefinition<z.infer<typeof webFetchInputSchema>> {
+  return {
+    metadata: {
+      id: "web_fetch", version: "1.0.0", label: "Fetch public URL",
+      description: "Fetch and extract a bounded public page or PDF without login, browser state, writes, or durable snapshots.",
+      activationClass: "ordinary_task", sideEffectClass: "network_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { url: { type: "string" }, maxChars: { type: "integer" } }, required: ["url"] },
+      outputSchema: webOutputSchema()
+    },
+    inputSchema: webFetchInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const result = await fetchPublic(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: result.body, retrieval: result.retrieval };
+    }
+  };
+}
+
+function webOutputSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: { sourceClass: { const: "web" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } },
+    required: ["sourceClass", "items", "complete", "omittedItems", "warnings", "contextReference"]
+  };
+}

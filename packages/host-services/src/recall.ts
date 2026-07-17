@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CanonicalParse, ContextReference, MaterialInventoryItem } from "@vc-agent/contracts";
+import type { CanonicalParse, CapabilityExecutionResult, ContextReference, MaterialInventoryItem } from "@vc-agent/contracts";
 
 export interface BoundedRecallEnvelope<T> {
   readonly schemaVersion: 1;
@@ -158,4 +158,18 @@ function envelope(
 
 export function retrievalMetadata(envelope: BoundedRecallEnvelope<unknown>, body: string) {
   return { payloadId: randomUUID(), retention: "turn_scoped" as const, bodyBytes: Buffer.byteLength(body, "utf8"), contextReference: envelope.contextReference };
+}
+
+export function retrievalTrajectorySummary(result: CapabilityExecutionResult): string {
+  if (result.retrieval === undefined) return result.content;
+  const reference = result.retrieval.contextReference;
+  if (reference.sourceClass !== "web") return JSON.stringify({ contextReference: reference, retiredBodyBytes: result.retrieval.bodyBytes });
+  let citations: unknown[] = [];
+  let warnings: unknown[] = [];
+  try {
+    const envelope = JSON.parse(result.content) as { items?: Array<{ url?: unknown; title?: unknown; accessedAt?: unknown }>; warnings?: unknown[] };
+    citations = (envelope.items ?? []).map((item) => ({ url: item.url, title: item.title, accessedAt: item.accessedAt }));
+    warnings = envelope.warnings ?? [];
+  } catch { warnings = ["Web result metadata could not be projected for durable trajectory."]; }
+  return JSON.stringify({ contextReference: reference, citations, warnings, retiredBodyBytes: result.retrieval.bodyBytes });
 }

@@ -277,4 +277,31 @@ describe("real Pi SDK tracer", () => {
     expect(physical).not.toContain("FULL RETRIEVAL BODY");
     handle.dispose();
   });
+
+  it("routes public-web tools through the same generic capability proxy", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-web-proxy-"));
+    temporaryDirectories.push(cwd);
+    const requests: string[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        capabilityProxy: async (_toolCallId, capabilityId) => {
+          requests.push(capabilityId);
+          return { schemaVersion: 1, requestId: "web-request", status: "completed", content: "bounded web result" };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("web_search", { query: "current market" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("I found a current public source.")
+      ],
+      onEvent: () => {}
+    });
+    await handle.submit("Search the current market.", { activeCapabilities: ["web_search", "web_fetch"] });
+    expect(requests).toEqual(["web_search"]);
+    handle.dispose();
+  });
 });

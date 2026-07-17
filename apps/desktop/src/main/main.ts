@@ -21,8 +21,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectIdentityStore, retrievalMetadata, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { CapabilityGateway, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectIdentityStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -577,6 +577,7 @@ function submitTurn(
   const outputIntent = detectOutputIntent(input.text);
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   const activeCapabilities = [...coreCapabilitiesForScope(thread.scope)];
+  if (detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
   if (outputIntent && thread.scope === "unscoped") activeCapabilities.push("output.write_text");
   const physical = stateStore!.getPhysicalContext(input.threadId);
   if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
@@ -1023,7 +1024,7 @@ function finalizeCapability(
     payload: {
       toolCallId: request.toolCallId,
       capabilityId: request.capabilityId,
-      summary: result.content,
+      summary: retrievalTrajectorySummary(result),
       artifactIds: result.artifact === undefined ? [] : [result.artifact.id],
       ...(result.retrieval === undefined ? {} : { contextReference: result.retrieval.contextReference })
     }
@@ -1097,6 +1098,16 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
 }
 
 function summarizeCapabilityArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
+  if (typeof arguments_.url === "string") {
+    return { url: arguments_.url, maxChars: typeof arguments_.maxChars === "number" ? arguments_.maxChars : undefined };
+  }
+  if (typeof arguments_.query === "string" && (typeof arguments_.maxResults === "number" || arguments_.materialId === undefined)) {
+    return {
+      queryChars: arguments_.query.length,
+      maxResults: typeof arguments_.maxResults === "number" ? arguments_.maxResults : undefined,
+      maxChars: typeof arguments_.maxChars === "number" ? arguments_.maxChars : undefined
+    };
+  }
   if (typeof arguments_.disclosureLevel === "string") {
     return {
       disclosureLevel: arguments_.disclosureLevel,
@@ -1256,6 +1267,23 @@ app.whenReady().then(() => {
   }));
   capabilityRegistry.register(createUnavailableCoreRecallCapability("project_state_recall", ["project"]));
   capabilityRegistry.register(createUnavailableCoreRecallCapability("memory_recall", ["unscoped", "project"]));
+  const publicWeb = new PublicWebRecallSource();
+  capabilityRegistry.register(createWebSearchCapability(async (input, context) => {
+    const envelope = await publicWeb.recall(
+      { kind: "search", query: input.query },
+      { turnId: context.request.turnId, maxItems: input.maxResults, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
+    );
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
+  capabilityRegistry.register(createWebFetchCapability(async (input, context) => {
+    const envelope = await publicWeb.recall(
+      { kind: "fetch", url: input.url },
+      { turnId: context.request.turnId, maxItems: 1, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
+    );
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
   for (const project of stateStore.listProjects()) {

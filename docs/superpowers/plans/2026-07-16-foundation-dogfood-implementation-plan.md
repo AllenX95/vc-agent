@@ -235,13 +235,13 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Clear research intent preactivates web tools; otherwise the Agent requests them through `capability_request`.
-- [ ] Web tools register through the same Capability Registry and bounded-result envelope as local capabilities; no web-specific dispatch path is added to the Agent Worker.
-- [ ] Public read-only actions run without per-call confirmation and remain visible inline.
-- [ ] Logged-in access, form submission, write APIs, browser automation, and local-file upload are unavailable in this slice.
-- [ ] Results include URL, title when available, access time, bounded content, and failure warnings.
-- [ ] No durable HTML/body snapshot or web evidence cache is created.
-- [ ] Large web results follow Turn-scoped Retrieval Payload retirement and Context Reference rules.
+- [x] Clear research intent preactivates web tools; otherwise the Agent requests them through `capability_request`.
+- [x] Web tools register through the same Capability Registry and bounded-result envelope as local capabilities; no web-specific dispatch path is added to the Agent Worker.
+- [x] Public read-only actions run without per-call confirmation and remain visible inline.
+- [x] Logged-in access, form submission, write APIs, browser automation, and local-file upload are unavailable in this slice.
+- [x] Results include URL, title when available, access time, bounded content, and failure warnings.
+- [x] No durable HTML/body snapshot or web evidence cache is created.
+- [x] Large web results follow Turn-scoped Retrieval Payload retirement and Context Reference rules.
 
 ### D6. Recall And Maintain Project Context
 

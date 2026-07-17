@@ -466,7 +466,7 @@ function PromptSettings({ revisions, activeRevisionId, invoke }: {
 function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted }: { item: ConversationItem; configure(): void; chooseOutput(): void; retry(text: string, turnId: string): void; continueInterrupted(): void }) {
   if (item.role === "user") return <article className="message user-message"><div>{item.text}</div></article>;
   if (item.role === "system") return <div className="system-event">{item.text}</div>;
-  if (item.role === "tool") return <div className={`tool-activity ${item.status}`}><div><strong>{item.capabilityId}</strong><span>{item.status.replace("_", " ")}</span></div><p>{item.text}</p>{item.artifact && <a href={`#artifact-${item.artifact.id}`} title={item.artifact.destination}>{item.artifact.mediaType} · {item.artifact.destination}</a>}</div>;
+  if (item.role === "tool") return <div className={`tool-activity ${item.status}`}><div><strong>{item.capabilityId}</strong><span>{item.status.replace("_", " ")}</span></div>{item.capabilityId === "web_search" || item.capabilityId === "web_fetch" ? <WebSourceResult text={item.text} /> : <p>{item.text}</p>}{item.artifact && <a href={`#artifact-${item.artifact.id}`} title={item.artifact.destination}>{item.artifact.mediaType} · {item.artifact.destination}</a>}</div>;
   return <article className={`message assistant-message ${item.status}`}>
     <div className="message-meta"><span>vc-agent</span>{item.profile && <span>{item.profile.provider} / {item.profile.model}</span>}</div>
     {item.text && <div className="message-content">{item.text}</div>}
@@ -475,6 +475,39 @@ function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted
     {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
     {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} est.)` : ""}</div>}
   </article>;
+}
+
+function WebSourceResult({ text }: { text: string }) {
+  const result = parseWebSourceResult(text);
+  if (result === null) return <p>{text}</p>;
+  return <div className="web-source-result">
+    {result.sources.map((source, index) => <div className="web-source" key={`${source.url}:${index}`}>
+      <strong>{source.title || source.url}</strong>
+      <span className="web-source-url">{source.url}</span>
+      {source.accessedAt && <span>Accessed {new Date(source.accessedAt).toLocaleString()}</span>}
+      {source.content && <p>{source.content}</p>}
+    </div>)}
+    {result.warnings.map((warning, index) => <p className="web-warning" key={`${warning}:${index}`}>{warning}</p>)}
+  </div>;
+}
+
+function parseWebSourceResult(text: string): { sources: Array<{ url: string; title: string; accessedAt: string; content: string }>; warnings: string[] } | null {
+  try {
+    const parsed = JSON.parse(text) as {
+      items?: Array<{ url?: unknown; title?: unknown; accessedAt?: unknown; content?: unknown }>;
+      citations?: Array<{ url?: unknown; title?: unknown; accessedAt?: unknown }>;
+      warnings?: unknown[];
+    };
+    const rawSources = parsed.items ?? parsed.citations ?? [];
+    const sources = rawSources.flatMap((source) => typeof source.url !== "string" ? [] : [{
+      url: source.url,
+      title: typeof source.title === "string" ? source.title : "",
+      accessedAt: typeof source.accessedAt === "string" ? source.accessedAt : "",
+      content: "content" in source && typeof source.content === "string" ? source.content : ""
+    }]);
+    const warnings = (parsed.warnings ?? []).filter((warning): warning is string => typeof warning === "string");
+    return { sources, warnings };
+  } catch { return null; }
 }
 
 function projectTrajectory(

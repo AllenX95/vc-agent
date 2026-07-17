@@ -237,7 +237,23 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, name, params, signal))
   });
-  return [capabilityRequest, materialRecall, unavailable("project_state_recall"), unavailable("memory_recall"), createTextOutputProxy(proxy)];
+  const webSearch = defineTool({
+    name: "web_search",
+    label: "Search public web",
+    description: "Search the current public web. Results are bounded, source-referenced, and transient.",
+    parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number()), maxChars: Type.Optional(Type.Number()) }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_search", params, signal))
+  });
+  const webFetch = defineTool({
+    name: "web_fetch",
+    label: "Fetch public URL",
+    description: "Fetch and extract a bounded public page or PDF without login, writes, or browser state.",
+    parameters: Type.Object({ url: Type.String(), maxChars: Type.Optional(Type.Number()) }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
+  });
+  return [capabilityRequest, materialRecall, unavailable("project_state_recall"), unavailable("memory_recall"), webSearch, webFetch, createTextOutputProxy(proxy)];
 }
 
 function toolResult(result: CapabilityExecutionResult) {

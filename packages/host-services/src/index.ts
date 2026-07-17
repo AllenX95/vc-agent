@@ -14,7 +14,8 @@ export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-iden
 export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
 export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMaterialFingerprint } from "./material-inventory.js";
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
-export { MaterialRecallSource, retrievalMetadata, type BoundedRecallEnvelope, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
+export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, type BoundedRecallEnvelope, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
+export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

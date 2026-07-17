@@ -54,6 +54,11 @@ describe("workspace dependency direction", () => {
     expect(imports.every((file) => file.startsWith("packages\\pi-adapter\\") || file.startsWith("packages/pi-adapter/"))).toBe(true);
   });
 
+  it("keeps public-web dispatch out of the Agent Worker", () => {
+    const worker = readFileSync(join(root, "apps/agent-worker/src/index.ts"), "utf8");
+    expect(worker).not.toMatch(/web_(?:search|fetch)/u);
+  });
+
   it("keeps workspace manifests within the accepted dependency graph", () => {
     const allowed: Record<string, Set<string>> = {
       "@vc-agent/core": new Set(),

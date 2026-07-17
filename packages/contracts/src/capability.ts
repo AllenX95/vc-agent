@@ -10,7 +10,7 @@ export const capabilityMetadataSchema = z.object({
   label: z.string().min(1),
   description: z.string().min(1),
   activationClass: z.enum(["ordinary_task", "preconditioned_execution", "protected_workflow", "host_only"]),
-  sideEffectClass: z.enum(["none", "local_read", "local_write", "external_write", "destructive"]),
+  sideEffectClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]),
   allowedScopes: z.array(z.enum(["unscoped", "project"])).min(1),
   executor: z.enum(["host", "utility"]),
   modelCallable: z.boolean(),
