@@ -171,7 +171,7 @@ export class ThreadTrajectoryStore {
       if (event.event === "turn.started") {
         turns.set(event.turnId, { ...turn, status: "active", profile: event.payload.profile, lastSequence: event.sequence });
       } else if (event.event === "turn.completed") {
-        turns.set(event.turnId, { ...turn, status: "completed", assistantText: event.payload.message, profile: event.payload.profile, usage: event.payload.usage, lastSequence: event.sequence });
+        turns.set(event.turnId, { ...turn, status: "completed", assistantText: event.payload.message, profile: event.payload.profile, usage: event.payload.usage, ...(event.payload.latencyMs === undefined ? {} : { latencyMs: event.payload.latencyMs }), ...(event.payload.recalledStateEstimatedTokens === undefined ? {} : { recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens }), lastSequence: event.sequence });
       } else if (event.event === "turn.failed") {
         turns.set(event.turnId, { ...turn, status: "failed", ...(event.payload.profile === undefined ? {} : { profile: event.payload.profile }), failure: event.payload.failure, lastSequence: event.sequence });
       } else if (event.event === "turn.interrupted") {

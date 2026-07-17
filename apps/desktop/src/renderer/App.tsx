@@ -59,6 +59,8 @@ type ConversationItem =
       status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
       profile?: TrajectoryProfile;
       usage?: TokenUsage;
+      latencyMs?: number;
+      recalledStateEstimatedTokens?: number;
       prompt?: { revisionId: string; contributions: PromptContribution };
       failure?: ProviderFailure;
       retryText?: string;
@@ -171,6 +173,11 @@ export function App() {
       case "material.parse.failed": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: `${event.payload.code}: ${event.payload.message}` })); break;
       case "profile.created":
         setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]);
+        setBootstrap((current) => current === null ? current : {
+          ...current,
+          entityCounts: { ...current.entityCounts, modelProfiles: current.entityCounts.modelProfiles + 1 },
+          ...(current.environmentDoctor === undefined ? {} : { environmentDoctor: { ...current.environmentDoctor, provider: { status: "ready", message: `${current.entityCounts.modelProfiles + 1} Model Profile reference(s) configured.` } } })
+        });
         setProfileFormOpen(false);
         break;
       case "threads.listed": setThreads(event.payload.threads); break;
@@ -209,7 +216,7 @@ export function App() {
         setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: item.text + event.payload.delta, status: "streaming" })));
         break;
       case "turn.completed":
-        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage })));
+        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
         break;
       case "turn.failed":
         setConversations((current) => failTurn(current, event.payload));
@@ -588,6 +595,7 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div></dl></div>
+      <div className="settings-section"><h2>Environment Doctor</h2><dl>{bootstrap?.environmentDoctor === undefined ? <div><dt>Status</dt><dd>Loading</dd></div> : Object.entries(bootstrap.environmentDoctor).map(([name, diagnostic]) => <div key={name}><dt>{doctorLabel(name)}</dt><dd><span className={`doctor-status ${diagnostic.status}`}>{diagnostic.status}</span> {diagnostic.message}</dd></div>)}</dl></div>
     </section>
   );
 }
@@ -628,7 +636,7 @@ function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted
     {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">Working</div>}
     {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div>{item.failure.code === "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={chooseOutput}>Choose output location</button>}<button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button>{item.failure.code !== "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={configure}>Adjust profile</button>}</div></div>}
     {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
-    {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} est.)` : ""}</div>}
+    {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} prompt + ${item.prompt.contributions.toolSchemaEstimatedTokens} tools + ${item.prompt.contributions.contextEstimatedTokens} retained + ${item.prompt.contributions.outputReserveEstimatedTokens} reserve est.)` : ""}{item.recalledStateEstimatedTokens === undefined ? "" : ` · recall ${item.recalledStateEstimatedTokens} est.`}{item.latencyMs === undefined ? "" : ` · ${item.latencyMs} ms`}</div>}
   </article>;
 }
 
@@ -678,6 +686,8 @@ function projectTrajectory(
       status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
       ...(turn.profile === undefined ? {} : { profile: turn.profile }),
       ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      ...(turn.latencyMs === undefined ? {} : { latencyMs: turn.latencyMs }),
+      ...(turn.recalledStateEstimatedTokens === undefined ? {} : { recalledStateEstimatedTokens: turn.recalledStateEstimatedTokens }),
       ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions } }),
       ...(turn.failure === undefined ? {} : { failure: turn.failure, retryText: turn.text })
     };
@@ -749,4 +759,8 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function doctorLabel(name: string): string {
+  return ({ pi: "Pi SDK", provider: "Provider", parser: "Parsers", credentialReference: "Credentials", storage: "Storage", bundledExtensions: "Bundled Extensions" } as Record<string, string>)[name] ?? name;
 }

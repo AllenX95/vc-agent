@@ -55,6 +55,8 @@ const turnCompleted = trajectoryEventBase.extend({
     message: z.string(),
     profile: trajectoryProfileSchema,
     usage: usageSchema,
+    latencyMs: z.number().int().nonnegative().optional(),
+    recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
     responseId: z.string().optional(),
     piEntryId: z.string().optional()
   })
@@ -156,6 +158,8 @@ export const trajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: trajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  latencyMs: z.number().int().nonnegative().optional(),
+  recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),

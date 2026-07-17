@@ -425,6 +425,7 @@ function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEve
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
+      if (event.message.stopReason === "toolUse") return;
       if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
         onEvent({ type: "failed", error: new Error(event.message.errorMessage ?? `Provider stopped: ${event.message.stopReason}`) });
         return;

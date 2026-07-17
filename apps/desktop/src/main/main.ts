@@ -23,7 +23,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, MemoryCandidateStore, ProjectOutputRegistry, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, MemoryCandidateStore, ProjectOutputRegistry, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -51,6 +51,8 @@ interface TurnContext {
   readonly promptRevision: SystemPromptRevision;
   readonly retryOfTurnId?: string;
   readonly compactionOnly?: true;
+  readonly submittedAtMs: number;
+  recalledStateEstimatedTokens: number;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -161,10 +163,21 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
     const command = parsed.data;
     switch (command.command) {
       case "app.bootstrap":
+        const profileCount = stateStore.listModelProfiles().length;
         return {
           ...eventMetadata(command.correlationId),
           event: "app.bootstrap.completed",
-          payload: stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests })
+          payload: {
+            ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
+            environmentDoctor: {
+              pi: { status: "ready", message: "Bundled Pi SDK is available." },
+              provider: profileCount > 0 ? { status: "ready", message: `${profileCount} Model Profile reference(s) configured.` } : { status: "attention", message: "No Model Profile is configured." },
+              parser: { status: "ready", message: `${BASELINE_PARSER_ADAPTERS.length} baseline parser adapter(s) available.` },
+              credentialReference: { status: "ready", message: "Protected local credential references are available." },
+              storage: { status: "ready", message: "Local state storage is available." },
+              bundledExtensions: { status: "ready", message: "Reviewed bundled Extension inventory loaded." }
+            }
+          }
         };
       case "access.mode.set":
         stateStore.setAccessMode(command.payload.mode);
@@ -705,6 +718,7 @@ function submitTurn(
       taskEstimatedTokens: estimateTokens(input.text),
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
+      outputReserveEstimatedTokens: 2_048,
       skillEstimatedTokens: 0,
       materialEstimatedTokens: 0
     }
@@ -793,6 +807,8 @@ function submitTurn(
     activeCapabilities,
     expectedStateVersion: thread.stateVersion,
     promptRevision,
+    submittedAtMs: Date.now(),
+    recalledStateEstimatedTokens: 0,
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   turnContexts.set(turnId, context);
@@ -880,6 +896,8 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     activeCapabilities: [],
     expectedStateVersion: thread.stateVersion,
     promptRevision,
+    submittedAtMs: Date.now(),
+    recalledStateEstimatedTokens: 0,
     compactionOnly: true
   };
   turnContexts.set(turnId, context);
@@ -994,6 +1012,8 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   }
 
   if (workerEvent.event === "turn.completed") {
+    const latencyMs = Date.now() - context.submittedAtMs;
+    const recalledStateEstimatedTokens = context.recalledStateEstimatedTokens;
     const record: TrajectoryEvent = {
       ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
       event: "turn.completed",
@@ -1001,6 +1021,8 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
         message: workerEvent.message,
         profile: toTrajectoryProfile(context.profile),
         usage: workerEvent.usage,
+        latencyMs,
+        recalledStateEstimatedTokens,
         ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }),
         ...(workerEvent.piEntryId === undefined ? {} : { piEntryId: workerEvent.piEntryId })
       }
@@ -1008,7 +1030,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     trajectoryStore!.append(record);
     finishTurn(context);
     acknowledgeTrajectory(context, record);
-    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
     return;
   }
 
@@ -1111,6 +1133,7 @@ function finalizeCapability(
   emitToRenderer: boolean
 ): HostEvent {
   let result = initialResult;
+  if (result.retrieval !== undefined) context.recalledStateEstimatedTokens += Math.ceil(result.retrieval.bodyBytes / 4);
   let projectOutput: ProjectOutputArtifact | undefined;
   if (result.activatedCapabilities !== undefined) {
     for (const capabilityId of result.activatedCapabilities) {
@@ -1436,7 +1459,12 @@ app.whenReady().then(() => {
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));
-  const publicWeb = new PublicWebRecallSource();
+  const publicWeb = process.env.VC_AGENT_TEST_WEB_FIXTURE === "1"
+    ? new PublicWebRecallSource({
+        resolve: async () => ["93.184.216.34"],
+        fetch: async () => new Response('<html><body><li class="b_algo"><h2><a href="https://example.com/market">Fixture market evidence</a></h2><div class="b_caption"><p>Public evidence for the bounded dogfood workflow.</p></div></li></body></html>', { status: 200, headers: { "content-type": "text/html" } })
+      })
+    : new PublicWebRecallSource();
   capabilityRegistry.register(createWebSearchCapability(async (input, context) => {
     const envelope = await publicWeb.recall(
       { kind: "search", query: input.query },

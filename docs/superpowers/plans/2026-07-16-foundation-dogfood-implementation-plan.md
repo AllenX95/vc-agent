@@ -309,14 +309,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] One Playwright E2E scenario completes the entire workflow through visible UI actions.
-- [ ] A second scenario covers missing Profile, Provider Failure, parse warning, stopped Turn, and restart recovery without data corruption or automatic fallback.
-- [ ] The application starts and browses local state without Pi activation.
-- [ ] Telemetry exposes prompt, tool-schema, recall, retained-context, output reserve, latency, and token contributions without remote content telemetry.
-- [ ] The environment doctor reports Pi, Provider, parser, credential-reference, storage, and bundled-Extension status with sanitized diagnostics.
-- [ ] Architecture tests exercise fixture adapters through the ResourceLoader, Capability Registry, Parser Adapter, Output Store, and Worker Supervisor interfaces without importing later-stage feature code.
-- [ ] No Learning, Integration, Extension Audit, Office, OCR, MCP, Dream, Reflection, Long-term Memory, or Sub-Agent control appears as a working feature.
-- [ ] The sole User can use the build for ordinary VC work without developer intervention.
+- [x] One Playwright E2E scenario completes the entire workflow through visible UI actions.
+- [x] A second scenario covers missing Profile, Provider Failure, parse warning, stopped Turn, and restart recovery without data corruption or automatic fallback.
+- [x] The application starts and browses local state without Pi activation.
+- [x] Telemetry exposes prompt, tool-schema, recall, retained-context, output reserve, latency, and token contributions without remote content telemetry.
+- [x] The environment doctor reports Pi, Provider, parser, credential-reference, storage, and bundled-Extension status with sanitized diagnostics.
+- [x] Architecture tests exercise fixture adapters through the ResourceLoader, Capability Registry, Parser Adapter, Output Store, and Worker Supervisor interfaces without importing later-stage feature code.
+- [x] No Learning, Integration, Extension Audit, Office, OCR, MCP, Dream, Reflection, Long-term Memory, or Sub-Agent control appears as a working feature.
+- [x] The sole User can use the build for ordinary VC work without developer intervention.
 
 ## Dependency Graph
 

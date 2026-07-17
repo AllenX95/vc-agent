@@ -6,7 +6,9 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { createPiSession, sanitizeProviderFailure, type PiSessionHandle } from "@vc-agent/pi-adapter";
+import { createPiSession, sanitizeProviderFailure, type PiSessionEvent, type PiSessionHandle } from "@vc-agent/pi-adapter";
+import { createFauxPiSession } from "@vc-agent/pi-adapter/testing";
+import { dogfoodFixtureResponses } from "./dogfood-fixture.js";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Agent Worker requires an Electron Utility Process parent port");
@@ -81,19 +83,17 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       session = null;
     }
     if (session === null) {
-      session = await createPiSession(
-        {
+      const sessionConfig = {
           cwd: command.cwd,
           threadDirectory: command.threadDirectory,
           ...(command.previousSessionFile === undefined ? {} : { previousSessionFile: command.previousSessionFile }),
           ...(command.hostHighWater === undefined ? {} : { hostHighWater: command.hostHighWater }),
           contextHistory: command.contextHistory,
-          profile: command.profile,
           resources: command.resources,
           extensions: command.extensions,
           capabilityProxy: requestCapability
-        },
-        (event) => {
+      };
+      const onSessionEvent = (event: PiSessionEvent) => {
           if (event.type === "text_delta") {
             send({ ...workerMetadata(command), event: "message.delta", delta: event.delta });
           } else if (event.type === "completed") {
@@ -131,8 +131,10 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
               failure: sanitizeProviderFailure(event.error, command.profile)
             });
           }
-        }
-      );
+      };
+      session = command.profile.provider === "vc-agent-faux" && process.env.NODE_ENV === "test"
+        ? await createFauxPiSession({ config: sessionConfig, responses: dogfoodFixtureResponses(), onEvent: onSessionEvent })
+        : await createPiSession({ ...sessionConfig, profile: command.profile }, onSessionEvent);
       sessionProfileKey = profileKey;
       send({
         ...workerMetadata(command),

@@ -84,6 +84,7 @@ export const promptContributionSchema = z.object({
   taskEstimatedTokens: z.number().int().nonnegative(),
   contextEstimatedTokens: z.number().int().nonnegative(),
   recalledStateEstimatedTokens: z.number().int().nonnegative(),
+  outputReserveEstimatedTokens: z.number().int().nonnegative(),
   skillEstimatedTokens: z.number().int().nonnegative(),
   materialEstimatedTokens: z.number().int().nonnegative()
 });
@@ -188,6 +189,8 @@ const ipcTrajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: ipcTrajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  latencyMs: z.number().int().nonnegative().optional(),
+  recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),
@@ -394,7 +397,11 @@ export const bootstrapStateSchema = z.object({
     piSessionsStarted: z.number().int().nonnegative(),
     providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
-  })
+  }),
+  environmentDoctor: z.record(z.enum(["pi", "provider", "parser", "credentialReference", "storage", "bundledExtensions"]), z.object({
+    status: z.enum(["ready", "attention", "unavailable"]),
+    message: z.string().min(1).max(200)
+  })).optional()
 });
 
 const bootstrapCompletedEventSchema = eventMetadataSchema.extend({
@@ -550,6 +557,8 @@ const turnCompletedEventSchema = eventMetadataSchema.extend({
     message: z.string(),
     profile: modelProfileSchema,
     usage: usageSchema,
+    latencyMs: z.number().int().nonnegative(),
+    recalledStateEstimatedTokens: z.number().int().nonnegative(),
     responseId: z.string().optional()
   })
 });

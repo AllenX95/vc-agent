@@ -52,6 +52,9 @@ test("launches the empty shell without activating execution resources", async ()
     await expect(window.getByRole("heading", { name: "Settings" })).toBeVisible();
     await expect(window.getByText("Agent workers")).toBeVisible();
     await expect(window.locator("dl").nth(1).getByText("0", { exact: true })).toHaveCount(3);
+    await expect(window.getByRole("heading", { name: "Environment Doctor" })).toBeVisible();
+    for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
+    for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "MCP", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
 
     await window.evaluate(async () => {
       await (window as unknown as { vcAgent: { invoke(command: unknown): Promise<unknown> } }).vcAgent.invoke({
@@ -631,6 +634,113 @@ test("lists only registered Project Outputs with format-neutral provenance", asy
     await expect(panel).toContainText("2 source reference(s) · 1 warning(s)");
     await expect(panel).not.toContainText("canonical_parse");
     await expect(panel.getByRole("button", { name: "Open industry-note.md" })).toBeVisible();
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
+test("completes the daily VC workflow and resumes it after restart", async () => {
+  test.setTimeout(90_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-g1-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-g1-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  writeFileSync(join(projectDirectory, "memo.md"), "# Company evidence\nThe company reports repeatable enterprise demand.\n", "utf8");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory, VC_AGENT_TEST_WEB_FIXTURE: "1" });
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+
+    const material = window.locator(".material-row").filter({ hasText: "memo.md" });
+    await material.getByRole("button", { name: "Parse" }).click();
+    await expect(material).toContainText("available", { timeout: 20_000 });
+
+    await window.getByRole("tab", { name: "Context" }).click();
+    const context = window.getByLabel("Project Context");
+    await context.fill((await context.inputValue()).replace("- Current Focus:", "- Current Focus: Investment judgment and execution risk"));
+    await window.getByRole("button", { name: "Save Context" }).click();
+
+    await window.getByRole("tab", { name: "Memory" }).click();
+    await window.getByLabel("Project Memory").fill("# Project Memory\n\n## 2026-07-17 - Execution stability is the core risk\nTags: risk, diligence\nSource: user-authored\nScope: project\n\nExecution stability is the core risk.\n\nRelated:\n- Thread:\n- Output:\n");
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await expect(window.getByText(/1 entries/)).toBeVisible();
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Dogfood fixture", provider: "vc-agent-faux", model: "vc-agent-faux-model", apiKey: "fixture-only" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Dogfood fixture" });
+    await window.getByLabel("Message").fill("Search the current public web, use project materials, Context and Memory, and create an investment memo file with sources and uncertainty.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
+      await expect(window.locator(".tool-activity").filter({ hasText: capability })).toContainText("completed");
+    }
+    await expect(window.locator(".usage-row")).toContainText("reserve");
+    await expect(window.locator(".usage-row")).toContainText("recall");
+    await expect(window.locator(".usage-row")).toContainText("ms");
+    await window.getByRole("tab", { name: "Outputs" }).click();
+    await expect(window.locator(".outputs-panel")).toContainText("dogfood-investment-note.md");
+    expect(readFileSync(join(projectDirectory, "outputs", "dogfood-investment-note.md"), "utf8")).toContain("Inference and uncertainty");
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_WEB_FIXTURE: "1" });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible();
+    await window.getByRole("tab", { name: "Outputs" }).click();
+    await expect(window.locator(".outputs-panel")).toContainText("dogfood-investment-note.md");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
+test("recovers the complete Dogfood failure path without provider fallback", async () => {
+  test.setTimeout(90_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-g1-failure-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-g1-failure-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  writeFileSync(join(projectDirectory, "broken.json"), "{not-json", "utf8");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    const broken = window.locator(".material-row").filter({ hasText: "broken.json" });
+    await broken.getByRole("button", { name: "Parse" }).click();
+    await expect(broken.locator(".parse-result")).toContainText("PARSER_FAILED", { timeout: 20_000 });
+
+    await window.getByLabel("Message").fill("Assess this project.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Model Profile not configured")).toBeVisible();
+    await window.getByRole("button", { name: "Adjust profile" }).click();
+    await createProfile(window, { name: "Unavailable provider", provider: "anthropic", model: "claude-sonnet-4-5", apiKey: "sk-invalid-g1-failure-fixture" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Unavailable provider" });
+    await window.locator(".provider-failure").first().getByRole("button", { name: "Retry" }).click();
+    await expect(window.locator(".provider-failure")).toHaveCount(2, { timeout: 30_000 });
+    await expect(window.locator(".provider-failure").last()).toContainText("anthropic / claude-sonnet-4-5");
+
+    await window.getByLabel("Message").fill("Produce a deliberately slow answer.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Stop" }).click();
+    await expect(window.getByText("Interrupted", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await application.close();
+
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await expect(window.getByText("Model Profile not configured")).toBeVisible();
+    await expect(window.locator(".provider-failure").filter({ hasText: "anthropic / claude-sonnet-4-5" })).toBeVisible();
+    await expect(window.getByText("Interrupted", { exact: true })).toBeVisible();
+    await expect(window.getByLabel("Active Model Profile")).toHaveValue(/.+/);
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
   } finally {
     await application.close();

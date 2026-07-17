@@ -205,6 +205,7 @@ describe("real Pi SDK tracer", () => {
     }]);
     expect(events.some((event) => event.startsWith("delta:"))).toBe(true);
     expect(events.at(-1)).toBe("completed");
+    expect(events.filter((event) => event === "completed")).toHaveLength(1);
     handle.dispose();
   });
 
