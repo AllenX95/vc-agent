@@ -229,7 +229,21 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "material_recall", params, signal))
   });
-  const unavailable = (name: "project_state_recall" | "memory_recall") => defineTool({
+  const projectStateRecall = defineTool({
+    name: "project_state_recall",
+    label: "Recall project state",
+    description: "Recall bounded Project Context or Project Memory sections without reading other source classes.",
+    parameters: Type.Object({
+      source: Type.Optional(Type.Union([Type.Literal("project_context"), Type.Literal("project_memory")])),
+      sectionIds: Type.Optional(Type.Array(Type.String(), { maxItems: 6 })),
+      query: Type.Optional(Type.String()),
+      maxItems: Type.Optional(Type.Number()),
+      maxChars: Type.Optional(Type.Number())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "project_state_recall", params, signal))
+  });
+  const unavailable = (name: "memory_recall") => defineTool({
     name,
     label: name === "memory_recall" ? "Recall memory" : "Recall project state",
     description: `Recall bounded ${name === "memory_recall" ? "Long-term Memory" : "Project Context or Project Memory"} without reading other source classes.`,
@@ -253,7 +267,7 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
-  return [capabilityRequest, materialRecall, unavailable("project_state_recall"), unavailable("memory_recall"), webSearch, webFetch, createTextOutputProxy(proxy)];
+  return [capabilityRequest, materialRecall, projectStateRecall, unavailable("memory_recall"), webSearch, webFetch, createTextOutputProxy(proxy)];
 }
 
 function toolResult(result: CapabilityExecutionResult) {

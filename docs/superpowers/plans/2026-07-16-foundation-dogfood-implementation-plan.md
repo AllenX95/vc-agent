@@ -253,12 +253,12 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Context files are created lazily and remain user-editable and transparent.
-- [ ] New Threads receive no Project Context body by default.
-- [ ] `project_state_recall` returns only relevant sections with visible provenance.
-- [ ] External manual edits rebuild the structured mirror deterministically without a model call.
-- [ ] Malformed sections produce visible warnings without overwriting user text.
-- [ ] Unscoped Threads cannot invoke Project Context recall.
+- [x] Context files are created lazily and remain user-editable and transparent.
+- [x] New Threads receive no Project Context body by default.
+- [x] `project_state_recall` returns only relevant sections with visible provenance.
+- [x] External manual edits rebuild the structured mirror deterministically without a model call.
+- [x] Malformed sections produce visible warnings without overwriting user text.
+- [x] Unscoped Threads cannot invoke Project Context recall.
 
 ### D7. Capture And Recall Project Memory
 

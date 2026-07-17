@@ -516,6 +516,51 @@ test("freezes a System Prompt revision until the next Prompt Load Boundary", asy
   }
 });
 
+test("lazily edits Project Context and deterministically surfaces external Markdown warnings", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d6-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d6-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    const systemDirectory = join(projectDirectory, "outputs", "system");
+    expect(readdirSync(systemDirectory)).toEqual(["project.json"]);
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    expect(readdirSync(systemDirectory)).toEqual(["project.json"]);
+
+    await window.getByRole("tab", { name: "Context" }).click();
+    const editor = window.getByLabel("Project Context");
+    await expect(editor).toHaveValue(/# Project Context/);
+    await expect(editor).toHaveValue(/## Context For New Threads/);
+    const contextPath = join(systemDirectory, "project-context.md");
+    const mirrorPath = join(systemDirectory, "project-context.json");
+    expect(existsSync(contextPath)).toBe(true);
+    expect(existsSync(mirrorPath)).toBe(true);
+
+    await editor.fill((await editor.inputValue()).replace("- Company:", "- Company: Acme Ventures"));
+    await window.getByRole("button", { name: "Save Context" }).click();
+    await expect.poll(() => readFileSync(contextPath, "utf8")).toContain("Acme Ventures");
+    const savedMirror = JSON.parse(readFileSync(mirrorPath, "utf8"));
+    expect(savedMirror).not.toHaveProperty("content");
+    expect(savedMirror.sections).toHaveLength(6);
+
+    const malformed = "# Project Context\n\n## Project Snapshot\n- Company: External Edit\n\n## Unknown Notes\nPreserve me\n";
+    writeFileSync(contextPath, malformed, "utf8");
+    await expect(window.getByRole("status")).toContainText("Unknown section 'Unknown Notes'", { timeout: 10_000 });
+    await expect(editor).toHaveValue(malformed);
+    expect(readFileSync(contextPath, "utf8")).toBe(malformed);
+    expect(JSON.parse(readFileSync(mirrorPath, "utf8")).warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "UNKNOWN_SECTION" })]));
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
 async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],

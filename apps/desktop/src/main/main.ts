@@ -21,8 +21,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectIdentityStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { CapabilityGateway, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -68,9 +68,11 @@ const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
-const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout> }>();
+const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout>; contextTimer?: ReturnType<typeof setTimeout> }>();
 const credentials = new ProtectedCredentialService();
 const projectIdentities = new ProjectIdentityStore();
+const projectContexts = new ProjectContextStore();
+const ownProjectContextWrites = new Map<string, string>();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
@@ -202,6 +204,25 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return { ...eventMetadata(command.correlationId), event: "project.materials.listed", payload: { projectId: command.payload.projectId, materials: stateStore.listMaterials(command.payload.projectId) } };
       case "project.material.refresh":
         return refreshProjectInventory(command.correlationId, command.payload.projectId, false);
+      case "project.context.load": {
+        const project = stateStore.getProject(command.payload.projectId);
+        if (project === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Project not found.");
+        const existed = existsSync(projectContexts.paths(project.path).markdown);
+        const document = projectContexts.load(project.id, project.path, true)!;
+        if (!existed) ownProjectContextWrites.set(project.id, document.sourceHash);
+        return { ...eventMetadata(command.correlationId), event: "project.context.loaded", payload: { document, source: existed ? "load" : "lazy_create" } };
+      }
+      case "project.context.save": {
+        const project = stateStore.getProject(command.payload.projectId);
+        if (project === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Project not found.");
+        try {
+          const document = projectContexts.save(project.id, project.path, command.payload.content, command.payload.expectedSourceHash);
+          ownProjectContextWrites.set(project.id, document.sourceHash);
+          return { ...eventMetadata(command.correlationId), event: "project.context.updated", payload: { document, source: "user_save" } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_CONTEXT_WRITE" ? "Project Context changed externally. Reload before saving." : "Project Context could not be saved.");
+        }
+      }
       case "material.need": {
         const context = stateStore.getStaleMaterialRefreshContext(command.payload.materialId);
         if (context === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "This Material does not require a Parse Refresh Choice.");
@@ -377,11 +398,31 @@ function startMaterialWatcher(projectId: string): void {
     if (current.path === project.path) return;
     current.watcher.close();
     if (current.timer !== undefined) clearTimeout(current.timer);
+    if (current.contextTimer !== undefined) clearTimeout(current.contextTimer);
   }
   try {
-    const watcher = watch(project.path, { recursive: true }, () => {
+    const watcher = watch(project.path, { recursive: true }, (_eventType, filename) => {
       const state = materialWatchers.get(projectId);
       if (state === undefined) return;
+      const relative = filename?.toString().replace(/\\/gu, "/").toLowerCase();
+      if (relative === "outputs/system/project-context.md") {
+        if (state.contextTimer !== undefined) clearTimeout(state.contextTimer);
+        state.contextTimer = setTimeout(() => {
+          const currentProject = stateStore?.getProject(projectId);
+          if (currentProject === undefined) return;
+          try {
+            const document = projectContexts.rebuildIfExists(projectId, currentProject.path);
+            if (document === undefined) return;
+            if (ownProjectContextWrites.get(projectId) === document.sourceHash) {
+              ownProjectContextWrites.delete(projectId);
+              return;
+            }
+            emit({ ...eventMetadata(randomUUID()), event: "project.context.updated", payload: { document, source: "external_edit" } });
+          } catch {
+            // The next stable write or explicit load retries deterministic mirror rebuild.
+          }
+        }, 750);
+      }
       if (state.timer !== undefined) clearTimeout(state.timer);
       state.timer = setTimeout(() => {
         void refreshProjectInventory(randomUUID(), projectId, true).catch(() => undefined);
@@ -1265,7 +1306,19 @@ app.whenReady().then(() => {
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));
-  capabilityRegistry.register(createUnavailableCoreRecallCapability("project_state_recall", ["project"]));
+  capabilityRegistry.register(createProjectStateRecallCapability(async (input, context) => {
+    const scope = context.request.scope;
+    if (scope.kind !== "project") throw new Error("Project Context recall requires a Project scope.");
+    const project = stateStore!.getProject(scope.projectId);
+    if (project === undefined) throw new Error("Project is unavailable.");
+    const source = new ProjectContextRecallSource({ load: () => projectContexts.load(project.id, project.path, false) });
+    const envelope = await source.recall(
+      { ...(input.sectionIds === undefined ? {} : { sectionIds: input.sectionIds }), ...(input.query === undefined ? {} : { query: input.query }) },
+      { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
+    );
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
   capabilityRegistry.register(createUnavailableCoreRecallCapability("memory_recall", ["unscoped", "project"]));
   const publicWeb = new PublicWebRecallSource();
   capabilityRegistry.register(createWebSearchCapability(async (input, context) => {
@@ -1308,6 +1361,7 @@ app.on("before-quit", () => {
   for (const state of materialWatchers.values()) {
     state.watcher.close();
     if (state.timer !== undefined) clearTimeout(state.timer);
+    if (state.contextTimer !== undefined) clearTimeout(state.contextTimer);
   }
   materialWatchers.clear();
   workerSupervisor = null;

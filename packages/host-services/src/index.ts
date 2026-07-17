@@ -16,6 +16,7 @@ export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMater
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
 export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, type BoundedRecallEnvelope, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
 export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
+export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextStore, parseProjectContext, type ProjectContextDocument, type ProjectContextRecallAccess, type ProjectContextRecallItem, type ProjectContextRecallQuery, type ProjectContextSection, type ProjectContextWarning } from "./project-context.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

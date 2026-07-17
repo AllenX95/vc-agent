@@ -272,6 +272,37 @@ export function createMaterialRecallCapability(
   };
 }
 
+const projectStateRecallInputSchema = z.object({
+  source: z.enum(["project_context", "project_memory"]).default("project_context"),
+  sectionIds: z.array(z.string().trim().min(1).max(100)).max(6).optional(),
+  query: z.string().trim().max(500).optional(),
+  maxItems: z.number().int().min(1).max(6).default(6),
+  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+});
+
+export function createProjectStateRecallCapability(
+  recall: (input: z.infer<typeof projectStateRecallInputSchema>, context: CapabilityExecutionContext) => Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>
+): CapabilityDefinition<z.infer<typeof projectStateRecallInputSchema>> {
+  return {
+    metadata: {
+      id: "project_state_recall", version: "1.0.0", label: "Recall project state",
+      description: "Recall bounded, separately labelled sections from Project Context or Project Memory without loading Materials or other source classes.",
+      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { source: { enum: ["project_context", "project_memory"] }, sectionIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } } },
+      outputSchema: { type: "object", properties: { sourceClass: { const: "project_state" }, disclosureLevel: { const: "sections" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "items", "warnings", "contextReference"] }
+    },
+    inputSchema: projectStateRecallInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      if (input.source === "project_memory") {
+        return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "Project Memory is not implemented yet; no data was loaded." };
+      }
+      const recalled = await recall(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
+    }
+  };
+}
+
 export function createUnavailableCoreRecallCapability(id: "project_state_recall" | "memory_recall", allowedScopes: Array<"unscoped" | "project">): CapabilityDefinition {
   return {
     metadata: {

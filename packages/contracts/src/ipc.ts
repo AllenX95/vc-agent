@@ -104,6 +104,29 @@ export const materialInventoryItemSchema = z.object({
 });
 export type MaterialInventoryItem = z.infer<typeof materialInventoryItemSchema>;
 
+export const projectContextDocumentSchema = z.object({
+  schemaVersion: z.literal(1),
+  projectId: z.string().uuid(),
+  markdownPath: z.literal("outputs/system/project-context.md"),
+  mirrorPath: z.literal("outputs/system/project-context.json"),
+  content: z.string().max(100_000),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  updatedAt: z.string().datetime(),
+  sections: z.array(z.object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    content: z.string(),
+    startLine: z.number().int().positive(),
+    endLine: z.number().int().positive()
+  })),
+  warnings: z.array(z.object({
+    code: z.enum(["MISSING_TITLE", "MISSING_SECTION", "UNKNOWN_SECTION", "DUPLICATE_SECTION"]),
+    message: z.string().min(1),
+    line: z.number().int().positive().optional()
+  }))
+});
+export type ProjectContextDocument = z.infer<typeof projectContextDocumentSchema>;
+
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
@@ -204,6 +227,13 @@ const listProjectMaterialsCommandSchema = commandMetadataSchema.extend({
 const refreshProjectMaterialsCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.material.refresh"), payload: z.object({ projectId: z.string().uuid() })
 });
+const loadProjectContextCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.context.load"), payload: z.object({ projectId: z.string().uuid() })
+});
+const saveProjectContextCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.context.save"),
+  payload: z.object({ projectId: z.string().uuid(), content: z.string().max(100_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
+});
 const needMaterialCommandSchema = commandMetadataSchema.extend({
   command: z.literal("material.need"), payload: z.object({ materialId: z.string().uuid() })
 });
@@ -277,6 +307,8 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   resolveProjectCollisionCommandSchema,
   listProjectMaterialsCommandSchema,
   refreshProjectMaterialsCommandSchema,
+  loadProjectContextCommandSchema,
+  saveProjectContextCommandSchema,
   needMaterialCommandSchema,
   parseMaterialCommandSchema,
   resolveParseRefreshCommandSchema,
@@ -513,6 +545,10 @@ const physicalContextRebuiltEventSchema = eventMetadataSchema.extend({
     retainedTurnCount: z.number().int().nonnegative()
   })
 });
+const projectContextEventSchema = eventMetadataSchema.extend({
+  event: z.enum(["project.context.loaded", "project.context.updated"]),
+  payload: z.object({ document: projectContextDocumentSchema, source: z.enum(["lazy_create", "load", "user_save", "external_edit"]) })
+});
 const threadCompactionEventSchema = eventMetadataSchema.extend({
   event: z.enum(["thread.compaction.started", "thread.compaction.completed", "thread.compaction.failed"]),
   payload: z.object({
@@ -585,6 +621,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   turnInterruptedEventSchema,
   turnStopRequestedEventSchema,
   physicalContextRebuiltEventSchema,
+  projectContextEventSchema,
   threadCompactionEventSchema,
   capabilityConfirmationRequiredEventSchema,
   capabilityExecutionUpdatedEventSchema

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createBootstrapCommand,
   createCommand,
@@ -9,6 +9,7 @@ import {
   type MaterialInventoryItem,
   type ModelProfile,
   type Project,
+  type ProjectContextDocument,
   type PromptContribution,
   type ProviderFailure,
   type SystemPromptRevision,
@@ -88,6 +89,10 @@ export function App() {
   const [materialsByProject, setMaterialsByProject] = useState<Record<string, MaterialInventoryItem[]>>({});
   const [parseRefreshChoice, setParseRefreshChoice] = useState<Extract<HostEvent, { event: "material.parse.refresh.choice.required" }> | null>(null);
   const [materialParseState, setMaterialParseState] = useState<Record<string, string>>({});
+  const [projectPanelTab, setProjectPanelTab] = useState<"overview" | "context">("overview");
+  const [contextDocuments, setContextDocuments] = useState<Record<string, ProjectContextDocument>>({});
+  const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
+  const contextDirty = useRef<Record<string, boolean>>({});
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -113,6 +118,18 @@ export function App() {
       case "project.identity.collision": setProjectCollision(event); break;
       case "project.materials.listed":
       case "project.materials.updated": setMaterialsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.materials })); break;
+      case "project.context.loaded":
+      case "project.context.updated": {
+        const projectId = event.payload.document.projectId;
+        if (event.payload.source === "external_edit" && contextDirty.current[projectId] === true) {
+          setDiagnostic(localDiagnostic("Project Context changed outside vc-agent while this panel has unsaved edits. Reload to use the external version, or preserve your draft elsewhere before reloading."));
+          break;
+        }
+        contextDirty.current[projectId] = false;
+        setContextDocuments((current) => ({ ...current, [projectId]: event.payload.document }));
+        setContextDrafts((current) => ({ ...current, [projectId]: event.payload.document.content }));
+        break;
+      }
       case "material.parse.refresh.choice.required": setParseRefreshChoice(event); break;
       case "material.parse.refresh.choice.resolved": setParseRefreshChoice(null); break;
       case "material.parse.started": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: "Parsing..." })); break;
@@ -263,6 +280,7 @@ export function App() {
 
   const selectThread = (threadId: string) => {
     setActiveThreadId(threadId);
+    setProjectPanelTab("overview");
     setView("workspace");
     void invoke(createCommand({ command: "thread.trajectory.load", payload: { threadId } }));
   };
@@ -300,6 +318,28 @@ export function App() {
 
   const resolveConfirmation = (requestId: string, approved: boolean) => {
     void invoke(createCommand({ command: "capability.confirmation.resolve", payload: { requestId, approved } }));
+  };
+
+  const openProjectContext = () => {
+    if (activeThread?.scope !== "project") return;
+    setProjectPanelTab("context");
+    if (contextDocuments[activeThread.projectId] === undefined) {
+      void invoke(createCommand({ command: "project.context.load", payload: { projectId: activeThread.projectId } }));
+    }
+  };
+
+  const reloadProjectContext = () => {
+    if (activeThread?.scope !== "project") return;
+    contextDirty.current[activeThread.projectId] = false;
+    void invoke(createCommand({ command: "project.context.load", payload: { projectId: activeThread.projectId } }));
+  };
+
+  const saveProjectContext = () => {
+    if (activeThread?.scope !== "project") return;
+    const document = contextDocuments[activeThread.projectId];
+    const content = contextDrafts[activeThread.projectId];
+    if (document === undefined || content === undefined) return;
+    void invoke(createCommand({ command: "project.context.save", payload: { projectId: activeThread.projectId, content, expectedSourceHash: document.sourceHash } }));
   };
 
   return (
@@ -384,12 +424,34 @@ export function App() {
       </main>
 
       <aside className="right-panel" aria-label="Project state">
-        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className="active" role="tab" aria-selected="true">Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" role="tab" disabled>Context</button><button type="button" role="tab" disabled>Memory</button></div>
-        {activeThread?.scope === "project" ? <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
+        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" role="tab" disabled>Memory</button></div>
+        {activeThread?.scope === "project" ? projectPanelTab === "context" ? <ProjectContextPanel
+          document={contextDocuments[activeThread.projectId]}
+          draft={contextDrafts[activeThread.projectId]}
+          onChange={(content) => { contextDirty.current[activeThread.projectId] = true; setContextDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }}
+          onReload={reloadProjectContext}
+          onSave={saveProjectContext}
+        /> : <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
         <div className="status-strip"><span><span className="status-dot" /> Host ready</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>
   );
+}
+
+function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {
+  document: ProjectContextDocument | undefined;
+  draft: string | undefined;
+  onChange(content: string): void;
+  onReload(): void;
+  onSave(): void;
+}) {
+  if (document === undefined || draft === undefined) return <div className="context-panel"><p>Loading Project Context...</p></div>;
+  return <div className="context-panel">
+    <div className="context-heading"><div><h2>Project Context</h2><span>{new Date(document.updatedAt).toLocaleString()}</span></div><button className="section-action" type="button" title="Reload context" aria-label="Reload context" onClick={onReload}><RefreshCw size={14} /></button></div>
+    {document.warnings.length > 0 && <div className="context-warnings" role="status">{document.warnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}</div>}
+    <textarea aria-label="Project Context" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" />
+    <button className="primary-button context-save" type="button" onClick={onSave}>Save Context</button>
+  </div>;
 }
 
 function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke }: {
