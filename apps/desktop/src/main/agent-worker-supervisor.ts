@@ -84,7 +84,21 @@ export class AgentWorkerSupervisor {
         }
         this.#providerRequests += 1;
       }
-      if (parsed.data.event === "turn.completed" || parsed.data.event === "turn.failed" || parsed.data.event === "turn.interrupted") {
+      if (parsed.data.event === "thread.compaction.started") {
+        if (!record.sessionStarted) {
+          record.sessionStarted = true;
+          this.#piSessionsStarted += 1;
+        }
+        this.#providerRequests += 1;
+      }
+      if (
+        parsed.data.event === "turn.completed" ||
+        parsed.data.event === "turn.failed" ||
+        parsed.data.event === "turn.interrupted" ||
+        (record.activeCommand?.compactOnly === true && (
+          parsed.data.event === "thread.compaction.completed" || parsed.data.event === "thread.compaction.failed"
+        ))
+      ) {
         delete record.activeCommand;
       }
       this.#onEvent(parsed.data);

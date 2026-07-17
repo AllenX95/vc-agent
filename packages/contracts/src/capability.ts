@@ -49,13 +49,37 @@ export const artifactRecordSchema = z.object({
 });
 export type ArtifactRecord = z.infer<typeof artifactRecordSchema>;
 
+export const contextReferenceSchema = z.object({
+  schemaVersion: z.literal(1),
+  sourceClass: z.enum(["material", "project_state", "memory", "web", "mcp"]),
+  sourceId: z.string().min(1),
+  label: z.string().min(1),
+  sourceRange: z.string().min(1),
+  contentVersion: z.string().min(1).optional(),
+  originatingTool: z.string().min(1),
+  originatingTurnId: z.string().min(1),
+  retrievedAt: z.string().datetime(),
+  status: z.enum(["active", "stale", "changed", "deleted", "source_unavailable"])
+});
+export type ContextReference = z.infer<typeof contextReferenceSchema>;
+
+export const retrievalPayloadMetadataSchema = z.object({
+  payloadId: z.string().uuid(),
+  retention: z.literal("turn_scoped"),
+  bodyBytes: z.number().int().nonnegative(),
+  contextReference: contextReferenceSchema
+});
+export type RetrievalPayloadMetadata = z.infer<typeof retrievalPayloadMetadataSchema>;
+
 export const capabilityExecutionResultSchema = z.object({
   schemaVersion: z.literal(IPC_SCHEMA_VERSION),
   requestId: z.string().min(1),
   status: z.enum(["completed", "rejected", "failed", "unknown_outcome"]),
   content: z.string().max(20_000),
   code: z.string().min(1).optional(),
-  artifact: artifactRecordSchema.optional()
+  artifact: artifactRecordSchema.optional(),
+  activatedCapabilities: z.array(z.string().min(1)).optional(),
+  retrieval: retrievalPayloadMetadataSchema.optional()
 });
 export type CapabilityExecutionResult = z.infer<typeof capabilityExecutionResultSchema>;
 
@@ -68,4 +92,3 @@ export const actionProposalSchema = z.object({
   expectedEffect: z.string().min(1)
 });
 export type ActionProposal = z.infer<typeof actionProposalSchema>;
-

@@ -207,4 +207,74 @@ describe("real Pi SDK tracer", () => {
     expect(events.at(-1)).toBe("completed");
     handle.dispose();
   });
+
+  it("activates a requested recall capability within the same Pi turn", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-dynamic-capability-"));
+    temporaryDirectories.push(cwd);
+    const requested: string[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        capabilityProxy: async (_toolCallId, capabilityId) => {
+          requested.push(capabilityId);
+          if (capabilityId === "capability_request") {
+            return { schemaVersion: 1, requestId: "request-activation", status: "completed", content: "Activated material_recall", activatedCapabilities: ["material_recall"] };
+          }
+          return { schemaVersion: 1, requestId: "request-recall", status: "completed", content: "bounded material result" };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("capability_request", { need: "Read project materials", capabilityId: "material_recall" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("material_recall", { disclosureLevel: "cards" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("I inspected the available material cards.")
+      ],
+      onEvent: () => {}
+    });
+
+    await handle.submit("Inspect the project materials.", { activeCapabilities: ["capability_request"] });
+    expect(requested).toEqual(["capability_request", "material_recall"]);
+    handle.dispose();
+  });
+
+  it("rebuilds retired retrievals as source references without their bodies", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-context-reference-"));
+    temporaryDirectories.push(cwd);
+    const model = (await listKnownPiModels())[0]!;
+    const handle = await createPiSession(
+      {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [{
+          user: "Review the material.",
+          assistant: "I found one risk.",
+          status: "completed",
+          contextReferences: [{
+            schemaVersion: 1,
+            sourceClass: "material",
+            sourceId: "material-1",
+            label: "company.md",
+            sourceRange: "paragraph-4",
+            contentVersion: "a".repeat(64),
+            originatingTool: "material_recall",
+            originatingTurnId: "turn-1",
+            retrievedAt: "2026-07-17T00:00:00.000Z",
+            status: "active"
+          }]
+        }],
+        profile: { provider: model.provider, model: model.model, apiKey: "reference-secret" },
+        resources,
+        extensions
+      },
+      () => {}
+    );
+    const physical = readFileSync(handle.sessionFile, "utf8");
+    expect(physical).toContain("vc-agent.context-references");
+    expect(physical).toContain("paragraph-4");
+    expect(physical).not.toContain("FULL RETRIEVAL BODY");
+    handle.dispose();
+  });
 });

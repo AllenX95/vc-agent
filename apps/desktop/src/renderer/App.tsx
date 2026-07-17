@@ -22,6 +22,7 @@ import {
   Folder,
   KeyRound,
   MessageSquare,
+  Minimize2,
   PanelRight,
   Plus,
   RefreshCw,
@@ -177,6 +178,15 @@ export function App() {
       case "physical_context.rebuilt":
         setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Physical context rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`));
         break;
+      case "thread.compaction.started":
+        setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Thread compaction started (${event.payload.reason}).`));
+        break;
+      case "thread.compaction.completed":
+        setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Thread compaction completed: ${event.payload.tokensBefore ?? 0} -> ${event.payload.estimatedTokensAfter ?? "estimated"} tokens.`));
+        break;
+      case "thread.compaction.failed":
+        setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `Thread compaction failed: ${event.payload.failure?.message ?? "Provider failure"}`));
+        break;
       case "system_prompt.updated":
         setConversations((current) => appendSystemEvent(current, event.payload.threadId, event.payload.turnId, `System prompt updated: ${event.payload.previousRevisionId.slice(0, 8)} -> ${event.payload.nextRevisionId.slice(0, 8)}`));
         break;
@@ -270,6 +280,11 @@ export function App() {
     void invoke(createCommand({ command: "turn.stop", payload: { threadId: activeThreadId, turnId: activeTurn.turnId } }));
   };
 
+  const compact = () => {
+    if (activeThreadId === null || hasActiveTurn) return;
+    void invoke(createCommand({ command: "thread.compact", payload: { threadId: activeThreadId } }));
+  };
+
   const resolveProfileChange = (action: "continue_current_thread" | "start_new_thread") => {
     if (profileChange === null) return;
     void invoke(createCommand({
@@ -361,6 +376,7 @@ export function App() {
               </select>
               <span className="output-location" title={activeThread.scope === "unscoped" ? activeThread.outputLocation : projects.find((project) => project.id === activeThread.projectId)?.path}>{activeThread.scope === "unscoped" ? activeThread.outputLocation ?? "No output location" : "Project scoped"}</span>
               {bootstrap?.accessMode === "full" && <span className="full-access-indicator">Full access</span>}
+              <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={hasActiveTurn || activeProfile === undefined || items.length === 0}><Minimize2 size={15} /></button>
               {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0}><Send size={16} /></button>}
             </div>
           </form>

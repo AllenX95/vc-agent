@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
 import {
   IPC_SCHEMA_VERSION,
+  canonicalParseSchema,
   hostCommandSchema,
   type ActorRef,
   type CapabilityExecutionRequest,
@@ -20,8 +21,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, createTextOutputCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, ProjectIdentityStore, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { CapabilityGateway, detectOutputIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectIdentityStore, retrievalMetadata, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -44,10 +45,11 @@ interface TurnContext {
   readonly text: string;
   readonly profile: ModelProfile;
   readonly outputIntent: boolean;
-  readonly activeCapabilities: readonly string[];
+  readonly activeCapabilities: string[];
   readonly expectedStateVersion: number;
   readonly promptRevision: SystemPromptRevision;
   readonly retryOfTurnId?: string;
+  readonly compactionOnly?: true;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -266,6 +268,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "turn.submit":
         return submitTurn(command.correlationId, command.payload);
+      case "thread.compact":
+        return compactThread(command.correlationId, command.payload.threadId);
       case "turn.stop": {
         const context = turnContexts.get(command.payload.turnId);
         if (context === undefined || context.threadId !== command.payload.threadId) {
@@ -572,7 +576,8 @@ function submitTurn(
   }
   const outputIntent = detectOutputIntent(input.text);
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
-  const activeCapabilities = outputIntent && thread.scope === "unscoped" ? ["output.write_text"] : [];
+  const activeCapabilities = [...coreCapabilitiesForScope(thread.scope)];
+  if (outputIntent && thread.scope === "unscoped") activeCapabilities.push("output.write_text");
   const physical = stateStore!.getPhysicalContext(input.threadId);
   if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
   const promptRevision = loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision();
@@ -702,6 +707,8 @@ function submitTurn(
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
     contextHistory,
+    estimatedInputTokens: Object.values(promptTelemetry.contributions).reduce((sum, value) => sum + value, 0),
+    currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
     executionScope: thread.scope === "project"
@@ -730,6 +737,72 @@ function submitTurn(
   };
 }
 
+function compactThread(correlationId: string, threadId: string): HostEvent {
+  const thread = stateStore!.getThread(threadId);
+  if (thread === undefined) throw new Error("Thread not found");
+  if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before compacting this Thread.");
+  const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
+  if (profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Model Profile not configured");
+  if (thread.scope === "project" && !stateStore!.isProjectProfileAuthorized(thread.projectId, profile.id)) {
+    return diagnostic(correlationId, "HOST_FAILURE", "Select this Model Profile in the Project Thread to authorize its Provider.");
+  }
+  const promptRevision = stateStore!.getActiveSystemPromptRevision();
+  if (promptRevision === undefined) throw new Error("System Prompt is not initialized");
+  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
+  if (encrypted === undefined) throw new Error("Credential reference is unavailable");
+  const turnId = randomUUID();
+  const contextHistory = trajectoryStore!.contextHistory(threadId);
+  const physical = stateStore!.getPhysicalContext(threadId);
+  const context: TurnContext = {
+    correlationId,
+    threadId,
+    turnId,
+    text: "",
+    profile,
+    outputIntent: false,
+    activeCapabilities: [],
+    expectedStateVersion: thread.stateVersion,
+    promptRevision,
+    compactionOnly: true
+  };
+  turnContexts.set(turnId, context);
+  activeTurnByThread.set(threadId, turnId);
+  const started: TrajectoryEvent = {
+    ...trajectoryMetadata(correlationId, threadId, turnId, USER_ACTOR, USER_PROVENANCE),
+    event: "thread.compaction.started",
+    payload: { reason: "manual" }
+  };
+  trajectoryStore!.append(started);
+  const command: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1,
+    command: "turn.execute",
+    compactOnly: true,
+    commandId: randomUUID(),
+    correlationId,
+    threadId,
+    turnId,
+    cwd: thread.scope === "project" ? stateStore!.getProject(thread.projectId)!.path : app.getPath("userData"),
+    threadDirectory: trajectoryStore!.threadDirectory(threadId),
+    ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
+    ...(trajectoryStore!.highWater(threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(threadId)! }),
+    contextHistory,
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(JSON.stringify(contextHistory)),
+    currentInputTokens: estimateTokens(promptRevision.content),
+    activeCapabilities: [],
+    expectedStateVersion: thread.stateVersion,
+    executionScope: thread.scope === "project" ? { kind: "project", projectId: thread.projectId } : { kind: "unscoped", threadId },
+    prompt: "Manual Thread Compaction",
+    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [] },
+    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+  };
+  void workerSupervisor!.execute(command).catch(() => {
+    finishTurn(context);
+    emit(diagnostic(correlationId, "HOST_FAILURE", "Agent Worker exited during Thread compaction."));
+  });
+  return { ...ipcMetadata(started), event: "thread.compaction.started", payload: { threadId, turnId, reason: "manual" } };
+}
+
 function handleWorkerEvent(workerEvent: WorkerEvent): void {
   if (workerEvent.event === "trajectory.acknowledged") {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
@@ -740,6 +813,33 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
 
   if (workerEvent.event === "capability.execution.requested") {
     void processCapabilityRequest(context, workerEvent);
+    return;
+  }
+
+  if (
+    workerEvent.event === "thread.compaction.started" ||
+    workerEvent.event === "thread.compaction.completed" ||
+    workerEvent.event === "thread.compaction.failed"
+  ) {
+    if (context.compactionOnly === true && workerEvent.event === "thread.compaction.started") return;
+    const payload = {
+      reason: workerEvent.reason,
+      ...(workerEvent.event === "thread.compaction.completed" ? {
+        tokensBefore: workerEvent.tokensBefore,
+        ...(workerEvent.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: workerEvent.estimatedTokensAfter })
+      } : {}),
+      ...(workerEvent.event === "thread.compaction.failed" ? { failure: workerEvent.failure } : {})
+    };
+    const record: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+      event: workerEvent.event,
+      payload
+    };
+    trajectoryStore!.append(record);
+    if (workerEvent.event === "thread.compaction.completed") loadedPromptByThread.delete(context.threadId);
+    if (workerEvent.event === "thread.compaction.completed") acknowledgeTrajectory(context, record);
+    emit({ ...ipcMetadata(record), event: workerEvent.event, payload: { threadId: context.threadId, turnId: context.turnId, ...payload } });
+    if (context.compactionOnly === true && workerEvent.event !== "thread.compaction.started") finishTurn(context);
     return;
   }
 
@@ -894,6 +994,11 @@ function finalizeCapability(
   emitToRenderer: boolean
 ): HostEvent {
   let result = initialResult;
+  if (result.activatedCapabilities !== undefined) {
+    for (const capabilityId of result.activatedCapabilities) {
+      if (!context.activeCapabilities.includes(capabilityId)) context.activeCapabilities.push(capabilityId);
+    }
+  }
   if (result.artifact !== undefined) {
     try {
       stateStore!.recordArtifact(result.artifact);
@@ -919,7 +1024,8 @@ function finalizeCapability(
       toolCallId: request.toolCallId,
       capabilityId: request.capabilityId,
       summary: result.content,
-      artifactIds: result.artifact === undefined ? [] : [result.artifact.id]
+      artifactIds: result.artifact === undefined ? [] : [result.artifact.id],
+      ...(result.retrieval === undefined ? {} : { contextReference: result.retrieval.contextReference })
     }
   };
   trajectoryStore!.append(terminal);
@@ -991,6 +1097,22 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
 }
 
 function summarizeCapabilityArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
+  if (typeof arguments_.disclosureLevel === "string") {
+    return {
+      disclosureLevel: arguments_.disclosureLevel,
+      materialId: typeof arguments_.materialId === "string" ? arguments_.materialId : "",
+      blockCount: Array.isArray(arguments_.blockIds) ? arguments_.blockIds.length : 0,
+      queryChars: typeof arguments_.query === "string" ? arguments_.query.length : 0,
+      maxItems: typeof arguments_.maxItems === "number" ? arguments_.maxItems : undefined,
+      maxChars: typeof arguments_.maxChars === "number" ? arguments_.maxChars : undefined
+    };
+  }
+  if (typeof arguments_.need === "string") {
+    return {
+      capabilityId: typeof arguments_.capabilityId === "string" ? arguments_.capabilityId : "",
+      needChars: arguments_.need.length
+    };
+  }
   const content = typeof arguments_.content === "string" ? arguments_.content : "";
   return {
     path: typeof arguments_.path === "string" ? arguments_.path : "",
@@ -1089,6 +1211,51 @@ app.whenReady().then(() => {
   stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
+  capabilityRegistry.register(createCapabilityBroker((input, context) => {
+    const requested = input.capabilityId === undefined ? undefined : capabilityRegistry?.get(input.capabilityId)?.metadata;
+    if (requested === undefined || requested.activationClass !== "ordinary_task" || !requested.allowedScopes.includes(context.request.scope.kind)) return [];
+    return [requested.id];
+  }));
+  capabilityRegistry.register(createMaterialRecallCapability(async (input, context) => {
+    const scope = context.request.scope;
+    if (scope.kind === "project" && input.materialId !== undefined) {
+      const refresh = stateStore!.getStaleMaterialRefreshContext(input.materialId);
+      if (refresh !== undefined) {
+        emit({
+          ...eventMetadata(context.request.correlationId, context.request.threadId, HOST_ACTOR, HOST_PROVENANCE),
+          event: "material.parse.refresh.choice.required",
+          payload: { ...refresh, currentSourceHash: refresh.material.sourceHash }
+        });
+      }
+    }
+    const source = new MaterialRecallSource({
+      listMaterials: () => scope.kind === "project" ? stateStore!.listMaterials(scope.projectId) : [],
+      loadParse: async (materialId) => {
+        if (scope.kind !== "project") return undefined;
+        let parsed = stateStore!.getCurrentParsedMaterial(materialId);
+        if (parsed === undefined) {
+          const parsedEvent = await parseMaterial(context.request.correlationId, materialId);
+          if (parsedEvent.event !== "material.parse.completed") return undefined;
+          parsed = stateStore!.getCurrentParsedMaterial(materialId);
+        }
+        const project = stateStore!.getProject(scope.projectId);
+        if (parsed === undefined || project === undefined) return undefined;
+        try { return canonicalParseSchema.parse(JSON.parse(readFileSync(join(project.path, parsed.artifact_path), "utf8"))); }
+        catch { return undefined; }
+      }
+    });
+    const query = {
+      disclosureLevel: input.disclosureLevel,
+      ...(input.materialId === undefined ? {} : { materialId: input.materialId }),
+      ...(input.blockIds === undefined ? {} : { blockIds: input.blockIds }),
+      ...(input.query === undefined ? {} : { query: input.query })
+    };
+    const envelope = await source.recall(query, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
+  capabilityRegistry.register(createUnavailableCoreRecallCapability("project_state_recall", ["project"]));
+  capabilityRegistry.register(createUnavailableCoreRecallCapability("memory_recall", ["unscoped", "project"]));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
   for (const project of stateStore.listProjects()) {

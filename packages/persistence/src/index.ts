@@ -478,6 +478,16 @@ export class HostStateStore {
     `).get(materialId, material.sourceHash, parserId) as ParsedMaterialRow | undefined;
   }
 
+  getCurrentParsedMaterial(materialId: string): ParsedMaterialRow | undefined {
+    const material = this.getMaterial(materialId);
+    if (material === undefined) return undefined;
+    return this.#database.prepare(`
+      SELECT * FROM parsed_material_versions
+      WHERE material_id = ? AND source_hash = ? AND status = 'active'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(materialId, material.sourceHash) as ParsedMaterialRow | undefined;
+  }
+
   completeParseRefresh(requestId: string, parseId: string, parserId: string, artifactPath: string): { parseId: string; replacedArtifactPath?: string } {
     const request = this.#database.prepare(`
       SELECT id, material_id, prior_parse_id, choice FROM parse_refresh_requests WHERE id = ? AND status = 'pending_parse'

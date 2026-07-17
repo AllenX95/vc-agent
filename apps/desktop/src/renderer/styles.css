@@ -96,6 +96,8 @@ button { font: inherit; letter-spacing: 0; }
 .send-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: #294a37; color: #fff; }
 .send-button:disabled { background: #d9ddd8; color: #8c938d; }
 .stop-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: #78483c; color: #fff; }
+.compact-thread-button { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #ccd2cb; border-radius: 6px; background: #fff; color: #4f5c53; }
+.compact-thread-button:disabled { color: #a7ada8; background: #f2f4f1; }
 .profile-change { margin: 12px 0 20px; padding: 13px 14px; border: 1px solid #c9cec8; border-radius: 7px; background: #f4f6f2; white-space: normal; }
 .profile-change strong, .profile-change p, .profile-change span { display: block; }
 .profile-change p { margin: 4px 0; color: #3d4940; font-size: 11px; }

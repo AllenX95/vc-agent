@@ -18,6 +18,10 @@ let sessionProfileKey: string | null = null;
 let activeCommand: ExecuteCommand | null = null;
 let stopRequested = false;
 let interruptionSent = false;
+let retrievalUsed = false;
+let compactionUsed = false;
+let retireSessionBeforeNextTurn = false;
+let retirementRequiresRebuild = false;
 const sequenceByTurn = new Map<string, number>();
 const capabilityResolvers = new Map<string, (result: CapabilityExecutionResult) => void>();
 
@@ -57,9 +61,18 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
     });
     return;
   }
+  if (retireSessionBeforeNextTurn && session !== null) {
+    session.dispose();
+    session = null;
+    sessionProfileKey = null;
+    retireSessionBeforeNextTurn = false;
+    retirementRequiresRebuild = false;
+  }
   activeCommand = command;
   stopRequested = false;
   interruptionSent = false;
+  retrievalUsed = false;
+  compactionUsed = false;
   let failureSent = false;
   try {
     const profileKey = `${command.profile.provider}\u0000${command.profile.model}`;
@@ -92,6 +105,24 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
               ...(event.responseId === undefined ? {} : { responseId: event.responseId }),
               ...(event.piEntryId === undefined ? {} : { piEntryId: event.piEntryId })
             });
+          } else if (event.type === "compaction_started") {
+            send({ ...workerMetadata(command), event: "thread.compaction.started", reason: event.reason });
+          } else if (event.type === "compaction_completed") {
+            compactionUsed = true;
+            send({
+              ...workerMetadata(command),
+              event: "thread.compaction.completed",
+              reason: event.reason,
+              tokensBefore: event.tokensBefore,
+              ...(event.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.estimatedTokensAfter })
+            });
+          } else if (event.type === "compaction_failed") {
+            send({
+              ...workerMetadata(command),
+              event: "thread.compaction.failed",
+              reason: event.reason,
+              failure: sanitizeProviderFailure(new Error(event.message), command.profile)
+            });
           } else if (!stopRequested) {
             failureSent = true;
             send({
@@ -115,6 +146,29 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       sendInterrupted(command, "user_stop");
       return;
     }
+    if (command.compactOnly === true) {
+      await session.compact("manual");
+      return;
+    }
+    const usableContextTokens = Math.max(0, session.contextWindow - session.maxOutputTokens - 2_048);
+    if (command.currentInputTokens > usableContextTokens) {
+      failureSent = true;
+      send({
+        ...workerMetadata(command),
+        event: "turn.failed",
+        failure: {
+          kind: "worker",
+          code: "CURRENT_INPUT_EXCEEDS_CONTEXT_BUDGET",
+          message: "The current explicit input exceeds this Model Profile's usable context. Narrow the requested material range or choose a larger-context Profile.",
+          provider: command.profile.provider,
+          model: command.profile.model
+        }
+      });
+      return;
+    }
+    if (command.estimatedInputTokens > usableContextTokens && command.contextHistory.length > 0) {
+      await session.compact("threshold");
+    }
     send({ ...workerMetadata(command), event: "turn.started" });
     await session.submit(command.prompt, { activeCapabilities: command.activeCapabilities });
     if (stopRequested) sendInterrupted(command, "user_stop");
@@ -128,6 +182,10 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       });
     }
   } finally {
+    if (retrievalUsed || compactionUsed) {
+      retireSessionBeforeNextTurn = true;
+      retirementRequiresRebuild = retrievalUsed;
+    }
     activeCommand = null;
     stopRequested = false;
   }
@@ -149,6 +207,7 @@ function sendInterrupted(command: ExecuteCommand, reason: "user_stop" | "provide
 
 function acknowledgeTrajectory(command: Extract<WorkerCommand, { command: "trajectory.acknowledge" }>): void {
   if (session === null) return;
+  if (retirementRequiresRebuild) return;
   session.acknowledge(command.eventId, command.sequence);
   send({ ...workerMetadata(command), event: "trajectory.acknowledged", eventId: command.eventId, sequence: command.sequence });
 }
@@ -187,10 +246,14 @@ function requestCapability(
   };
   send({ ...workerMetadata(command), event: "capability.execution.requested", request });
   return new Promise((resolve) => {
-    capabilityResolvers.set(requestId, resolve);
+    const finish = (result: CapabilityExecutionResult) => {
+      if (result.retrieval !== undefined) retrievalUsed = true;
+      resolve(result);
+    };
+    capabilityResolvers.set(requestId, finish);
     const abort = () => {
       if (!capabilityResolvers.delete(requestId)) return;
-      resolve({ schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "Capability execution was interrupted." });
+      finish({ schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "Capability execution was interrupted." });
     };
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });

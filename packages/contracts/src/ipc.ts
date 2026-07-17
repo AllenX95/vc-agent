@@ -254,6 +254,10 @@ const stopTurnCommandSchema = commandMetadataSchema.extend({
   command: z.literal("turn.stop"),
   payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1) })
 });
+const compactThreadCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.compact"),
+  payload: z.object({ threadId: z.string().min(1) })
+});
 const resolveCapabilityConfirmationCommandSchema = commandMetadataSchema.extend({
   command: z.literal("capability.confirmation.resolve"),
   payload: z.object({ requestId: z.string().min(1), approved: z.boolean() })
@@ -285,6 +289,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   chooseOutputLocationCommandSchema,
   submitTurnCommandSchema,
   stopTurnCommandSchema,
+  compactThreadCommandSchema,
   resolveCapabilityConfirmationCommandSchema
 ]);
 export type HostCommand = z.infer<typeof hostCommandSchema>;
@@ -508,6 +513,17 @@ const physicalContextRebuiltEventSchema = eventMetadataSchema.extend({
     retainedTurnCount: z.number().int().nonnegative()
   })
 });
+const threadCompactionEventSchema = eventMetadataSchema.extend({
+  event: z.enum(["thread.compaction.started", "thread.compaction.completed", "thread.compaction.failed"]),
+  payload: z.object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    reason: z.enum(["manual", "threshold", "overflow"]),
+    tokensBefore: z.number().int().nonnegative().optional(),
+    estimatedTokensAfter: z.number().int().nonnegative().optional(),
+    failure: providerFailureSchema.optional()
+  })
+});
 const capabilityConfirmationRequiredEventSchema = eventMetadataSchema.extend({
   event: z.literal("capability.confirmation.required"),
   payload: z.object({
@@ -569,6 +585,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   turnInterruptedEventSchema,
   turnStopRequestedEventSchema,
   physicalContextRebuiltEventSchema,
+  threadCompactionEventSchema,
   capabilityConfirmationRequiredEventSchema,
   capabilityExecutionUpdatedEventSchema
 ]);

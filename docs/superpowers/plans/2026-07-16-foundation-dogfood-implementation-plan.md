@@ -216,14 +216,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] Project and Unscoped core tool surfaces match the accepted scope; Unscoped recall sees only direct attachments.
-- [ ] The primary Agent can activate an allowed material capability during the same Turn without a classifier model call.
-- [ ] Material retrieval uses a typed scoped recall-source interface and the common bounded-result envelope; later Memory or MCP recall sources do not require changes to Pi session orchestration.
-- [ ] Retrieval starts with cards/outlines and expands only selected blocks with stable source references.
-- [ ] Large retrieval bodies remain full only in the originating Turn and become Context References later.
-- [ ] Budget pressure retires old payloads, compacts prior conversation, and preserves explicit current input before reducing optional recall.
-- [ ] Oversized current materials are processed progressively; the Agent never claims to have read omitted content.
-- [ ] Compaction is visible, uses the effective current Profile, and never writes into Context or Memory.
+- [x] Project and Unscoped core tool surfaces match the accepted scope; Unscoped recall sees only direct attachments.
+- [x] The primary Agent can activate an allowed material capability during the same Turn without a classifier model call.
+- [x] Material retrieval uses a typed scoped recall-source interface and the common bounded-result envelope; later Memory or MCP recall sources do not require changes to Pi session orchestration.
+- [x] Retrieval starts with cards/outlines and expands only selected blocks with stable source references.
+- [x] Large retrieval bodies remain full only in the originating Turn and become Context References later.
+- [x] Budget pressure retires old payloads, compacts prior conversation, and preserves explicit current input before reducing optional recall.
+- [x] Oversized current materials are processed progressively; the Agent never claims to have read omitted content.
+- [x] Compaction is visible, uses the effective current Profile, and never writes into Context or Memory.
 
 ### D5. Perform Read-only Public Web Research
 

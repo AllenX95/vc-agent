@@ -35,11 +35,14 @@ const workerCommandBase = z.object({
 });
 const executeTurn = workerCommandBase.extend({
   command: z.literal("turn.execute"),
+  compactOnly: z.literal(true).optional(),
   cwd: z.string().min(1),
   threadDirectory: z.string().min(1),
   previousSessionFile: z.string().min(1).optional(),
   hostHighWater: z.object({ eventId: z.string().min(1), sequence: z.number().int().positive() }).optional(),
   contextHistory: z.array(physicalContextHistoryItemSchema),
+  estimatedInputTokens: z.number().int().nonnegative(),
+  currentInputTokens: z.number().int().nonnegative(),
   activeCapabilities: z.array(z.string().min(1)),
   expectedStateVersion: z.number().int().positive(),
   executionScope: z.discriminatedUnion("kind", [
@@ -99,6 +102,21 @@ const interrupted = workerEventBase.extend({
 });
 const acknowledged = workerEventBase.extend({ event: z.literal("trajectory.acknowledged"), eventId: z.string().min(1), sequence: z.number().int().positive() });
 const capabilityRequested = workerEventBase.extend({ event: z.literal("capability.execution.requested"), request: capabilityExecutionRequestSchema });
+const compactionStarted = workerEventBase.extend({
+  event: z.literal("thread.compaction.started"),
+  reason: z.enum(["manual", "threshold", "overflow"])
+});
+const compactionCompleted = workerEventBase.extend({
+  event: z.literal("thread.compaction.completed"),
+  reason: z.enum(["manual", "threshold", "overflow"]),
+  tokensBefore: z.number().int().nonnegative(),
+  estimatedTokensAfter: z.number().int().nonnegative().optional()
+});
+const compactionFailed = workerEventBase.extend({
+  event: z.literal("thread.compaction.failed"),
+  reason: z.enum(["manual", "threshold", "overflow"]),
+  failure: providerFailureSchema
+});
 
-export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, completed, failed, interrupted, acknowledged, capabilityRequested]);
+export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, completed, failed, interrupted, acknowledged, capabilityRequested, compactionStarted, compactionCompleted, compactionFailed]);
 export type WorkerEvent = z.infer<typeof workerEventSchema>;

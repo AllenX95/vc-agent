@@ -8,6 +8,7 @@ import {
   providerFailureSchema,
   usageSchema
 } from "./ipc.js";
+import { contextReferenceSchema } from "./capability.js";
 
 export const trajectoryProfileSchema = modelProfileSchema.pick({
   id: true,
@@ -83,7 +84,8 @@ const toolTerminal = trajectoryEventBase.extend({
     toolCallId: z.string().min(1),
     capabilityId: z.string().min(1),
     summary: z.string().max(20_000),
-    artifactIds: z.array(z.string().min(1))
+    artifactIds: z.array(z.string().min(1)),
+    contextReference: contextReferenceSchema.optional()
   })
 });
 const toolStarted = trajectoryEventBase.extend({
@@ -107,6 +109,15 @@ const artifactCreated = trajectoryEventBase.extend({
 const contextRebuilt = trajectoryEventBase.extend({
   event: z.literal("physical_context.rebuilt"),
   payload: z.object({ reason: z.enum(["missing", "host_ahead", "pi_ahead", "irreconcilable"]), retainedTurnCount: z.number().int().nonnegative() })
+});
+const threadCompaction = trajectoryEventBase.extend({
+  event: z.enum(["thread.compaction.started", "thread.compaction.completed", "thread.compaction.failed"]),
+  payload: z.object({
+    reason: z.enum(["manual", "threshold", "overflow"]),
+    tokensBefore: z.number().int().nonnegative().optional(),
+    estimatedTokensAfter: z.number().int().nonnegative().optional(),
+    failure: providerFailureSchema.optional()
+  })
 });
 const providerContinuation = trajectoryEventBase.extend({
   event: z.literal("provider_continuation.authorized"),
@@ -132,6 +143,7 @@ export const trajectoryEventSchema = z.discriminatedUnion("event", [
   toolTerminal,
   artifactCreated,
   contextRebuilt,
+  threadCompaction,
   providerContinuation
 ]);
 export type TrajectoryEvent = z.infer<typeof trajectoryEventSchema>;
@@ -189,6 +201,7 @@ export const physicalContextHistoryItemSchema = z.object({
   user: z.string(),
   assistant: z.string(),
   status: z.enum(["completed", "interrupted"]),
-  profile: trajectoryProfileSchema.optional()
+  profile: trajectoryProfileSchema.optional(),
+  contextReferences: z.array(contextReferenceSchema).optional()
 });
 export type PhysicalContextHistoryItem = z.infer<typeof physicalContextHistoryItemSchema>;

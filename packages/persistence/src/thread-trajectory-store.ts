@@ -16,6 +16,7 @@ import { join, resolve, sep } from "node:path";
 import {
   inflightTurnCheckpointSchema,
   trajectoryEventSchema,
+  type ContextReference,
   type InflightTurnCheckpoint,
   type PhysicalContextHistoryItem,
   type TrajectoryEvent,
@@ -229,6 +230,19 @@ export class ThreadTrajectoryStore {
           status: "completed",
           content: `Rebuilt from ${event.payload.retainedTurnCount} retained turn${event.payload.retainedTurnCount === 1 ? "" : "s"}.`
         });
+      } else if (event.event === "thread.compaction.started" || event.event === "thread.compaction.completed" || event.event === "thread.compaction.failed") {
+        activities.set(`compaction:${event.eventId}`, {
+          id: `compaction:${event.eventId}`,
+          threadId,
+          turnId: event.turnId,
+          sequence: event.sequence,
+          kind: "context",
+          label: event.event === "thread.compaction.started" ? "Thread compaction started" : event.event === "thread.compaction.completed" ? "Thread compaction completed" : "Thread compaction failed",
+          status: event.event === "thread.compaction.started" ? "started" : event.event === "thread.compaction.completed" ? "completed" : "failed",
+          content: event.event === "thread.compaction.completed"
+            ? `${event.payload.tokensBefore ?? 0} -> ${event.payload.estimatedTokensAfter ?? "estimated"} tokens`
+            : event.event === "thread.compaction.failed" ? event.payload.failure?.message ?? "Provider failure" : event.payload.reason
+        });
       } else if (event.event === "system_prompt.updated") {
         activities.set(`prompt:${event.eventId}`, {
           id: `prompt:${event.eventId}`,
@@ -246,13 +260,22 @@ export class ThreadTrajectoryStore {
   }
 
   contextHistory(threadId: string): PhysicalContextHistoryItem[] {
+    const references = new Map<string, ContextReference[]>();
+    for (const event of this.loadEvents(threadId)) {
+      if ((event.event === "tool.completed" || event.event === "tool.failed" || event.event === "tool.unknown_outcome") && event.payload.contextReference !== undefined) {
+        const current = references.get(event.turnId) ?? [];
+        current.push(event.payload.contextReference);
+        references.set(event.turnId, current);
+      }
+    }
     return this.projectTurns(threadId)
       .filter((turn): turn is TrajectoryTurn & { status: "completed" | "interrupted" } => turn.status === "completed" || turn.status === "interrupted")
       .map((turn) => ({
         user: turn.text,
         assistant: turn.assistantText,
         status: turn.status,
-        ...(turn.profile === undefined ? {} : { profile: turn.profile })
+        ...(turn.profile === undefined ? {} : { profile: turn.profile }),
+        ...((references.get(turn.turnId)?.length ?? 0) === 0 ? {} : { contextReferences: references.get(turn.turnId) })
       }));
   }
 
@@ -261,7 +284,7 @@ export class ThreadTrajectoryStore {
   }
 
   highWater(threadId: string): { eventId: string; sequence: number } | undefined {
-    const event = this.loadEvents(threadId).filter((item) => ["turn.completed", "turn.failed", "turn.interrupted"].includes(item.event)).at(-1);
+    const event = this.loadEvents(threadId).filter((item) => ["turn.completed", "turn.failed", "turn.interrupted", "thread.compaction.completed"].includes(item.event)).at(-1);
     return event === undefined ? undefined : { eventId: event.eventId, sequence: event.sequence };
   }
 }

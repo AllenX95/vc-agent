@@ -57,6 +57,12 @@ export class CapabilityRegistry {
   }
 }
 
+export function coreCapabilitiesForScope(scope: "unscoped" | "project"): readonly string[] {
+  return scope === "project"
+    ? ["capability_request", "material_recall", "project_state_recall", "memory_recall"]
+    : ["capability_request", "material_recall", "memory_recall"];
+}
+
 export class UnknownOutcomeError extends Error {
   constructor(message: string) {
     super(message);
@@ -200,6 +206,85 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
         content: `Created ${artifact.mediaType} Output at ${artifact.destination}`,
         artifact
       };
+    }
+  };
+}
+
+const capabilityRequestInputSchema = z.object({
+  need: z.string().trim().min(1).max(1_000),
+  capabilityId: z.string().trim().min(1).max(200).optional()
+});
+
+export function createCapabilityBroker(
+  resolve: (input: z.infer<typeof capabilityRequestInputSchema>, context: CapabilityExecutionContext) => readonly string[]
+): CapabilityDefinition<z.infer<typeof capabilityRequestInputSchema>> {
+  return {
+    metadata: {
+      id: "capability_request", version: "1.0.0", label: "Request capability",
+      description: "Request an allowed task capability for the current Turn. This does not execute it or grant permission.",
+      activationClass: "ordinary_task", sideEffectClass: "none", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { need: { type: "string" }, capabilityId: { type: "string" } }, required: ["need"] },
+      outputSchema: { type: "object", properties: { activatedCapabilities: { type: "array", items: { type: "string" } } }, required: ["activatedCapabilities"] }
+    },
+    inputSchema: capabilityRequestInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const activatedCapabilities = [...resolve(input, context)];
+      return {
+        schemaVersion: 1, requestId: context.request.requestId,
+        status: activatedCapabilities.length === 0 ? "failed" : "completed",
+        ...(activatedCapabilities.length === 0 ? { code: "CAPABILITY_UNAVAILABLE" } : {}),
+        content: activatedCapabilities.length === 0
+          ? "No allowed capability matches this request. No alternative capability, Provider, or permission was selected."
+          : `Activated for this Turn: ${activatedCapabilities.join(", ")}`,
+        activatedCapabilities
+      };
+    }
+  };
+}
+
+const materialRecallInputSchema = z.object({
+  disclosureLevel: z.enum(["cards", "outline", "excerpt", "full"]),
+  materialId: z.string().uuid().optional(),
+  blockIds: z.array(z.string().min(1)).max(24).optional(),
+  query: z.string().max(500).optional(),
+  maxItems: z.number().int().min(1).max(12).default(8),
+  maxChars: z.number().int().min(500).max(12_000).default(8_000)
+});
+
+export function createMaterialRecallCapability(
+  recall: (input: z.infer<typeof materialRecallInputSchema>, context: CapabilityExecutionContext) => Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>
+): CapabilityDefinition<z.infer<typeof materialRecallInputSchema>> {
+  return {
+    metadata: {
+      id: "material_recall", version: "1.0.0", label: "Recall material",
+      description: "Inspect scoped Material cards, outlines, or bounded source-referenced blocks. Expand progressively and respect omitted-content warnings.",
+      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { disclosureLevel: { enum: ["cards", "outline", "excerpt", "full"] }, materialId: { type: "string" }, blockIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } }, required: ["disclosureLevel"] },
+      outputSchema: { type: "object", properties: { sourceClass: { const: "material" }, disclosureLevel: { type: "string" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "disclosureLevel", "items", "complete", "omittedItems", "warnings", "contextReference"] }
+    },
+    inputSchema: materialRecallInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const recalled = await recall(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
+    }
+  };
+}
+
+export function createUnavailableCoreRecallCapability(id: "project_state_recall" | "memory_recall", allowedScopes: Array<"unscoped" | "project">): CapabilityDefinition {
+  return {
+    metadata: {
+      id, version: "1.0.0", label: id === "memory_recall" ? "Recall memory" : "Recall project state",
+      description: `${id} is a fixed core surface whose source implementation is not available in this slice.`,
+      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes, executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      outputSchema: { type: "object", properties: { status: { const: "unavailable" } }, required: ["status"] }
+    },
+    inputSchema: z.object({ query: z.string().max(500).optional() }),
+    inspect: () => undefined,
+    async execute(_input, context) {
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: `${id} is not implemented yet; no data was loaded.` };
     }
   };
 }

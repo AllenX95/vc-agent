@@ -44,6 +44,9 @@ export interface PiSessionConfig {
 export type PiSessionEvent =
   | { readonly type: "text_delta"; readonly delta: string }
   | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly responseId?: string; readonly piEntryId?: string }
+  | { readonly type: "compaction_started"; readonly reason: "manual" | "threshold" | "overflow" }
+  | { readonly type: "compaction_completed"; readonly reason: "manual" | "threshold" | "overflow"; readonly tokensBefore: number; readonly estimatedTokensAfter?: number }
+  | { readonly type: "compaction_failed"; readonly reason: "manual" | "threshold" | "overflow"; readonly message: string }
   | { readonly type: "failed"; readonly error: unknown };
 
 export interface PiSessionHandle {
@@ -53,7 +56,10 @@ export interface PiSessionHandle {
   readonly sessionFile: string;
   readonly reconciliation: PiSessionReconciliation;
   readonly retainedTurnCount: number;
+  readonly contextWindow: number;
+  readonly maxOutputTokens: number;
   submit(prompt: string, options?: { readonly activeCapabilities?: readonly string[] }): Promise<void>;
+  compact(reason?: "manual" | "threshold"): Promise<void>;
   abort(): Promise<void>;
   acknowledge(eventId: string, sequence: number): string;
   dispose(): void;
@@ -123,7 +129,8 @@ export async function createPiSessionUsingRuntime(
     { projectTrusted: false }
   );
   const physicalContext = reconcilePhysicalContext(config, model);
-  const customTools = config.capabilityProxy === undefined ? [] : [createTextOutputProxy(config.capabilityProxy)];
+  let sessionRef: AgentSession | undefined;
+  const customTools = config.capabilityProxy === undefined ? [] : createCapabilityProxies(config.capabilityProxy, () => sessionRef);
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
@@ -135,11 +142,19 @@ export async function createPiSessionUsingRuntime(
     sessionManager: physicalContext.sessionManager,
     settingsManager
   });
+  sessionRef = session;
+  session.setAutoCompactionEnabled(true);
 
   let failureEmitted = false;
+  let compactionReasonOverride: "manual" | "threshold" | undefined;
   subscribeToSession(session, (event) => {
     if (event.type === "failed") failureEmitted = true;
-    onEvent(event);
+    if (
+      compactionReasonOverride !== undefined &&
+      (event.type === "compaction_started" || event.type === "compaction_completed" || event.type === "compaction_failed")
+    ) {
+      onEvent({ ...event, reason: compactionReasonOverride });
+    } else onEvent(event);
   });
   return {
     provider: model.provider,
@@ -148,9 +163,11 @@ export async function createPiSessionUsingRuntime(
     sessionFile: session.sessionFile ?? physicalContext.sessionManager.getSessionFile() ?? "",
     reconciliation: physicalContext.reconciliation,
     retainedTurnCount: config.contextHistory.length,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxTokens,
     submit: async (prompt, options) => {
       const activeCapabilities = options?.activeCapabilities ?? [];
-      session.setActiveToolsByName(activeCapabilities.filter((id) => id === "output.write_text"));
+      session.setActiveToolsByName([...activeCapabilities]);
       failureEmitted = false;
       let timedOut = false;
       const timeout = setTimeout(() => {
@@ -167,9 +184,66 @@ export async function createPiSessionUsingRuntime(
         clearTimeout(timeout);
       }
     },
+    compact: async (reason = "manual") => {
+      compactionReasonOverride = reason;
+      try { await session.compact(); }
+      finally { compactionReasonOverride = undefined; }
+    },
     abort: () => session.abort(),
     acknowledge: (eventId, sequence) => session.sessionManager.appendCustomEntry("vc-agent.trajectory-high-water", { eventId, sequence }),
     dispose: () => session.dispose()
+  };
+}
+
+function createCapabilityProxies(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>,
+  session: () => AgentSession | undefined
+) {
+  const capabilityRequest = defineTool({
+    name: "capability_request",
+    label: "Request capability",
+    description: "Request an allowed capability for this Turn. This neither executes it nor grants permission.",
+    parameters: Type.Object({ need: Type.String(), capabilityId: Type.Optional(Type.String()) }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => {
+      const result = await proxy(toolCallId, "capability_request", params, signal);
+      if (result.activatedCapabilities !== undefined) {
+        const active = session()?.getActiveToolNames() ?? [];
+        session()?.setActiveToolsByName([...new Set([...active, ...result.activatedCapabilities])]);
+      }
+      return toolResult(result);
+    }
+  });
+  const materialRecall = defineTool({
+    name: "material_recall",
+    label: "Recall material",
+    description: "Start with cards or outline, then request bounded source-referenced excerpts. Never claim omitted blocks were read.",
+    parameters: Type.Object({
+      disclosureLevel: Type.Union([Type.Literal("cards"), Type.Literal("outline"), Type.Literal("excerpt"), Type.Literal("full")]),
+      materialId: Type.Optional(Type.String()),
+      blockIds: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
+      query: Type.Optional(Type.String()),
+      maxItems: Type.Optional(Type.Number()),
+      maxChars: Type.Optional(Type.Number())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "material_recall", params, signal))
+  });
+  const unavailable = (name: "project_state_recall" | "memory_recall") => defineTool({
+    name,
+    label: name === "memory_recall" ? "Recall memory" : "Recall project state",
+    description: `Recall bounded ${name === "memory_recall" ? "Long-term Memory" : "Project Context or Project Memory"} without reading other source classes.`,
+    parameters: Type.Object({ query: Type.Optional(Type.String()) }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, name, params, signal))
+  });
+  return [capabilityRequest, materialRecall, unavailable("project_state_recall"), unavailable("memory_recall"), createTextOutputProxy(proxy)];
+}
+
+function toolResult(result: CapabilityExecutionResult) {
+  return {
+    content: [{ type: "text" as const, text: result.content }],
+    details: { requestId: result.requestId, status: result.status, code: result.code, retrieval: result.retrieval, activatedCapabilities: result.activatedCapabilities, artifact: result.artifact }
   };
 }
 
@@ -189,10 +263,7 @@ function createTextOutputProxy(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {
       const result = await proxy(toolCallId, "output.write_text", params, signal);
-      return {
-        content: [{ type: "text" as const, text: result.content }],
-        details: { requestId: result.requestId, status: result.status, artifact: result.artifact }
-      };
+      return toolResult(result);
     }
   });
 }
@@ -255,6 +326,14 @@ function appendRetainedHistory(
 ): void {
   for (const item of history) {
     sessionManager.appendMessage({ role: "user", content: item.user, timestamp: Date.now() });
+    if (item.contextReferences !== undefined && item.contextReferences.length > 0) {
+      sessionManager.appendCustomMessageEntry(
+        "vc-agent.context-references",
+        `[Retired retrieval payloads; source references only]\n${JSON.stringify(item.contextReferences)}`,
+        false,
+        { schemaVersion: 1, references: item.contextReferences }
+      );
+    }
     if (item.status === "interrupted") {
       sessionManager.appendCustomMessageEntry(
         "vc-agent.interrupted-visible-context",
@@ -290,6 +369,23 @@ function emptyUsage(): Usage {
 
 function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEvent) => void): void {
   session.subscribe((event) => {
+    if (event.type === "compaction_start") {
+      onEvent({ type: "compaction_started", reason: event.reason });
+      return;
+    }
+    if (event.type === "compaction_end") {
+      if (event.result !== undefined) {
+        onEvent({
+          type: "compaction_completed",
+          reason: event.reason,
+          tokensBefore: event.result.tokensBefore,
+          ...(event.result.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.result.estimatedTokensAfter })
+        });
+      } else if (!event.aborted) {
+        onEvent({ type: "compaction_failed", reason: event.reason, message: event.errorMessage ?? "Thread compaction failed." });
+      }
+      return;
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       onEvent({ type: "text_delta", delta: event.assistantMessageEvent.delta });
       return;

@@ -489,7 +489,8 @@ test("freezes a System Prompt revision until the next Prompt Load Boundary", asy
     let submitted = readFileSync(trajectoryPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.event === "turn.submitted");
     expect(submitted).toHaveLength(2);
     expect(submitted[0].payload.prompt.revisionId).toBe(submitted[1].payload.prompt.revisionId);
-    expect(submitted[0].payload.prompt.contributions).toMatchObject({ toolSchemaEstimatedTokens: 0, contextEstimatedTokens: 0, materialEstimatedTokens: 0 });
+    expect(submitted[0].payload.prompt.contributions.toolSchemaEstimatedTokens).toBeGreaterThan(0);
+    expect(submitted[0].payload.prompt.contributions).toMatchObject({ contextEstimatedTokens: 0, materialEstimatedTokens: 0 });
 
     await application.close();
     application = await launchApplication(root, userDataDirectory);
