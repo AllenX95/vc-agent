@@ -17,6 +17,7 @@ export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, typ
 export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, type BoundedRecallEnvelope, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
 export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
 export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextStore, parseProjectContext, type ProjectContextDocument, type ProjectContextRecallAccess, type ProjectContextRecallItem, type ProjectContextRecallQuery, type ProjectContextSection, type ProjectContextWarning } from "./project-context.js";
+export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, memoryCandidateId, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

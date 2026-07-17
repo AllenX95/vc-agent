@@ -561,6 +561,52 @@ test("lazily edits Project Context and deterministically surfaces external Markd
   }
 });
 
+test("captures a Project Memory candidate and appends it only after explicit confirmation", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d7-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d7-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    const memoryPath = join(projectDirectory, "outputs", "system", "project-memory.md");
+    expect(existsSync(memoryPath)).toBe(false);
+
+    await window.getByLabel("Message").fill("我认为生产稳定性是这个项目的核心风险");
+    await window.getByRole("button", { name: "Send" }).click();
+    const candidate = window.locator(".memory-candidate");
+    await expect(candidate).toContainText("Memory candidate captured");
+    expect(existsSync(memoryPath)).toBe(false);
+    await candidate.getByRole("button", { name: "Review" }).click();
+    const dialog = window.getByRole("dialog", { name: "Project Memory draft" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Memory title").fill("Production stability is the core risk");
+    await dialog.getByLabel("Memory tags").fill("risk, diligence");
+    await dialog.getByLabel("Memory judgment").fill("用户确认：生产稳定性是这个项目的核心风险。");
+    await dialog.getByRole("button", { name: "Confirm append" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(candidate).toBeHidden();
+    await expect.poll(() => readFileSync(memoryPath, "utf8")).toContain("Source: user-confirmed");
+    expect(readFileSync(memoryPath, "utf8")).toContain("Production stability is the core risk");
+    const marker = JSON.parse(readFileSync(join(projectDirectory, "outputs", "system", "project.json"), "utf8")) as { projectId: string };
+    const index = JSON.parse(readFileSync(join(userDataDirectory, "memory", "project-index", `${marker.projectId}.json`), "utf8"));
+    expect(index.entries).toMatchObject([{ maturity: "user_confirmed", provenanceStatus: "traceable" }]);
+
+    const malformed = "# Project Memory\n\n## malformed heading\nPreserve this manual judgment\n";
+    writeFileSync(memoryPath, malformed, "utf8");
+    await expect(window.getByRole("status")).toContainText("Memory entry heading must use", { timeout: 10_000 });
+    await expect(window.getByLabel("Project Memory")).toHaveValue(malformed);
+    expect(readFileSync(memoryPath, "utf8")).toBe(malformed);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
 async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],

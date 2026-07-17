@@ -270,14 +270,14 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] No Project Memory is injected in full by default.
-- [ ] Explicit or strong User signals may create a visible candidate without a separate model request.
-- [ ] Only User confirmation appends candidate content to Project Memory.
-- [ ] Manual edits are authoritative and rebuild derived recall indexes without a model call.
-- [ ] Recall labels Memory as user-confirmed judgment rather than source evidence and shows the activity inline.
-- [ ] Recall results carry source scope and maturity metadata so a later Long-term Memory source can join ranking without changing existing Project Memory records or their authority.
-- [ ] Unapproved model statements, Outputs, and source summaries do not become Project Memory automatically.
-- [ ] Unscoped Threads cannot read or write Project Memory.
+- [x] No Project Memory is injected in full by default.
+- [x] Explicit or strong User signals may create a visible candidate without a separate model request.
+- [x] Only User confirmation appends candidate content to Project Memory.
+- [x] Manual edits are authoritative and rebuild derived recall indexes without a model call.
+- [x] Recall labels Memory as user-confirmed judgment rather than source evidence and shows the activity inline.
+- [x] Recall results carry source scope and maturity metadata so a later Long-term Memory source can join ranking without changing existing Project Memory records or their authority.
+- [x] Unapproved model statements, Outputs, and source summaries do not become Project Memory automatically.
+- [x] Unscoped Threads cannot read or write Project Memory.
 
 ### D8. Produce A Source-referenced Project Output
 

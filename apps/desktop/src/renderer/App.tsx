@@ -7,9 +7,11 @@ import {
   type HostCommand,
   type HostEvent,
   type MaterialInventoryItem,
+  type MemoryCandidate,
   type ModelProfile,
   type Project,
   type ProjectContextDocument,
+  type ProjectMemoryDocument,
   type PromptContribution,
   type ProviderFailure,
   type SystemPromptRevision,
@@ -89,10 +91,15 @@ export function App() {
   const [materialsByProject, setMaterialsByProject] = useState<Record<string, MaterialInventoryItem[]>>({});
   const [parseRefreshChoice, setParseRefreshChoice] = useState<Extract<HostEvent, { event: "material.parse.refresh.choice.required" }> | null>(null);
   const [materialParseState, setMaterialParseState] = useState<Record<string, string>>({});
-  const [projectPanelTab, setProjectPanelTab] = useState<"overview" | "context">("overview");
+  const [projectPanelTab, setProjectPanelTab] = useState<"overview" | "context" | "memory">("overview");
   const [contextDocuments, setContextDocuments] = useState<Record<string, ProjectContextDocument>>({});
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const contextDirty = useRef<Record<string, boolean>>({});
+  const [memoryDocuments, setMemoryDocuments] = useState<Record<string, ProjectMemoryDocument>>({});
+  const [memoryDrafts, setMemoryDrafts] = useState<Record<string, string>>({});
+  const memoryDirty = useRef<Record<string, boolean>>({});
+  const [memoryCandidates, setMemoryCandidates] = useState<Record<string, MemoryCandidate>>({});
+  const [candidateDraft, setCandidateDraft] = useState<{ candidate: MemoryCandidate; title: string; tags: string; body: string } | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -130,6 +137,24 @@ export function App() {
         setContextDrafts((current) => ({ ...current, [projectId]: event.payload.document.content }));
         break;
       }
+      case "project.memory.loaded":
+      case "project.memory.updated": {
+        const projectId = event.payload.document.projectId;
+        if (event.payload.source === "external_edit" && memoryDirty.current[projectId] === true) {
+          setDiagnostic(localDiagnostic("Project Memory changed outside vc-agent while this panel has unsaved edits. Reload before saving or confirming a draft."));
+          break;
+        }
+        memoryDirty.current[projectId] = false;
+        setMemoryDocuments((current) => ({ ...current, [projectId]: event.payload.document }));
+        setMemoryDrafts((current) => ({ ...current, [projectId]: event.payload.document.content }));
+        if (event.payload.source === "confirmed_append") setCandidateDraft(null);
+        break;
+      }
+      case "memory.candidate.captured": setMemoryCandidates((current) => ({ ...current, [event.payload.candidate.id]: event.payload.candidate })); break;
+      case "memory.candidate.resolved":
+        setMemoryCandidates((current) => ({ ...current, [event.payload.candidate.id]: event.payload.candidate }));
+        if (event.payload.candidate.status !== "active") setCandidateDraft((draft) => draft?.candidate.id === event.payload.candidate.id ? null : draft);
+        break;
       case "material.parse.refresh.choice.required": setParseRefreshChoice(event); break;
       case "material.parse.refresh.choice.resolved": setParseRefreshChoice(null); break;
       case "material.parse.started": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: "Parsing..." })); break;
@@ -342,6 +367,40 @@ export function App() {
     void invoke(createCommand({ command: "project.context.save", payload: { projectId: activeThread.projectId, content, expectedSourceHash: document.sourceHash } }));
   };
 
+  const openProjectMemory = () => {
+    if (activeThread?.scope !== "project") return;
+    setProjectPanelTab("memory");
+    if (memoryDocuments[activeThread.projectId] === undefined) void invoke(createCommand({ command: "project.memory.load", payload: { projectId: activeThread.projectId } }));
+  };
+
+  const reloadProjectMemory = () => {
+    if (activeThread?.scope !== "project") return;
+    memoryDirty.current[activeThread.projectId] = false;
+    void invoke(createCommand({ command: "project.memory.load", payload: { projectId: activeThread.projectId } }));
+  };
+
+  const saveProjectMemory = () => {
+    if (activeThread?.scope !== "project") return;
+    const document = memoryDocuments[activeThread.projectId];
+    const content = memoryDrafts[activeThread.projectId];
+    if (document !== undefined && content !== undefined) void invoke(createCommand({ command: "project.memory.save", payload: { projectId: activeThread.projectId, content, expectedSourceHash: document.sourceHash } }));
+  };
+
+  const reviewCandidate = (candidate: MemoryCandidate) => {
+    if (candidate.scope !== "project" || candidate.projectId === undefined) return;
+    setCandidateDraft({ candidate, title: candidate.sourceSnippet.slice(0, 80), tags: "", body: candidate.sourceSnippet });
+    setProjectPanelTab("memory");
+    if (memoryDocuments[candidate.projectId] === undefined) void invoke(createCommand({ command: "project.memory.load", payload: { projectId: candidate.projectId } }));
+  };
+
+  const confirmCandidate = () => {
+    const projectId = candidateDraft?.candidate.projectId;
+    if (candidateDraft === null || projectId === undefined) return;
+    const document = memoryDocuments[projectId];
+    if (document === undefined) return;
+    void invoke(createCommand({ command: "project.memory.append.confirm", payload: { candidateId: candidateDraft.candidate.id, projectId, title: candidateDraft.title, tags: candidateDraft.tags.split(",").map((tag) => tag.trim()).filter(Boolean), body: candidateDraft.body, expectedSourceHash: document.sourceHash } }));
+  };
+
   return (
     <div className="app-shell">
       <aside className="left-rail" aria-label="Navigation">
@@ -387,6 +446,7 @@ export function App() {
               {items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
                 <MessageItem key={item.id} item={item} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
               ))}
+              {Object.values(memoryCandidates).filter((candidate) => candidate.threadId === activeThreadId && candidate.status === "active").map((candidate) => <div className="memory-candidate" key={candidate.id}><div><strong>Memory candidate captured</strong><span>{candidate.sourceSnippet}</span></div><div>{candidate.scope === "project" && <button type="button" onClick={() => reviewCandidate(candidate)}>Review</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "memory.candidate.dismiss", payload: { candidateId: candidate.id } }))}>Dismiss</button></div></div>)}
               {Object.values(confirmations).filter((item) => item.payload.threadId === activeThreadId).map((item) => <div className="action-proposal" role="dialog" aria-label="Capability confirmation" key={item.payload.requestId}>
                 <strong>{item.payload.action}</strong><p>{item.payload.target}</p><span>{item.payload.reason} {item.payload.expectedEffect}</span><div><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, true)}>Approve</button><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, false)}>Deny</button></div>
               </div>)}
@@ -406,6 +466,7 @@ export function App() {
         {view === "workspace" && parseRefreshChoice && <div className="workspace-dialog" role="dialog" aria-label="Parse refresh choice">
           <strong>Material changed</strong><p>{parseRefreshChoice.payload.material.relativePath}</p><span>Previous {parseRefreshChoice.payload.previousSourceHash.slice(0, 12)} · Current {parseRefreshChoice.payload.currentSourceHash.slice(0, 12)} · {parseRefreshChoice.payload.parserId}</span><div><button className="primary-button" type="button" onClick={() => resolveParseRefresh("create_new_version")}>Create New Parse Version</button><button type="button" onClick={() => resolveParseRefresh("replace_previous")}>Replace Previous Parse</button><button type="button" onClick={() => resolveParseRefresh("cancel")}>Cancel</button></div>
         </div>}
+        {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
 
         {view === "workspace" && activeThread !== undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -424,8 +485,8 @@ export function App() {
       </main>
 
       <aside className="right-panel" aria-label="Project state">
-        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" role="tab" disabled>Memory</button></div>
-        {activeThread?.scope === "project" ? projectPanelTab === "context" ? <ProjectContextPanel
+        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" className={projectPanelTab === "memory" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "memory"} disabled={activeThread?.scope !== "project"} onClick={openProjectMemory}>Memory</button></div>
+        {activeThread?.scope === "project" ? projectPanelTab === "memory" ? <ProjectMemoryPanel document={memoryDocuments[activeThread.projectId]} draft={memoryDrafts[activeThread.projectId]} onChange={(content) => { memoryDirty.current[activeThread.projectId] = true; setMemoryDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }} onReload={reloadProjectMemory} onSave={saveProjectMemory} /> : projectPanelTab === "context" ? <ProjectContextPanel
           document={contextDocuments[activeThread.projectId]}
           draft={contextDrafts[activeThread.projectId]}
           onChange={(content) => { contextDirty.current[activeThread.projectId] = true; setContextDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }}
@@ -451,6 +512,22 @@ function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {
     {document.warnings.length > 0 && <div className="context-warnings" role="status">{document.warnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}</div>}
     <textarea aria-label="Project Context" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" />
     <button className="primary-button context-save" type="button" onClick={onSave}>Save Context</button>
+  </div>;
+}
+
+function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
+  document: ProjectMemoryDocument | undefined;
+  draft: string | undefined;
+  onChange(content: string): void;
+  onReload(): void;
+  onSave(): void;
+}) {
+  if (document === undefined || draft === undefined) return <div className="context-panel"><p>Loading Project Memory...</p></div>;
+  return <div className="context-panel memory-panel">
+    <div className="context-heading"><div><h2>Project Memory</h2><span>User-confirmed judgment · {document.entries.length} entries</span></div><button className="section-action" type="button" title="Reload memory" aria-label="Reload memory" onClick={onReload}><RefreshCw size={14} /></button></div>
+    {document.warnings.length > 0 && <div className="context-warnings" role="status">{document.warnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}</div>}
+    <textarea aria-label="Project Memory" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" />
+    <button className="primary-button context-save" type="button" onClick={onSave}>Save Memory</button>
   </div>;
 }
 

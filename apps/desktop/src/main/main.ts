@@ -21,8 +21,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createUnavailableCoreRecallCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { CapabilityGateway, MemoryCandidateStore, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -60,6 +60,8 @@ let workerSupervisor: AgentWorkerSupervisor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
 let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
+let projectMemories: ProjectMemoryStore | null = null;
+let memoryCandidates: MemoryCandidateStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -68,11 +70,12 @@ const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
-const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout>; contextTimer?: ReturnType<typeof setTimeout> }>();
+const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout>; contextTimer?: ReturnType<typeof setTimeout>; memoryTimer?: ReturnType<typeof setTimeout> }>();
 const credentials = new ProtectedCredentialService();
 const projectIdentities = new ProjectIdentityStore();
 const projectContexts = new ProjectContextStore();
 const ownProjectContextWrites = new Map<string, string>();
+const ownProjectMemoryWrites = new Map<string, string>();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
@@ -221,6 +224,44 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           return { ...eventMetadata(command.correlationId), event: "project.context.updated", payload: { document, source: "user_save" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_CONTEXT_WRITE" ? "Project Context changed externally. Reload before saving." : "Project Context could not be saved.");
+        }
+      }
+      case "project.memory.load": {
+        const project = stateStore.getProject(command.payload.projectId);
+        if (project === undefined || projectMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Project not found.");
+        const existed = existsSync(projectMemories.markdownPath(project.path));
+        const document = projectMemories.load(project.id, project.path, true)!;
+        if (!existed) ownProjectMemoryWrites.set(project.id, document.sourceHash);
+        return { ...eventMetadata(command.correlationId), event: "project.memory.loaded", payload: { document, source: existed ? "load" : "lazy_create" } };
+      }
+      case "project.memory.save": {
+        const project = stateStore.getProject(command.payload.projectId);
+        if (project === undefined || projectMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Project not found.");
+        try {
+          const document = projectMemories.save(project.id, project.path, command.payload.content, command.payload.expectedSourceHash);
+          ownProjectMemoryWrites.set(project.id, document.sourceHash);
+          return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "user_save" } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before saving." : "Project Memory could not be saved.");
+        }
+      }
+      case "memory.candidate.dismiss": {
+        const candidate = memoryCandidates?.resolve(command.payload.candidateId, "dismissed");
+        if (candidate === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory candidate is no longer active.");
+        return { ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate } };
+      }
+      case "project.memory.append.confirm": {
+        const candidate = memoryCandidates?.list().find((item) => item.id === command.payload.candidateId && item.status === "active");
+        const project = stateStore.getProject(command.payload.projectId);
+        if (candidate === undefined || candidate.scope !== "project" || candidate.projectId !== command.payload.projectId || project === undefined || projectMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory candidate is not eligible for this Project.");
+        try {
+          const document = projectMemories.append(project.id, project.path, { title: command.payload.title, tags: command.payload.tags, body: command.payload.body, threadId: candidate.threadId }, command.payload.expectedSourceHash);
+          ownProjectMemoryWrites.set(project.id, document.sourceHash);
+          const resolved = memoryCandidates!.resolve(candidate.id, "promoted")!;
+          emit({ ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate: resolved } });
+          return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "confirmed_append" } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before confirming this draft." : "Project Memory could not be updated.");
         }
       }
       case "material.need": {
@@ -399,6 +440,7 @@ function startMaterialWatcher(projectId: string): void {
     current.watcher.close();
     if (current.timer !== undefined) clearTimeout(current.timer);
     if (current.contextTimer !== undefined) clearTimeout(current.contextTimer);
+    if (current.memoryTimer !== undefined) clearTimeout(current.memoryTimer);
   }
   try {
     const watcher = watch(project.path, { recursive: true }, (_eventType, filename) => {
@@ -421,6 +463,19 @@ function startMaterialWatcher(projectId: string): void {
           } catch {
             // The next stable write or explicit load retries deterministic mirror rebuild.
           }
+        }, 750);
+      }
+      if (relative === "outputs/system/project-memory.md") {
+        if (state.memoryTimer !== undefined) clearTimeout(state.memoryTimer);
+        state.memoryTimer = setTimeout(() => {
+          const currentProject = stateStore?.getProject(projectId);
+          if (currentProject === undefined || projectMemories === null) return;
+          try {
+            const document = projectMemories.rebuildIfExists(projectId, currentProject.path);
+            if (document === undefined) return;
+            if (ownProjectMemoryWrites.get(projectId) === document.sourceHash) { ownProjectMemoryWrites.delete(projectId); return; }
+            emit({ ...eventMetadata(randomUUID()), event: "project.memory.updated", payload: { document, source: "external_edit" } });
+          } catch { /* The next stable write or explicit load retries index rebuild. */ }
         }, 750);
       }
       if (state.timer !== undefined) clearTimeout(state.timer);
@@ -651,6 +706,11 @@ function submitTurn(
     }
   };
   trajectoryStore!.append(submitted);
+  const memorySignal = detectMemoryCandidateSignal(input.text);
+  if (memorySignal !== undefined && input.retryOfTurnId === undefined && memoryCandidates !== null) {
+    const candidate = memoryCandidates.capture({ scope: thread.scope, ...(thread.scope === "project" ? { projectId: thread.projectId } : {}), threadId: thread.id, turnId, sourceSnippet: input.text.slice(0, 2_000), signal: memorySignal });
+    emit({ ...eventMetadata(correlationId, thread.id), event: "memory.candidate.captured", payload: { candidate } });
+  }
 
   if (outputIntent && thread.scope === "unscoped" && thread.outputLocation === undefined) {
     const failure: ProviderFailure = { kind: "configuration", code: "OUTPUT_LOCATION_NOT_CONFIGURED", message: "Choose an Output Location before creating a file." };
@@ -1253,6 +1313,8 @@ app.whenReady().then(() => {
     callback({});
   });
   stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"));
+  projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
+  memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"));
   for (const thread of stateStore.listThreads()) {
     trajectoryStore.recoverInterruptedTurns(thread.id);
@@ -1319,7 +1381,16 @@ app.whenReady().then(() => {
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));
-  capabilityRegistry.register(createUnavailableCoreRecallCapability("memory_recall", ["unscoped", "project"]));
+  capabilityRegistry.register(createMemoryRecallCapability(async (input, context) => {
+    const scope = context.request.scope;
+    if (scope.kind !== "project") throw new Error("Project Memory requires Project scope.");
+    const project = stateStore!.getProject(scope.projectId);
+    if (project === undefined || projectMemories === null) throw new Error("Project Memory is unavailable.");
+    const source = new ProjectMemoryRecallSource(() => projectMemories!.load(project.id, project.path, false));
+    const envelope = await source.recall({ disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
   const publicWeb = new PublicWebRecallSource();
   capabilityRegistry.register(createWebSearchCapability(async (input, context) => {
     const envelope = await publicWeb.recall(
@@ -1362,9 +1433,12 @@ app.on("before-quit", () => {
     state.watcher.close();
     if (state.timer !== undefined) clearTimeout(state.timer);
     if (state.contextTimer !== undefined) clearTimeout(state.contextTimer);
+    if (state.memoryTimer !== undefined) clearTimeout(state.memoryTimer);
   }
   materialWatchers.clear();
   workerSupervisor = null;
   stateStore?.close();
   stateStore = null;
+  projectMemories = null;
+  memoryCandidates = null;
 });

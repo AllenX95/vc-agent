@@ -303,6 +303,36 @@ export function createProjectStateRecallCapability(
   };
 }
 
+const memoryRecallInputSchema = z.object({
+  source: z.enum(["project_memory", "long_term_memory"]),
+  disclosureLevel: z.enum(["cards", "full"]).default("cards"),
+  entryIds: z.array(z.string().min(1).max(100)).max(8).optional(),
+  query: z.string().trim().max(500).optional(),
+  maxItems: z.number().int().min(1).max(8).default(6),
+  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+});
+
+export function createMemoryRecallCapability(
+  recall: (input: z.infer<typeof memoryRecallInputSchema>, context: CapabilityExecutionContext) => Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>
+): CapabilityDefinition<z.infer<typeof memoryRecallInputSchema>> {
+  return {
+    metadata: {
+      id: "memory_recall", version: "1.0.0", label: "Recall memory",
+      description: "Recall bounded user-confirmed judgment cards and selectively expand relevant entries. Memory is not source evidence.",
+      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { source: { enum: ["project_memory", "long_term_memory"] }, disclosureLevel: { enum: ["cards", "full"] }, entryIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } }, required: ["source"] },
+      outputSchema: { type: "object", properties: { sourceClass: { const: "memory" }, items: { type: "array" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "items", "warnings", "contextReference"] }
+    },
+    inputSchema: memoryRecallInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      if (input.source === "long_term_memory" || context.request.scope.kind !== "project") return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "The requested Memory source is not available in this build; no data was loaded." };
+      const recalled = await recall(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
+    }
+  };
+}
+
 export function createUnavailableCoreRecallCapability(id: "project_state_recall" | "memory_recall", allowedScopes: Array<"unscoped" | "project">): CapabilityDefinition {
   return {
     metadata: {

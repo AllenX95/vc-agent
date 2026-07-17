@@ -185,6 +185,14 @@ button { font: inherit; letter-spacing: 0; }
 .context-panel textarea:focus { border-color: #587562; outline: 2px solid #dbe5dc; }
 .context-warnings { display: grid; gap: 4px; max-height: 100px; overflow: auto; border-left: 3px solid #a56b2a; padding: 7px 8px; background: #f5ece0; color: #714a22; font-size: 10px; line-height: 1.4; }
 .context-save { align-self: flex-end; }
+.memory-candidate { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-left: 3px solid #587562; padding: 9px 10px; background: #edf2ed; color: #334239; font-size: 11px; }
+.memory-candidate > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.memory-candidate span { overflow: hidden; color: #68716a; text-overflow: ellipsis; white-space: nowrap; }
+.memory-candidate > div:last-child { display: flex; flex: 0 0 auto; gap: 5px; }
+.memory-draft-dialog { gap: 9px; }
+.memory-draft-dialog label { display: grid; gap: 4px; color: #5b645d; font-size: 11px; }
+.memory-draft-dialog input, .memory-draft-dialog textarea { width: 100%; border: 1px solid #c9cec7; border-radius: 4px; padding: 7px 8px; background: #fff; color: #28332c; }
+.memory-draft-dialog textarea { min-height: 90px; resize: vertical; }
 .inventory-heading { align-items: center; display: flex; justify-content: space-between; }
 .inventory-heading h2 { margin: 0; font-size: 13px; }
 .material-inventory > p { margin: 5px 0 12px; color: #747c75; font-size: 10px; }

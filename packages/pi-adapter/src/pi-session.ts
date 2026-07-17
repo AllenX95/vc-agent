@@ -243,13 +243,13 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "project_state_recall", params, signal))
   });
-  const unavailable = (name: "memory_recall") => defineTool({
-    name,
-    label: name === "memory_recall" ? "Recall memory" : "Recall project state",
-    description: `Recall bounded ${name === "memory_recall" ? "Long-term Memory" : "Project Context or Project Memory"} without reading other source classes.`,
-    parameters: Type.Object({ query: Type.Optional(Type.String()) }),
+  const memoryRecall = defineTool({
+    name: "memory_recall",
+    label: "Recall memory",
+    description: "Recall user-confirmed judgment as bounded cards, then selectively expand it. Do not treat Memory as source evidence.",
+    parameters: Type.Object({ source: Type.Union([Type.Literal("project_memory"), Type.Literal("long_term_memory")]), disclosureLevel: Type.Optional(Type.Union([Type.Literal("cards"), Type.Literal("full")])), entryIds: Type.Optional(Type.Array(Type.String(), { maxItems: 8 })), query: Type.Optional(Type.String()), maxItems: Type.Optional(Type.Number()), maxChars: Type.Optional(Type.Number()) }),
     executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, name, params, signal))
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "memory_recall", params, signal))
   });
   const webSearch = defineTool({
     name: "web_search",
@@ -267,7 +267,7 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
-  return [capabilityRequest, materialRecall, projectStateRecall, unavailable("memory_recall"), webSearch, webFetch, createTextOutputProxy(proxy)];
+  return [capabilityRequest, materialRecall, projectStateRecall, memoryRecall, webSearch, webFetch, createTextOutputProxy(proxy)];
 }
 
 function toolResult(result: CapabilityExecutionResult) {

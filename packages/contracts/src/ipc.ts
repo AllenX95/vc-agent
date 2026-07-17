@@ -127,6 +127,23 @@ export const projectContextDocumentSchema = z.object({
 });
 export type ProjectContextDocument = z.infer<typeof projectContextDocumentSchema>;
 
+export const projectMemoryEntrySchema = z.object({
+  id: z.string().min(1), title: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tags: z.array(z.string()),
+  source: z.string().min(1), scope: z.literal("project"), body: z.string(), relatedThread: z.string().min(1).optional(), relatedOutput: z.string().min(1).optional(),
+  maturity: z.literal("user_confirmed"), provenanceStatus: z.enum(["traceable", "user_authored_no_evidence"])
+});
+export const projectMemoryDocumentSchema = z.object({
+  schemaVersion: z.literal(1), projectId: z.string().uuid(), markdownPath: z.literal("outputs/system/project-memory.md"), content: z.string().max(200_000),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/), updatedAt: z.string().datetime(), entries: z.array(projectMemoryEntrySchema),
+  warnings: z.array(z.object({ code: z.enum(["MISSING_TITLE", "MALFORMED_ENTRY", "INVALID_SCOPE"]), message: z.string().min(1), line: z.number().int().positive().optional() }))
+});
+export type ProjectMemoryDocument = z.infer<typeof projectMemoryDocumentSchema>;
+export const memoryCandidateSchema = z.object({
+  id: z.string().uuid(), scope: z.enum(["project", "unscoped"]), projectId: z.string().uuid().optional(), threadId: z.string().min(1), turnId: z.string().min(1),
+  capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), signal: z.enum(["explicit_remember", "strong_user_judgment"]), status: z.enum(["active", "dismissed", "promoted"])
+});
+export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;
+
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
@@ -234,6 +251,13 @@ const saveProjectContextCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.context.save"),
   payload: z.object({ projectId: z.string().uuid(), content: z.string().max(100_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
 });
+const loadProjectMemoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.memory.load"), payload: z.object({ projectId: z.string().uuid() }) });
+const saveProjectMemoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.memory.save"), payload: z.object({ projectId: z.string().uuid(), content: z.string().max(200_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) }) });
+const dismissMemoryCandidateCommandSchema = commandMetadataSchema.extend({ command: z.literal("memory.candidate.dismiss"), payload: z.object({ candidateId: z.string().uuid() }) });
+const confirmProjectMemoryAppendCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("project.memory.append.confirm"),
+  payload: z.object({ candidateId: z.string().uuid(), projectId: z.string().uuid(), title: z.string().trim().min(1).max(160), tags: z.array(z.string().trim().min(1).max(80)).max(12), body: z.string().trim().min(1).max(20_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
+});
 const needMaterialCommandSchema = commandMetadataSchema.extend({
   command: z.literal("material.need"), payload: z.object({ materialId: z.string().uuid() })
 });
@@ -309,6 +333,10 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   refreshProjectMaterialsCommandSchema,
   loadProjectContextCommandSchema,
   saveProjectContextCommandSchema,
+  loadProjectMemoryCommandSchema,
+  saveProjectMemoryCommandSchema,
+  dismissMemoryCandidateCommandSchema,
+  confirmProjectMemoryAppendCommandSchema,
   needMaterialCommandSchema,
   parseMaterialCommandSchema,
   resolveParseRefreshCommandSchema,
@@ -549,6 +577,13 @@ const projectContextEventSchema = eventMetadataSchema.extend({
   event: z.enum(["project.context.loaded", "project.context.updated"]),
   payload: z.object({ document: projectContextDocumentSchema, source: z.enum(["lazy_create", "load", "user_save", "external_edit"]) })
 });
+const projectMemoryEventSchema = eventMetadataSchema.extend({
+  event: z.enum(["project.memory.loaded", "project.memory.updated"]),
+  payload: z.object({ document: projectMemoryDocumentSchema, source: z.enum(["lazy_create", "load", "user_save", "confirmed_append", "external_edit"]) })
+});
+const memoryCandidateEventSchema = eventMetadataSchema.extend({
+  event: z.enum(["memory.candidate.captured", "memory.candidate.resolved"]), payload: z.object({ candidate: memoryCandidateSchema })
+});
 const threadCompactionEventSchema = eventMetadataSchema.extend({
   event: z.enum(["thread.compaction.started", "thread.compaction.completed", "thread.compaction.failed"]),
   payload: z.object({
@@ -622,6 +657,8 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   turnStopRequestedEventSchema,
   physicalContextRebuiltEventSchema,
   projectContextEventSchema,
+  projectMemoryEventSchema,
+  memoryCandidateEventSchema,
   threadCompactionEventSchema,
   capabilityConfirmationRequiredEventSchema,
   capabilityExecutionUpdatedEventSchema
