@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell, type IpcMainInvokeEvent } from "electron";
 import {
   IPC_SCHEMA_VERSION,
   canonicalParseSchema,
@@ -14,6 +14,7 @@ import {
   type ModelProfile,
   type ProvenanceRef,
   type ProviderFailure,
+  type ProjectOutputArtifact,
   type SystemPromptRevision,
   type Thread,
   type TrajectoryEvent,
@@ -22,7 +23,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { CapabilityGateway, MemoryCandidateStore, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityGateway, MemoryCandidateStore, ProjectOutputRegistry, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -76,6 +77,7 @@ const projectIdentities = new ProjectIdentityStore();
 const projectContexts = new ProjectContextStore();
 const ownProjectContextWrites = new Map<string, string>();
 const ownProjectMemoryWrites = new Map<string, string>();
+const projectOutputs = new ProjectOutputRegistry();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
@@ -263,6 +265,19 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before confirming this draft." : "Project Memory could not be updated.");
         }
+      }
+      case "project.output.list": {
+        const project = stateStore.getProject(command.payload.projectId);
+        if (project === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Project not found.");
+        return { ...eventMetadata(command.correlationId), event: "project.outputs.listed", payload: { projectId: project.id, outputs: projectOutputs.list(project.id, project.path) } };
+      }
+      case "project.output.open": {
+        const project = stateStore.getProject(command.payload.projectId);
+        const output = project === undefined ? undefined : projectOutputs.list(project.id, project.path).find((item) => item.id === command.payload.artifactId);
+        if (project === undefined || output === undefined || !existsSync(output.destination)) return diagnostic(command.correlationId, "HOST_FAILURE", "Project Output is unavailable.");
+        const error = await shell.openPath(output.destination);
+        if (error !== "") return diagnostic(command.correlationId, "HOST_FAILURE", error);
+        return { ...eventMetadata(command.correlationId), event: "project.output.opened", payload: { projectId: project.id, artifactId: output.id, destination: output.destination } };
       }
       case "material.need": {
         const context = stateStore.getStaleMaterialRefreshContext(command.payload.materialId);
@@ -674,7 +689,7 @@ function submitTurn(
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   const activeCapabilities = [...coreCapabilitiesForScope(thread.scope)];
   if (detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
-  if (outputIntent && thread.scope === "unscoped") activeCapabilities.push("output.write_text");
+  if (outputIntent) activeCapabilities.push("output.write_text");
   const physical = stateStore!.getPhysicalContext(input.threadId);
   if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
   const promptRevision = loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision();
@@ -1096,6 +1111,7 @@ function finalizeCapability(
   emitToRenderer: boolean
 ): HostEvent {
   let result = initialResult;
+  let projectOutput: ProjectOutputArtifact | undefined;
   if (result.activatedCapabilities !== undefined) {
     for (const capabilityId of result.activatedCapabilities) {
       if (!context.activeCapabilities.includes(capabilityId)) context.activeCapabilities.push(capabilityId);
@@ -1104,6 +1120,21 @@ function finalizeCapability(
   if (result.artifact !== undefined) {
     try {
       stateStore!.recordArtifact(result.artifact);
+      const thread = stateStore!.getThread(context.threadId);
+      if (thread?.scope === "project") {
+        const project = stateStore!.getProject(thread.projectId);
+        if (project === undefined) throw new Error("Project not found");
+        projectOutput = projectOutputs.record({
+          projectId: project.id, projectPath: project.path, artifact: result.artifact,
+          profile: { id: context.profile.id, provider: context.profile.provider, model: context.profile.model }, capabilityId: request.capabilityId,
+          ...(typeof request.arguments.skillId === "string" ? { skillId: request.arguments.skillId } : {}),
+          sourceReferences: Array.isArray(request.arguments.sourceReferences) ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string") : [],
+          warnings: Array.isArray(request.arguments.warnings) ? request.arguments.warnings.filter((value): value is string => typeof value === "string") : [],
+          relatedArtifacts: Array.isArray(request.arguments.relatedArtifacts) ? request.arguments.relatedArtifacts.flatMap((value) => {
+            const parsed = zRelatedArtifact(value); return parsed === undefined ? [] : [parsed];
+          }) : []
+        });
+      }
     } catch {
       result = {
         schemaVersion: 1,
@@ -1161,6 +1192,9 @@ function finalizeCapability(
     }
   };
   if (emitToRenderer) emit(hostEvent);
+  if (projectOutput !== undefined) {
+    emit({ ...eventMetadata(context.correlationId, context.threadId), event: "project.outputs.updated", payload: { projectId: projectOutput.projectId, outputs: projectOutputs.list(projectOutput.projectId, stateStore!.getProject(projectOutput.projectId)!.path) } });
+  }
   return hostEvent;
 }
 
@@ -1180,12 +1214,15 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
   const thread = stateStore!.getThread(context.threadId);
   if (thread === undefined) throw new Error("Thread not found");
   if (thread.scope === "project") {
+    const project = stateStore!.getProject(thread.projectId);
+    if (project === undefined) throw new Error("Project not found");
     return {
       accessMode: stateStore!.getAccessMode(),
       scope: "project",
       stateVersion: thread.stateVersion,
       activeCapabilityIds: context.activeCapabilities,
-      outputIntent: context.outputIntent
+      outputIntent: context.outputIntent,
+      outputLocation: join(project.path, "outputs")
     };
   }
   return {
@@ -1232,6 +1269,14 @@ function summarizeCapabilityArguments(arguments_: Record<string, unknown>): Reco
     replaceExisting: arguments_.replaceExisting === true,
     contentBytes: Buffer.byteLength(content, "utf8")
   };
+}
+
+function zRelatedArtifact(value: unknown): ProjectOutputArtifact["relatedArtifacts"][number] | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as { relation?: unknown; path?: unknown; mediaType?: unknown };
+  if ((candidate.relation !== "render" && candidate.relation !== "diff" && candidate.relation !== "supporting") || typeof candidate.path !== "string" || candidate.path.length === 0) return undefined;
+  if (candidate.mediaType !== undefined && typeof candidate.mediaType !== "string") return undefined;
+  return { relation: candidate.relation, path: candidate.path, ...(candidate.mediaType === undefined ? {} : { mediaType: candidate.mediaType }) };
 }
 
 function interruptTurn(

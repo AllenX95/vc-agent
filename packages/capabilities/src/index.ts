@@ -143,7 +143,11 @@ const textOutputInputSchema = z.object({
   path: z.string().trim().min(1).max(500),
   content: z.string().max(5 * 1024 * 1024),
   mediaType: z.string().trim().min(1).max(200).default("text/plain; charset=utf-8"),
-  replaceExisting: z.boolean().default(false)
+  replaceExisting: z.boolean().default(false),
+  sourceReferences: z.array(z.string().trim().min(1).max(500)).max(100).default([]),
+  warnings: z.array(z.string().trim().min(1).max(500)).max(50).default([]),
+  skillId: z.string().trim().min(1).max(200).optional(),
+  relatedArtifacts: z.array(z.object({ relation: z.enum(["render", "diff", "supporting"]), path: z.string().trim().min(1).max(500), mediaType: z.string().trim().min(1).max(200).optional() })).max(50).default([])
 });
 
 export function createTextOutputCapability(store: TextOutputStore): CapabilityDefinition<z.infer<typeof textOutputInputSchema>> {
@@ -152,7 +156,7 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
       id: "output.write_text",
       version: "1.0.0",
       label: "Write text output",
-      description: "Create a UTF-8 text deliverable in the Thread's authorized Output Location.",
+      description: "Create a requested UTF-8 text or Markdown deliverable. Distinguish sourced facts, inference, uncertainty, and material disagreement where relevant, and supply stable Material references or public URLs used.",
       activationClass: "preconditioned_execution",
       sideEffectClass: "local_write",
       allowedScopes: ["unscoped", "project"],
@@ -164,7 +168,11 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
           path: { type: "string" },
           content: { type: "string" },
           mediaType: { type: "string" },
-          replaceExisting: { type: "boolean" }
+          replaceExisting: { type: "boolean" },
+          sourceReferences: { type: "array", items: { type: "string" } },
+          warnings: { type: "array", items: { type: "string" } },
+          skillId: { type: "string" },
+          relatedArtifacts: { type: "array", items: { type: "object" } }
         },
         required: ["path", "content"]
       },
@@ -177,6 +185,7 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
     inputSchema: textOutputInputSchema,
     inspect(input, context) {
       if (context.outputLocation === undefined) throw new Error("Output Location is not configured");
+      assertUserOutputPath(input.path, context);
       const target = store.resolveTarget(context.outputLocation, input.path);
       if (!store.targetExists(context.outputLocation, input.path)) return undefined;
       return {
@@ -188,6 +197,7 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
     },
     async execute(input, context) {
       if (context.outputLocation === undefined) throw new Error("Output Location is not configured");
+      assertUserOutputPath(input.path, context);
       const artifact = store.commit({
         requestId: context.request.requestId,
         outputLocation: context.outputLocation,
@@ -208,6 +218,12 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
       };
     }
   };
+}
+
+function assertUserOutputPath(path: string, context: CapabilityExecutionContext): void {
+  if (context.request.scope.kind !== "project") return;
+  const topLevel = path.replace(/\\/gu, "/").split("/")[0]?.toLocaleLowerCase();
+  if (topLevel === "system" || topLevel === "parsed") throw new Error(`outputs/${topLevel} is reserved for system-managed artifacts.`);
 }
 
 const capabilityRequestInputSchema = z.object({

@@ -289,13 +289,13 @@ The exact package versions should be pinned when Slice F1 starts. A different pa
 
 **Acceptance criteria:**
 
-- [ ] An explicit User request creates a task-appropriate file under the determined Project Output Location.
-- [ ] The document distinguishes sourced facts, inference, uncertainty, and material User/model disagreement where relevant without imposing evidence maximalism.
-- [ ] Material claims use stable parse references and web claims use visible URLs where available.
-- [ ] The artifact registry records source-output relationships, Thread/Turn, Profile, Provider, tool, timestamp, and warnings.
-- [ ] Output metadata supports media type, producing capability/Skill, optional render or diff artifacts, and arbitrary file extensions without schema changes; the UI opens Markdown now and shows a generic file action for unknown future formats.
-- [ ] Supporting files remain under the Output Location and are visible to the User.
-- [ ] Ordinary analytical conversation still creates no Output without Output Intent.
+- [x] An explicit User request creates a task-appropriate file under the determined Project Output Location.
+- [x] The document distinguishes sourced facts, inference, uncertainty, and material User/model disagreement where relevant without imposing evidence maximalism.
+- [x] Material claims use stable parse references and web claims use visible URLs where available.
+- [x] The artifact registry records source-output relationships, Thread/Turn, Profile, Provider, tool, timestamp, and warnings.
+- [x] Output metadata supports media type, producing capability/Skill, optional render or diff artifacts, and arbitrary file extensions without schema changes; the UI opens Markdown now and shows a generic file action for unknown future formats.
+- [x] Supporting files remain under the Output Location and are visible to the User.
+- [x] Ordinary analytical conversation still creates no Output without Output Intent.
 
 ## Dogfood Exit Slice
 

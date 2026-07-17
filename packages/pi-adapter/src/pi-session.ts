@@ -288,7 +288,11 @@ function createTextOutputProxy(
       path: Type.String({ description: "Relative output filename or path" }),
       content: Type.String({ description: "Complete UTF-8 text content" }),
       mediaType: Type.Optional(Type.String({ description: "Format-neutral media type" })),
-      replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" }))
+      replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" })),
+      sourceReferences: Type.Optional(Type.Array(Type.String(), { description: "Stable Material block references and public URLs supporting the Output" })),
+      warnings: Type.Optional(Type.Array(Type.String(), { description: "Known source, inference, uncertainty, or generation warnings" })),
+      skillId: Type.Optional(Type.String({ description: "Producing Skill id when a Skill owns generation" })),
+      relatedArtifacts: Type.Optional(Type.Array(Type.Object({ relation: Type.Union([Type.Literal("render"), Type.Literal("diff"), Type.Literal("supporting")]), path: Type.String(), mediaType: Type.Optional(Type.String()) })))
     }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {

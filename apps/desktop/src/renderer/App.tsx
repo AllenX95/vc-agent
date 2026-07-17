@@ -12,6 +12,7 @@ import {
   type Project,
   type ProjectContextDocument,
   type ProjectMemoryDocument,
+  type ProjectOutputArtifact,
   type PromptContribution,
   type ProviderFailure,
   type SystemPromptRevision,
@@ -22,6 +23,7 @@ import {
 import {
   ChevronDown,
   CircleStop,
+  ExternalLink,
   Folder,
   KeyRound,
   MessageSquare,
@@ -91,7 +93,7 @@ export function App() {
   const [materialsByProject, setMaterialsByProject] = useState<Record<string, MaterialInventoryItem[]>>({});
   const [parseRefreshChoice, setParseRefreshChoice] = useState<Extract<HostEvent, { event: "material.parse.refresh.choice.required" }> | null>(null);
   const [materialParseState, setMaterialParseState] = useState<Record<string, string>>({});
-  const [projectPanelTab, setProjectPanelTab] = useState<"overview" | "context" | "memory">("overview");
+  const [projectPanelTab, setProjectPanelTab] = useState<"overview" | "outputs" | "context" | "memory">("overview");
   const [contextDocuments, setContextDocuments] = useState<Record<string, ProjectContextDocument>>({});
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const contextDirty = useRef<Record<string, boolean>>({});
@@ -100,6 +102,7 @@ export function App() {
   const memoryDirty = useRef<Record<string, boolean>>({});
   const [memoryCandidates, setMemoryCandidates] = useState<Record<string, MemoryCandidate>>({});
   const [candidateDraft, setCandidateDraft] = useState<{ candidate: MemoryCandidate; title: string; tags: string; body: string } | null>(null);
+  const [outputsByProject, setOutputsByProject] = useState<Record<string, ProjectOutputArtifact[]>>({});
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -155,6 +158,9 @@ export function App() {
         setMemoryCandidates((current) => ({ ...current, [event.payload.candidate.id]: event.payload.candidate }));
         if (event.payload.candidate.status !== "active") setCandidateDraft((draft) => draft?.candidate.id === event.payload.candidate.id ? null : draft);
         break;
+      case "project.outputs.listed":
+      case "project.outputs.updated": setOutputsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.outputs })); break;
+      case "project.output.opened": break;
       case "material.parse.refresh.choice.required": setParseRefreshChoice(event); break;
       case "material.parse.refresh.choice.resolved": setParseRefreshChoice(null); break;
       case "material.parse.started": setMaterialParseState((current) => ({ ...current, [event.payload.materialId]: "Parsing..." })); break;
@@ -373,6 +379,12 @@ export function App() {
     if (memoryDocuments[activeThread.projectId] === undefined) void invoke(createCommand({ command: "project.memory.load", payload: { projectId: activeThread.projectId } }));
   };
 
+  const openProjectOutputs = () => {
+    if (activeThread?.scope !== "project") return;
+    setProjectPanelTab("outputs");
+    void invoke(createCommand({ command: "project.output.list", payload: { projectId: activeThread.projectId } }));
+  };
+
   const reloadProjectMemory = () => {
     if (activeThread?.scope !== "project") return;
     memoryDirty.current[activeThread.projectId] = false;
@@ -485,8 +497,8 @@ export function App() {
       </main>
 
       <aside className="right-panel" aria-label="Project state">
-        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" role="tab" disabled>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" className={projectPanelTab === "memory" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "memory"} disabled={activeThread?.scope !== "project"} onClick={openProjectMemory}>Memory</button></div>
-        {activeThread?.scope === "project" ? projectPanelTab === "memory" ? <ProjectMemoryPanel document={memoryDocuments[activeThread.projectId]} draft={memoryDrafts[activeThread.projectId]} onChange={(content) => { memoryDirty.current[activeThread.projectId] = true; setMemoryDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }} onReload={reloadProjectMemory} onSave={saveProjectMemory} /> : projectPanelTab === "context" ? <ProjectContextPanel
+        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" className={projectPanelTab === "outputs" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "outputs"} disabled={activeThread?.scope !== "project"} onClick={openProjectOutputs}>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" className={projectPanelTab === "memory" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "memory"} disabled={activeThread?.scope !== "project"} onClick={openProjectMemory}>Memory</button></div>
+        {activeThread?.scope === "project" ? projectPanelTab === "outputs" ? <ProjectOutputsPanel outputs={outputsByProject[activeThread.projectId] ?? []} open={(artifactId) => void invoke(createCommand({ command: "project.output.open", payload: { projectId: activeThread.projectId, artifactId } }))} /> : projectPanelTab === "memory" ? <ProjectMemoryPanel document={memoryDocuments[activeThread.projectId]} draft={memoryDrafts[activeThread.projectId]} onChange={(content) => { memoryDirty.current[activeThread.projectId] = true; setMemoryDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }} onReload={reloadProjectMemory} onSave={saveProjectMemory} /> : projectPanelTab === "context" ? <ProjectContextPanel
           document={contextDocuments[activeThread.projectId]}
           draft={contextDrafts[activeThread.projectId]}
           onChange={(content) => { contextDirty.current[activeThread.projectId] = true; setContextDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }}
@@ -513,6 +525,10 @@ function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {
     <textarea aria-label="Project Context" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" />
     <button className="primary-button context-save" type="button" onClick={onSave}>Save Context</button>
   </div>;
+}
+
+function ProjectOutputsPanel({ outputs, open }: { outputs: ProjectOutputArtifact[]; open(artifactId: string): void }) {
+  return <div className="outputs-panel"><div className="inventory-heading"><h2>Outputs</h2><span>{outputs.length}</span></div>{outputs.length === 0 ? <p className="empty-list">No generated outputs</p> : outputs.map((output) => <div className="output-row" key={output.id}><div><strong title={output.relativePath}>{output.relativePath}</strong><span>{output.mediaType}</span><span>{output.profile.provider} / {output.profile.model} · {output.capabilityId}</span><span>{output.sourceReferences.length} source reference(s) · {output.warnings.length} warning(s)</span></div><button className="section-action" type="button" title="Open output" aria-label={`Open ${output.relativePath}`} onClick={() => open(output.id)}><ExternalLink size={14} /></button></div>)}</div>;
 }
 
 function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {

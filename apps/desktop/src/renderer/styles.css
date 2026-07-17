@@ -193,6 +193,11 @@ button { font: inherit; letter-spacing: 0; }
 .memory-draft-dialog label { display: grid; gap: 4px; color: #5b645d; font-size: 11px; }
 .memory-draft-dialog input, .memory-draft-dialog textarea { width: 100%; border: 1px solid #c9cec7; border-radius: 4px; padding: 7px 8px; background: #fff; color: #28332c; }
 .memory-draft-dialog textarea { min-height: 90px; resize: vertical; }
+.outputs-panel { flex: 1; min-height: 0; overflow: auto; padding: 14px 12px; }
+.output-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; border-bottom: 1px solid #d9ddd7; padding: 10px 0; }
+.output-row > div { display: grid; min-width: 0; gap: 3px; }
+.output-row strong { overflow: hidden; color: #2e3831; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.output-row span { color: #737b75; font-size: 10px; }
 .inventory-heading { align-items: center; display: flex; justify-content: space-between; }
 .inventory-heading h2 { margin: 0; font-size: 13px; }
 .material-inventory > p { margin: 5px 0 12px; color: #747c75; font-size: 10px; }

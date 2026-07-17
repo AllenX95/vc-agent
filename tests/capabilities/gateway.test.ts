@@ -108,6 +108,29 @@ describe("Capability Gateway", () => {
     expect(readdirSync(directory).filter((name) => name.endsWith(".partial"))).toEqual([]);
   });
 
+  it("writes a source-referenced Project Output under the determined project outputs directory", async () => {
+    const project = outputDirectory();
+    const outputLocation = join(project, "outputs");
+    const { gateway } = createGatewayFixture();
+    const executionRequest = request({
+      scope: { kind: "project", projectId: crypto.randomUUID() },
+      arguments: { path: "investment-memo.md", content: "# View\n\nFact [material:block-1]\n\nInference: execution risk remains.", mediaType: "text/markdown", sourceReferences: ["material:one/block:block-1@hash", "https://example.com/source"], warnings: ["One inference remains uncertain."] }
+    });
+    const decision = await gateway.request(executionRequest, authorization(outputLocation, { scope: "project", outputLocation }));
+    expect(decision).toMatchObject({ type: "result", result: { status: "completed", artifact: { destination: join(outputLocation, "investment-memo.md"), mediaType: "text/markdown" } } });
+    expect(readFileSync(join(outputLocation, "investment-memo.md"), "utf8")).toContain("Inference:");
+    expect(JSON.stringify(decision)).not.toMatch(/draft|final/iu);
+  });
+
+  it("does not let an ordinary Project Output overwrite reserved system or parsed state", async () => {
+    const outputLocation = outputDirectory();
+    const { gateway } = createGatewayFixture();
+    const executionRequest = request({ scope: { kind: "project", projectId: crypto.randomUUID() }, arguments: { path: "system/project-memory.md", content: "Must not write" } });
+    const decision = await gateway.request(executionRequest, authorization(outputLocation, { scope: "project" }));
+    expect(decision).toMatchObject({ type: "result", result: { status: "failed", code: "CAPABILITY_PRECONDITION_FAILED" } });
+    expect(existsSync(join(outputLocation, "system", "project-memory.md"))).toBe(false);
+  });
+
   it("requires one scoped Standard Access confirmation for replacement", async () => {
     const directory = outputDirectory();
     writeFileSync(join(directory, "memo.txt"), "Old content");

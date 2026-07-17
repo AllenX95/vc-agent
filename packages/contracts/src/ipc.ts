@@ -143,6 +143,16 @@ export const memoryCandidateSchema = z.object({
   capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), signal: z.enum(["explicit_remember", "strong_user_judgment"]), status: z.enum(["active", "dismissed", "promoted"])
 });
 export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;
+export const projectOutputArtifactSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().min(1), projectId: z.string().uuid(), mediaType: z.string().min(1), destination: z.string().min(1), relativePath: z.string().min(1),
+  producer: z.object({ type: z.enum(["agent", "sub_agent", "user", "utility"]), id: z.string().min(1) }),
+  source: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), capabilityRequestId: z.string().min(1) }),
+  profile: z.object({ id: z.string().min(1), provider: z.string().min(1), model: z.string().min(1) }), capabilityId: z.string().min(1),
+  skillId: z.string().min(1).optional(), sourceReferences: z.array(z.string()), warnings: z.array(z.string()),
+  relatedArtifacts: z.array(z.object({ relation: z.enum(["render", "diff", "supporting"]), path: z.string().min(1), mediaType: z.string().min(1).optional() })),
+  createdAt: z.string().datetime()
+});
+export type ProjectOutputArtifact = z.infer<typeof projectOutputArtifactSchema>;
 
 export const usageSchema = z.object({
   input: z.number().nonnegative(),
@@ -258,6 +268,8 @@ const confirmProjectMemoryAppendCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.memory.append.confirm"),
   payload: z.object({ candidateId: z.string().uuid(), projectId: z.string().uuid(), title: z.string().trim().min(1).max(160), tags: z.array(z.string().trim().min(1).max(80)).max(12), body: z.string().trim().min(1).max(20_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
 });
+const listProjectOutputsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.output.list"), payload: z.object({ projectId: z.string().uuid() }) });
+const openProjectOutputCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.output.open"), payload: z.object({ projectId: z.string().uuid(), artifactId: z.string().min(1) }) });
 const needMaterialCommandSchema = commandMetadataSchema.extend({
   command: z.literal("material.need"), payload: z.object({ materialId: z.string().uuid() })
 });
@@ -337,6 +349,8 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   saveProjectMemoryCommandSchema,
   dismissMemoryCandidateCommandSchema,
   confirmProjectMemoryAppendCommandSchema,
+  listProjectOutputsCommandSchema,
+  openProjectOutputCommandSchema,
   needMaterialCommandSchema,
   parseMaterialCommandSchema,
   resolveParseRefreshCommandSchema,
@@ -584,6 +598,10 @@ const projectMemoryEventSchema = eventMetadataSchema.extend({
 const memoryCandidateEventSchema = eventMetadataSchema.extend({
   event: z.enum(["memory.candidate.captured", "memory.candidate.resolved"]), payload: z.object({ candidate: memoryCandidateSchema })
 });
+const projectOutputsEventSchema = eventMetadataSchema.extend({
+  event: z.enum(["project.outputs.listed", "project.outputs.updated"]), payload: z.object({ projectId: z.string().uuid(), outputs: z.array(projectOutputArtifactSchema) })
+});
+const projectOutputOpenedEventSchema = eventMetadataSchema.extend({ event: z.literal("project.output.opened"), payload: z.object({ projectId: z.string().uuid(), artifactId: z.string().min(1), destination: z.string().min(1) }) });
 const threadCompactionEventSchema = eventMetadataSchema.extend({
   event: z.enum(["thread.compaction.started", "thread.compaction.completed", "thread.compaction.failed"]),
   payload: z.object({
@@ -659,6 +677,8 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   projectContextEventSchema,
   projectMemoryEventSchema,
   memoryCandidateEventSchema,
+  projectOutputsEventSchema,
+  projectOutputOpenedEventSchema,
   threadCompactionEventSchema,
   capabilityConfirmationRequiredEventSchema,
   capabilityExecutionUpdatedEventSchema

@@ -607,6 +607,38 @@ test("captures a Project Memory candidate and appends it only after explicit con
   }
 });
 
+test("lists only registered Project Outputs with format-neutral provenance", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d8-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-d8-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    const marker = JSON.parse(readFileSync(join(projectDirectory, "outputs", "system", "project.json"), "utf8")) as { projectId: string };
+    const destination = join(projectDirectory, "outputs", "industry-note.md");
+    writeFileSync(destination, "# Industry Note\n\nFact with source.\n\nInference under uncertainty.", "utf8");
+    const artifactId = crypto.randomUUID();
+    const registryPath = join(projectDirectory, "outputs", "system", "artifacts.jsonl");
+    writeFileSync(registryPath, `${JSON.stringify({ schemaVersion: 1, id: crypto.randomUUID(), type: "canonical_parse", path: "outputs/parsed/source/parse.json" })}\n${JSON.stringify({ type: "user_output", schemaVersion: 1, id: artifactId, projectId: marker.projectId, mediaType: "text/markdown", destination, relativePath: "industry-note.md", producer: { type: "agent", id: "primary-agent" }, source: { threadId: "thread-source", turnId: "turn-source", capabilityRequestId: "request-source" }, profile: { id: "profile-source", provider: "anthropic", model: "claude-sonnet" }, capabilityId: "output.write_text", sourceReferences: ["material:source/block:block-1@hash", "https://example.com/source"], warnings: ["Inference is uncertain."], relatedArtifacts: [], createdAt: new Date().toISOString() })}\n`, "utf8");
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    await window.getByRole("tab", { name: "Outputs" }).click();
+    const panel = window.locator(".outputs-panel");
+    await expect(panel).toContainText("industry-note.md");
+    await expect(panel).toContainText("text/markdown");
+    await expect(panel).toContainText("anthropic / claude-sonnet");
+    await expect(panel).toContainText("2 source reference(s) · 1 warning(s)");
+    await expect(panel).not.toContainText("canonical_parse");
+    await expect(panel.getByRole("button", { name: "Open industry-note.md" })).toBeVisible();
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
 async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
