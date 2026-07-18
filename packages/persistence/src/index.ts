@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import type { AccessMode, ArtifactRecord, BootstrapState, MaterialInventoryItem, ModelProfile, Project, ProjectThread, SystemPromptRevision, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
+import { independentAssessmentSchema, providerFailureSchema, reflectionProjectBriefSchema, reflectionRunSchema, type AccessMode, type ArtifactRecord, type BootstrapState, type IndependentAssessment, type MaterialInventoryItem, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionProjectBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
 import { immutableDatabaseUrl, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
@@ -62,6 +62,23 @@ interface MaterialRow {
 interface ParsedMaterialRow {
   id: string; material_id: string; source_hash: string; parser_id: string; artifact_path: string;
   status: "active" | "source_unavailable"; created_at: string;
+}
+
+interface ReflectionRunRow {
+  id: string; thread_id: string; project_id: string; framing: "reflection" | "retrospective"; objective: string; focus: string | null;
+  status: ReflectionRun["status"]; brief_json: string; prompt_revision_id: string; prompt_hash: string; independent_profile_id: string | null;
+  launch_override_profile_id: string | null; assessment_json: string | null; failure_json: string | null; session_file: string | null; created_at: string; updated_at: string;
+}
+
+export interface CreateReflectionRunInput {
+  readonly projectId: string;
+  readonly framing: "reflection" | "retrospective";
+  readonly objective: string;
+  readonly focus?: string | undefined;
+  readonly brief: ReflectionProjectBrief;
+  readonly promptRevision: SystemPromptRevision;
+  readonly independentProfileId?: string | undefined;
+  readonly launchOverrideProfileId?: string | undefined;
 }
 
 export interface RefreshInventoryRecord {
@@ -255,6 +272,33 @@ export class HostStateStore {
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?)")
       .run(new Date().toISOString());
     if (!this.#columnExists("threads", "project_id")) this.#migrateProjects();
+    this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS task_model_assignments (
+        task_type TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS reflection_runs (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL UNIQUE REFERENCES threads(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
+        objective TEXT NOT NULL,
+        focus TEXT,
+        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted')),
+        brief_json TEXT NOT NULL,
+        prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
+        prompt_hash TEXT NOT NULL,
+        independent_profile_id TEXT REFERENCES model_profiles(id),
+        launch_override_profile_id TEXT REFERENCES model_profiles(id),
+        assessment_json TEXT,
+        failure_json TEXT,
+        session_file TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `);
     if (!this.#columnExists("physical_contexts", "prompt_revision_id")) this.#database.exec("ALTER TABLE physical_contexts ADD COLUMN prompt_revision_id TEXT");
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)")
@@ -267,6 +311,9 @@ export class HostStateStore {
       .run(new Date().toISOString());
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (8, ?)")
+        .run(new Date().toISOString());
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (9, ?)")
         .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
@@ -340,7 +387,7 @@ export class HostStateStore {
         projects: this.#count("projects"),
         threads: this.#count("threads"),
         modelProfiles: this.#count("model_profiles"),
-        taskAssignments: 0
+        taskAssignments: this.#count("task_model_assignments")
       },
       runtimeActivity: activity
     };
@@ -350,7 +397,7 @@ export class HostStateStore {
 
   get isReadOnlyRecovery(): boolean { return this.#preparation.mode === "read_only_recovery"; }
 
-  #count(table: "projects" | "threads" | "model_profiles"): number {
+  #count(table: "projects" | "threads" | "model_profiles" | "task_model_assignments"): number {
     const row = this.#database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
     return Number(row.count);
   }
@@ -400,6 +447,29 @@ export class HostStateStore {
       .prepare("SELECT encrypted_value FROM protected_credentials WHERE id = ?")
       .get(credentialRef) as { encrypted_value: Uint8Array } | undefined;
     return row?.encrypted_value;
+  }
+
+  listTaskModelAssignments(): TaskModelAssignment[] {
+    return (this.#database.prepare("SELECT * FROM task_model_assignments ORDER BY task_type").all() as unknown as Array<{ task_type: TaskModelType; profile_id: string; updated_at: string }>).map((row) => ({ taskType: row.task_type, profileId: row.profile_id, updatedAt: row.updated_at }));
+  }
+
+  getTaskModelAssignment(taskType: TaskModelType): TaskModelAssignment | undefined {
+    const row = this.#database.prepare("SELECT * FROM task_model_assignments WHERE task_type = ?").get(taskType) as { task_type: TaskModelType; profile_id: string; updated_at: string } | undefined;
+    return row === undefined ? undefined : { taskType: row.task_type, profileId: row.profile_id, updatedAt: row.updated_at };
+  }
+
+  setTaskModelAssignment(taskType: TaskModelType, profileId: string): TaskModelAssignment {
+    if (this.getModelProfile(profileId) === undefined) throw new Error("Model Profile not found");
+    const updatedAt = new Date().toISOString();
+    this.#database.prepare(`
+      INSERT INTO task_model_assignments(task_type, profile_id, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(task_type) DO UPDATE SET profile_id = excluded.profile_id, updated_at = excluded.updated_at
+    `).run(taskType, profileId, updatedAt);
+    return { taskType, profileId, updatedAt };
+  }
+
+  clearTaskModelAssignment(taskType: TaskModelType): boolean {
+    return this.#database.prepare("DELETE FROM task_model_assignments WHERE task_type = ?").run(taskType).changes === 1;
   }
 
   createUnscopedThread(title: string): UnscopedThread {
@@ -454,6 +524,96 @@ export class HostStateStore {
     this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
       .run(thread.id, thread.title, projectId, thread.createdAt);
     return thread;
+  }
+
+  createReflectionRun(input: CreateReflectionRunInput): ReflectionRun {
+    if (this.getProject(input.projectId) === undefined || input.brief.projectId !== input.projectId) throw new Error("Reflection Project not found");
+    if (this.getSystemPromptRevision(input.promptRevision.id)?.hash !== input.promptRevision.hash) throw new Error("Reflection Prompt Snapshot is unavailable");
+    if (input.independentProfileId !== undefined && this.getModelProfile(input.independentProfileId) === undefined) throw new Error("Reflection Model Profile not found");
+    if (input.launchOverrideProfileId !== undefined && input.launchOverrideProfileId !== input.independentProfileId) throw new Error("Reflection launch override does not match the effective Profile");
+    const id = randomUUID();
+    const threadId = randomUUID();
+    const now = new Date().toISOString();
+    const status: ReflectionRun["status"] = input.independentProfileId === undefined ? "awaiting_profile" : "ready";
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
+        .run(threadId, input.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection", input.projectId, now);
+      this.#database.prepare(`
+        INSERT INTO reflection_runs(id, thread_id, project_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, threadId, input.projectId, input.framing, input.objective, input.focus?.trim() || null, status, JSON.stringify(input.brief), input.promptRevision.id, input.promptRevision.hash, input.independentProfileId ?? null, input.launchOverrideProfileId ?? null, now, now);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getReflectionRun(id)!;
+  }
+
+  listReflectionRuns(projectId?: string): ReflectionRun[] {
+    const rows = projectId === undefined
+      ? this.#database.prepare("SELECT * FROM reflection_runs ORDER BY created_at DESC").all()
+      : this.#database.prepare("SELECT * FROM reflection_runs WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
+    return (rows as unknown as ReflectionRunRow[]).map(mapReflectionRun);
+  }
+
+  getReflectionRun(id: string): ReflectionRun | undefined {
+    const row = this.#database.prepare("SELECT * FROM reflection_runs WHERE id = ?").get(id) as ReflectionRunRow | undefined;
+    return row === undefined ? undefined : mapReflectionRun(row);
+  }
+
+  selectReflectionProfile(id: string, profileId: string, launchOverride: boolean): ReflectionRun {
+    if (this.getModelProfile(profileId) === undefined) throw new Error("Reflection Model Profile not found");
+    const result = this.#database.prepare(`
+      UPDATE reflection_runs SET independent_profile_id = ?, launch_override_profile_id = ?, status = 'ready', failure_json = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('awaiting_profile', 'independent_failed', 'independent_interrupted', 'ready')
+    `).run(profileId, launchOverride ? profileId : null, new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection Profile selection is stale");
+    return this.getReflectionRun(id)!;
+  }
+
+  markReflectionRunning(id: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_running', failure_json = NULL, updated_at = ? WHERE id = ? AND status IN ('ready', 'independent_failed', 'independent_interrupted') AND independent_profile_id IS NOT NULL")
+      .run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection run is not ready");
+    return this.getReflectionRun(id)!;
+  }
+
+  setReflectionSession(id: string, sessionFile: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET session_file = ?, updated_at = ? WHERE id = ? AND status = 'independent_running'").run(sessionFile, new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection run is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  completeIndependentAssessment(id: string, assessment: IndependentAssessment): ReflectionRun {
+    const parsed = independentAssessmentSchema.parse(assessment);
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_completed', assessment_json = ?, failure_json = NULL, updated_at = ? WHERE id = ? AND status = 'independent_running'")
+      .run(JSON.stringify(parsed), new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection run is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  failIndependentAssessment(id: string, failure: ProviderFailure): ReflectionRun {
+    const parsed = providerFailureSchema.parse(failure);
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_failed', failure_json = ?, updated_at = ? WHERE id = ? AND status = 'independent_running'")
+      .run(JSON.stringify(parsed), new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection run is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  interruptIndependentAssessment(id: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_interrupted', updated_at = ? WHERE id = ? AND status = 'independent_running'")
+      .run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Reflection run is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  recoverInterruptedReflections(): ReflectionRun[] {
+    const ids = (this.#database.prepare("SELECT id FROM reflection_runs WHERE status = 'independent_running'").all() as Array<{ id: string }>).map((row) => row.id);
+    if (ids.length === 0) return [];
+    this.#database.prepare("UPDATE reflection_runs SET status = 'independent_interrupted', updated_at = ? WHERE status = 'independent_running'").run(new Date().toISOString());
+    return ids.map((id) => this.getReflectionRun(id)!);
   }
 
   refreshMaterialInventory(projectId: string, records: readonly RefreshInventoryRecord[]): { materials: MaterialInventoryItem[]; changedMaterialIds: string[] } {
@@ -848,6 +1008,28 @@ function mapPromptRevision(row: PromptRevisionRow): SystemPromptRevision {
     source: row.source,
     createdAt: row.created_at
   };
+}
+
+function mapReflectionRun(row: ReflectionRunRow): ReflectionRun {
+  return reflectionRunSchema.parse({
+    schemaVersion: 1,
+    id: row.id,
+    threadId: row.thread_id,
+    projectId: row.project_id,
+    framing: row.framing,
+    objective: row.objective,
+    ...(row.focus === null ? {} : { focus: row.focus }),
+    status: row.status,
+    brief: reflectionProjectBriefSchema.parse(JSON.parse(row.brief_json)),
+    promptSnapshot: { revisionId: row.prompt_revision_id, hash: row.prompt_hash },
+    ...(row.independent_profile_id === null ? {} : { independentProfileId: row.independent_profile_id }),
+    ...(row.launch_override_profile_id === null ? {} : { launchOverrideProfileId: row.launch_override_profile_id }),
+    ...(row.assessment_json === null ? {} : { assessment: independentAssessmentSchema.parse(JSON.parse(row.assessment_json)) }),
+    ...(row.failure_json === null ? {} : { failure: providerFailureSchema.parse(JSON.parse(row.failure_json)) }),
+    ...(row.session_file === null ? {} : { sessionFile: row.session_file }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  });
 }
 
 function lineDiff(previous: string, next: string): string {

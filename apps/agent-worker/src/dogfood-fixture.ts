@@ -32,3 +32,19 @@ export function explicitLongTermMemoryFixtureResponses() {
     fauxAssistantMessage("Completed the Long-term Memory policy fixture.")
   ];
 }
+
+export function reflectionFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("material_recall", { disclosureLevel: "cards", maxItems: 8, maxChars: 4_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(JSON.stringify({
+      schemaVersion: 1,
+      conclusion: "The current evidence supports continued diligence, but not a final investment decision.",
+      rationale: ["The available project materials establish a bounded basis for review."],
+      uncertainties: ["Material coverage may be incomplete."],
+      counterarguments: ["Metadata alone does not validate the underlying investment claims."],
+      evidenceReferences: [{ referenceId: "material-inventory", claim: "Project materials were available for progressive review.", support: "supporting" }],
+      decisionChangingQuestions: ["Which unresolved commercial assumption has the highest downside impact?"],
+      createdAt: "2026-07-19T00:00:00.000Z"
+    }))
+  ];
+}

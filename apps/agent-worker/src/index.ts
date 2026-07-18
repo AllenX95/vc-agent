@@ -8,7 +8,7 @@ import {
 } from "@vc-agent/contracts";
 import { createPiSession, sanitizeProviderFailure, type PiSessionEvent, type PiSessionHandle } from "@vc-agent/pi-adapter";
 import { createFauxPiSession } from "@vc-agent/pi-adapter/testing";
-import { dogfoodFixtureResponses, explicitLongTermMemoryFixtureResponses, longTermMemoryFixtureResponses } from "./dogfood-fixture.js";
+import { dogfoodFixtureResponses, explicitLongTermMemoryFixtureResponses, longTermMemoryFixtureResponses, reflectionFixtureResponses } from "./dogfood-fixture.js";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Agent Worker requires an Electron Utility Process parent port");
@@ -77,6 +77,9 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
   compactionUsed = false;
   let failureSent = false;
   try {
+    if (process.env.NODE_ENV === "test" && command.profile.provider === "vc-agent-reflection-provider-failure-faux") {
+      throw new Error(JSON.stringify({ error: { code: "FIXTURE_PROVIDER_REJECTED", message: `Provider rejected credential ${command.profile.apiKey}`, request_id: "req-reflection-fixture" } }));
+    }
     const profileKey = `${command.profile.provider}\u0000${command.profile.model}`;
     if (session !== null && sessionProfileKey !== profileKey) {
       session.dispose();
@@ -132,8 +135,8 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
             });
           }
       };
-      session = (["vc-agent-faux", "vc-agent-memory-faux", "vc-agent-explicit-memory-faux"].includes(command.profile.provider)) && process.env.NODE_ENV === "test"
-        ? await createFauxPiSession({ config: sessionConfig, responses: command.profile.provider === "vc-agent-memory-faux" ? longTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-explicit-memory-faux" ? explicitLongTermMemoryFixtureResponses() : dogfoodFixtureResponses(), onEvent: onSessionEvent })
+      session = (["vc-agent-faux", "vc-agent-memory-faux", "vc-agent-explicit-memory-faux", "vc-agent-reflection-faux"].includes(command.profile.provider)) && process.env.NODE_ENV === "test"
+        ? await createFauxPiSession({ config: sessionConfig, responses: command.profile.provider === "vc-agent-memory-faux" ? longTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-explicit-memory-faux" ? explicitLongTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-reflection-faux" ? reflectionFixtureResponses() : dogfoodFixtureResponses(), onEvent: onSessionEvent })
         : await createPiSession({ ...sessionConfig, profile: command.profile }, onSessionEvent);
       sessionProfileKey = profileKey;
       send({

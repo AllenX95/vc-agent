@@ -18,13 +18,17 @@ import {
   type PreparedMemoryPatch,
   type PromptContribution,
   type ProviderFailure,
+  type ReflectionRun,
   type SystemPromptRevision,
+  type TaskModelAssignment,
+  type TaskModelType,
   type TrajectoryProfile,
   type TokenUsage,
   type Thread
 } from "@vc-agent/contracts";
 import {
   ChevronDown,
+  ClipboardCheck,
   CircleStop,
   ExternalLink,
   Folder,
@@ -42,6 +46,12 @@ import {
 } from "lucide-react";
 
 type View = "workspace" | "settings";
+const TASK_MODEL_TYPES: Array<{ id: TaskModelType; label: string }> = [
+  { id: "ordinary_conversation", label: "Ordinary conversation" }, { id: "web_research", label: "Web research" },
+  { id: "document_generation", label: "Document generation" }, { id: "dream", label: "Dream" },
+  { id: "independent_evidence", label: "Independent evidence" }, { id: "memory_aware_reflection", label: "Memory-aware reflection" },
+  { id: "extension_audit", label: "Extension audit" }, { id: "visual_material_analysis", label: "Visual material analysis" }
+];
 type ConversationItem =
   | { id: string; turnId: string; role: "user"; text: string }
   | { id: string; turnId: string; role: "system"; text: string }
@@ -90,6 +100,9 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [diagnostic, setDiagnostic] = useState<HostEvent | null>(null);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [taskAssignments, setTaskAssignments] = useState<TaskModelAssignment[]>([]);
+  const [reflectionRuns, setReflectionRuns] = useState<ReflectionRun[]>([]);
+  const [reflectionLaunch, setReflectionLaunch] = useState<{ projectId: string; focus: string; profileId: string } | null>(null);
   const [promptRevisions, setPromptRevisions] = useState<SystemPromptRevision[]>([]);
   const [activePromptRevisionId, setActivePromptRevisionId] = useState<string | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -123,6 +136,7 @@ export function App() {
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
+  const activeReflection = reflectionRuns.find((run) => run.threadId === activeThreadId);
   const items = activeThreadId === null ? [] : conversations[activeThreadId] ?? [];
   const hasActiveTurn = items.some(
     (item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming")
@@ -158,6 +172,17 @@ export function App() {
       case "long_term_memory.provenance.inspected": break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
+      case "task_model_assignments.listed": setTaskAssignments(event.payload.assignments); break;
+      case "task_model_assignment.updated": setTaskAssignments((current) => event.payload.assignment === undefined ? current.filter((item) => item.taskType !== event.payload.taskType) : [...current.filter((item) => item.taskType !== event.payload.taskType), event.payload.assignment]); break;
+      case "reflection.runs.listed": setReflectionRuns(event.payload.runs); break;
+      case "reflection.run.created":
+        setReflectionRuns((current) => [event.payload.run, ...current.filter((item) => item.id !== event.payload.run.id)]);
+        setThreads((current) => [...current.filter((item) => item.id !== event.payload.thread.id), event.payload.thread]);
+        setActiveThreadId(event.payload.thread.id);
+        setReflectionLaunch(null);
+        setView("workspace");
+        break;
+      case "reflection.run.updated": setReflectionRuns((current) => [event.payload.run, ...current.filter((item) => item.id !== event.payload.run.id)]); break;
       case "prompt.revisions.listed": setPromptRevisions(event.payload.revisions); setActivePromptRevisionId(event.payload.activeRevisionId); break;
       case "prompt.revision.created": setPromptRevisions((current) => [event.payload.revision, ...current]); setActivePromptRevisionId(event.payload.activeRevisionId); break;
       case "prompt.revision.activated": setPromptRevisions((current) => [event.payload.revision, ...current.filter((item) => item.id !== event.payload.revision.id)]); setActivePromptRevisionId(event.payload.revision.id); break;
@@ -307,9 +332,10 @@ export function App() {
     const parsed = hostEventSchema.safeParse(rawEvent);
     if (!parsed.success) {
       setDiagnostic(localDiagnostic("The Host returned an invalid event envelope."));
-      return;
+      return undefined;
     }
     applyEvent(parsed.data);
+    return parsed.data;
   }, [applyEvent]);
 
   useEffect(() => {
@@ -319,6 +345,8 @@ export function App() {
     });
     void invoke(createBootstrapCommand());
     void invoke(createCommand({ command: "profile.list" }));
+    void invoke(createCommand({ command: "task_model_assignment.list" }));
+    void invoke(createCommand({ command: "reflection.list", payload: {} }));
     void invoke(createCommand({ command: "prompt.revision.list" }));
     void invoke(createCommand({ command: "project.list" }));
     void invoke(createCommand({ command: "thread.list" }));
@@ -459,6 +487,30 @@ export function App() {
     void invoke(createCommand({ command: "project.memory.append.confirm", payload: { candidateId: candidateDraft.candidate.id, projectId, title: candidateDraft.title, tags: candidateDraft.tags.split(",").map((tag) => tag.trim()).filter(Boolean), body: candidateDraft.body, expectedSourceHash: document.sourceHash } }));
   };
 
+  const openReflectionLaunch = (projectId: string) => {
+    const assigned = taskAssignments.find((item) => item.taskType === "independent_evidence");
+    setReflectionLaunch({ projectId, focus: "", profileId: assigned?.profileId ?? "" });
+  };
+
+  const launchReflection = async () => {
+    if (reflectionLaunch === null) return;
+    const event = await invoke(createCommand({
+      command: "reflection.start.project",
+      payload: {
+        projectId: reflectionLaunch.projectId,
+        ...(reflectionLaunch.focus.trim() === "" ? {} : { focus: reflectionLaunch.focus.trim() }),
+        ...(reflectionLaunch.profileId === "" ? {} : { profileId: reflectionLaunch.profileId })
+      }
+    }));
+    if (event?.event === "reflection.run.created" && event.payload.run.status === "ready") {
+      await invoke(createCommand({ command: "reflection.independent.start", payload: { runId: event.payload.run.id } }));
+    }
+  };
+
+  const startOrRetryReflection = (run: ReflectionRun, profileId?: string) => {
+    void invoke(createCommand({ command: "reflection.independent.start", payload: { runId: run.id, ...(profileId === undefined || profileId === "" ? {} : { profileId }) } }));
+  };
+
   return (
     <div className={`app-shell ${readOnlyRecovery ? "read-only-recovery" : ""}`}>
       <aside className="left-rail" aria-label="Navigation">
@@ -495,14 +547,14 @@ export function App() {
         <RecoveryBanner bootstrap={bootstrap} />
         <DiagnosticBanner event={diagnostic} />
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} taskAssignments={taskAssignments} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}`}</span></header>
+            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : reflectionStatusLabel(activeReflection.status)}</span></header>
             <div className="message-list">
-              {items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
+              {activeReflection !== undefined ? <ReflectionWorkspace run={activeReflection} profiles={profiles} start={startOrRetryReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} /> : items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
                 <MessageItem key={item.id} item={item} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
               ))}
               {Object.values(memoryCandidates).filter((candidate) => candidate.threadId === activeThreadId && candidate.status === "active").map((candidate) => <div className="memory-candidate" key={candidate.id}><div><strong>Memory candidate captured</strong><span>{candidate.sourceSnippet}</span></div><div>{candidate.scope === "project" && <button type="button" onClick={() => reviewCandidate(candidate)}>Review</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "memory.candidate.dismiss", payload: { candidateId: candidate.id } }))}>Dismiss</button></div></div>)}
@@ -526,8 +578,9 @@ export function App() {
           <strong>Material changed</strong><p>{parseRefreshChoice.payload.material.relativePath}</p><span>Previous {parseRefreshChoice.payload.previousSourceHash.slice(0, 12)} · Current {parseRefreshChoice.payload.currentSourceHash.slice(0, 12)} · {parseRefreshChoice.payload.parserId}</span><div><button className="primary-button" type="button" onClick={() => resolveParseRefresh("create_new_version")}>Create New Parse Version</button><button type="button" onClick={() => resolveParseRefresh("replace_previous")}>Replace Previous Parse</button><button type="button" onClick={() => resolveParseRefresh("cancel")}>Cancel</button></div>
         </div>}
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
+        {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>The first pass is isolated from Project Memory and Long-term Memory.</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder="Review this Project broadly" /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
 
-        {view === "workspace" && activeThread !== undefined && (
+        {view === "workspace" && activeThread !== undefined && activeReflection === undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
             <textarea aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={hasActiveTurn || readOnlyRecovery} />
             <div className="composer-footer">
@@ -551,11 +604,32 @@ export function App() {
           onChange={(content) => { contextDirty.current[activeThread.projectId] = true; setContextDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }}
           onReload={reloadProjectContext}
           onSave={saveProjectContext}
-        /> : <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
+        /> : <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><div className="inventory-actions"><button className="compact-button" type="button" onClick={() => openReflectionLaunch(activeThread.projectId)} disabled={readOnlyRecovery}><ClipboardCheck size={14} /> Reflection</button><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
         <div className="status-strip"><span><span className="status-dot" /> {readOnlyRecovery ? "Recovery" : "Host ready"}</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>
   );
+}
+
+function ReflectionWorkspace({ run, profiles, start, stop, configure }: { run: ReflectionRun; profiles: ModelProfile[]; start(run: ReflectionRun, profileId?: string): void; stop(): void; configure(): void }) {
+  const [profileId, setProfileId] = useState(run.independentProfileId ?? "");
+  useEffect(() => setProfileId(run.independentProfileId ?? ""), [run.id, run.independentProfileId]);
+  const assessment = run.assessment;
+  return <article className="reflection-workspace" data-testid="reflection-workspace">
+    <div className="reflection-summary"><div><span className={`reflection-status ${run.status}`}>{reflectionStatusLabel(run.status)}</span><h2>{run.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection"}</h2><p>{run.objective}</p>{run.focus && <p><strong>Focus:</strong> {run.focus}</p>}</div><dl><div><dt>Brief</dt><dd>{run.brief.materialCards.length} materials · {run.brief.recordReferences.length} records</dd></div><div><dt>Prompt</dt><dd>{run.promptSnapshot.hash.slice(0, 12)}</dd></div><div><dt>Frozen</dt><dd>{new Date(run.createdAt).toLocaleString()}</dd></div></dl></div>
+    {assessment !== undefined && <section className="assessment"><h3>Independent Assessment</h3><p className="assessment-conclusion">{assessment.conclusion}</p><AssessmentList title="Rationale" items={assessment.rationale} /><AssessmentList title="Uncertainties" items={assessment.uncertainties} /><AssessmentList title="Counterarguments" items={assessment.counterarguments} /><AssessmentList title="Decision-changing questions" items={assessment.decisionChangingQuestions} />{assessment.evidenceReferences.length > 0 && <div><h4>Evidence references</h4>{assessment.evidenceReferences.map((reference) => <p className="evidence-reference" key={`${reference.referenceId}-${reference.claim}`}><strong>{reference.support}</strong> {reference.claim}<span>{reference.referenceId}</span></p>)}</div>}</section>}
+    {run.failure !== undefined && <div className="reflection-failure" role="alert"><strong>{run.failure.code}</strong><p>{run.failure.message}</p>{run.failure.requestId && <span>Request {run.failure.requestId}</span>}</div>}
+    {run.status !== "independent_completed" && <div className="reflection-controls"><select aria-label="Independent Evidence Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={run.status === "independent_running"}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>{profiles.length === 0 ? <button type="button" onClick={configure}>Configure profiles</button> : run.status === "independent_running" ? <button type="button" onClick={stop}>Stop</button> : <button className="primary-button" type="button" onClick={() => start(run, profileId)} disabled={profileId === ""}>{run.status === "ready" || run.status === "awaiting_profile" ? "Start evidence pass" : "Retry evidence pass"}</button>}</div>}
+  </article>;
+}
+
+function AssessmentList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return <div><h4>{title}</h4><ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul></div>;
+}
+
+function reflectionStatusLabel(status: ReflectionRun["status"]): string {
+  return ({ awaiting_profile: "Awaiting profile", ready: "Ready", independent_running: "Analyzing evidence", independent_completed: "Evidence pass complete", independent_failed: "Evidence pass failed", independent_interrupted: "Evidence pass interrupted" })[status];
 }
 
 function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {
@@ -594,14 +668,15 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
+  taskAssignments: TaskModelAssignment[];
   promptRevisions: SystemPromptRevision[];
   activePromptRevisionId: string | null;
   formOpen: boolean;
   setFormOpen(value: boolean): void;
-  invoke(command: HostCommand): Promise<void>;
+  invoke(command: HostCommand): Promise<unknown>;
   readOnly: boolean;
   recoveryExport: string | null;
   longTermMemoryDocument: LongTermMemoryDocument | null;
@@ -653,6 +728,7 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
         </form>}
         <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span></div><span>{profile.thinkingLevel}</span></div>)}</div>
       </div>
+      <div className="settings-section task-assignment-settings"><div className="settings-section-header"><div><h2>Task Model Assignments</h2><p>Workflow defaults; launch-time selection remains available.</p></div></div>{TASK_MODEL_TYPES.map((task) => <label key={task.id}><span>{task.label}</span><select aria-label={`${task.label} Profile`} value={taskAssignments.find((item) => item.taskType === task.id)?.profileId ?? ""} onChange={(event) => void invoke(createCommand(event.target.value === "" ? { command: "task_model_assignment.clear", payload: { taskType: task.id } } : { command: "task_model_assignment.set", payload: { taskType: task.id, profileId: event.target.value } }))}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</option>)}</select></label>)}</div>
       <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
       </fieldset>
@@ -669,7 +745,7 @@ function LongTermMemorySettings({ document, draft, patch, maintenance, invoke, o
   draft: string;
   patch: PreparedMemoryPatch | null;
   maintenance: MemoryMaintenanceState | null;
-  invoke(command: HostCommand): Promise<void>;
+  invoke(command: HostCommand): Promise<unknown>;
   onChange(content: string): void;
   onRefresh(): void;
   onSave(): void;
@@ -734,7 +810,7 @@ function LongTermMemorySettings({ document, draft, patch, maintenance, invoke, o
 function PromptSettings({ revisions, activeRevisionId, invoke }: {
   revisions: SystemPromptRevision[];
   activeRevisionId: string | null;
-  invoke(command: HostCommand): Promise<void>;
+  invoke(command: HostCommand): Promise<unknown>;
 }) {
   const active = revisions.find((revision) => revision.id === activeRevisionId);
   const [content, setContent] = useState("");

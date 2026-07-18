@@ -95,7 +95,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 8, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 9, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -114,7 +114,7 @@ test("keeps old state active when staged migration fails", async () => {
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -129,7 +129,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 7, supportedVersion: 8, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 8, supportedVersion: 9, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -957,6 +957,73 @@ test("recovers the complete Dogfood failure path without provider fallback", asy
     await expect(window.locator(".provider-failure").filter({ hasText: "anthropic / claude-sonnet-4-5" })).toBeVisible();
     await expect(window.getByText("Interrupted", { exact: true })).toBeVisible();
     await expect(window.getByLabel("Active Model Profile")).toHaveValue(/.+/);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
+test("runs an explicit isolated Project Reflection and restores its assessment without Pi", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  writeFileSync(join(projectDirectory, "market-notes.md"), "# Market notes\n\nCustomer demand is promising, but retention remains unverified.");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    await window.getByRole("button", { name: "Reflection", exact: true }).click();
+    const launch = window.getByRole("dialog", { name: "Start Investment Reflection" });
+    await launch.getByRole("button", { name: "Start Reflection" }).click();
+    await expect(window.getByTestId("reflection-workspace")).toContainText("Awaiting profile");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { entityCounts: { threads: 2, taskAssignments: 0 }, runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
+    await expect(window.getByTestId("reflection-workspace")).toContainText("Awaiting profile");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Rejected Reflection fixture", provider: "vc-agent-reflection-provider-failure-faux", model: "failure-model", apiKey: "sk-reflection-secret-key" });
+    await createProfile(window, { name: "Reflection fixture", provider: "vc-agent-reflection-faux", model: "vc-agent-reflection-faux-model", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    const workspace = window.getByTestId("reflection-workspace");
+    await workspace.getByLabel("Independent Evidence Profile").selectOption({ label: "Rejected Reflection fixture" });
+    await workspace.getByRole("button", { name: "Start evidence pass" }).click();
+    await expect(workspace).toContainText("Evidence pass failed", { timeout: 20_000 });
+    await expect(workspace).toContainText("FIXTURE_PROVIDER_REJECTED");
+    await expect(workspace).toContainText("[REDACTED]");
+    await expect(workspace).not.toContainText("sk-reflection-secret-key");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 1, piSessionsStarted: 0, providerRequests: 0 } } });
+    await workspace.getByLabel("Independent Evidence Profile").selectOption({ label: "Reflection fixture" });
+    await workspace.getByRole("button", { name: "Retry evidence pass" }).click();
+    await expect(workspace).toContainText("Evidence pass complete", { timeout: 30_000 });
+    await expect(workspace.getByRole("heading", { name: "Independent Assessment" })).toBeVisible();
+    await expect(workspace).toContainText("continued diligence");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 2, piSessionsStarted: 1, providerRequests: 1 } } });
+
+    const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const run = database.prepare("SELECT status, assessment_json, thread_id FROM reflection_runs").get() as { status: string; assessment_json: string; thread_id: string };
+    const physical = Number((database.prepare("SELECT COUNT(*) AS count FROM physical_contexts WHERE thread_id = ?").get(run.thread_id) as { count: number }).count);
+    database.close();
+    expect(run.status).toBe("independent_completed");
+    expect(JSON.parse(run.assessment_json)).toMatchObject({ conclusion: expect.stringContaining("continued diligence") });
+    expect(physical).toBe(0);
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
+    await expect(window.getByTestId("reflection-workspace")).toContainText("Evidence pass complete");
+    await expect(window.getByTestId("reflection-workspace")).toContainText("continued diligence");
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
   } finally {
     await application.close();

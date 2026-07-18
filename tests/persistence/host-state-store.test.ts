@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 8,
+      stateSchemaVersion: 9,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -33,7 +33,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["application_settings", "artifacts", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "system_prompt_revisions", "threads"]);
+    expect(tables).toEqual(["application_settings", "artifacts", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "reflection_runs", "schema_migrations", "system_prompt_revisions", "task_model_assignments", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -41,17 +41,17 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 8, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(8);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 9, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(9);
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 8 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 9 });
     verified.close();
   });
 
@@ -59,13 +59,13 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath, { failAfterStageValidation: true });
-    expect(recovery.statePreparation).toMatchObject({ status: "migration_failed", mode: "read_only_recovery", storedVersion: 7, rollbackAvailable: true });
-    expect(recovery.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(7);
+    expect(recovery.statePreparation).toMatchObject({ status: "migration_failed", mode: "read_only_recovery", storedVersion: 8, rollbackAvailable: true });
+    expect(recovery.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(8);
     expect(() => recovery.setAccessMode("full")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
@@ -83,13 +83,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 8 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 9 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 8 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 9 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -157,6 +157,84 @@ describe("HostStateStore", () => {
     expect(store.isProjectProfileAuthorized(project.id, profile.id)).toBe(true);
     expect(store.getPhysicalContext(first.id)?.sessionFile).not.toBe(store.getPhysicalContext(second.id)?.sessionFile);
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ projects: 1, threads: 2 });
+    store.close();
+  });
+
+  it("persists Task Model Assignments and resumable Reflection run state without default configuration", () => {
+    const { store, databasePath } = createStore();
+    const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Reflection Project", path: "C:\\deals\\reflection", createdAt: new Date().toISOString() });
+    const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
+    const brief = {
+      schemaVersion: 1 as const,
+      projectId: project.id,
+      sourceVersion: "a".repeat(64),
+      createdAt: "2026-07-19T08:00:00.000Z",
+      contextFields: [{ id: "industry", label: "Industry", value: "Industrial software" }],
+      materialCards: [{ materialId: crypto.randomUUID(), displayName: "memo.pdf", mediaType: "application/pdf", size: 42, modifiedAt: "2026-07-18T08:00:00.000Z", parseStatus: "unparsed" as const }],
+      recordReferences: []
+    };
+    expect(store.listTaskModelAssignments()).toEqual([]);
+    const waiting = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", brief, promptRevision: prompt });
+    expect(waiting).toMatchObject({ status: "awaiting_profile", promptSnapshot: { revisionId: prompt.id, hash: prompt.hash }, brief: { sourceVersion: "a".repeat(64) } });
+    expect(store.getThread(waiting.threadId)).toMatchObject({ title: "Investment Reflection", scope: "project", projectId: project.id });
+
+    const profile = store.createModelProfile({ name: "Independent evidence", provider: "fixture", model: "evidence-model", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
+    expect(store.setTaskModelAssignment("independent_evidence", profile.id)).toMatchObject({ taskType: "independent_evidence", profileId: profile.id });
+    expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts.taskAssignments).toBe(1);
+    let run = store.selectReflectionProfile(waiting.id, profile.id, false);
+    expect(run).toMatchObject({ status: "ready", independentProfileId: profile.id });
+    run = store.markReflectionRunning(run.id);
+    run = store.setReflectionSession(run.id, "C:\\app\\reflection\\session.jsonl");
+    run = store.completeIndependentAssessment(run.id, {
+      schemaVersion: 1,
+      conclusion: "The current case remains uncertain.",
+      rationale: ["Evidence supports demand but not repeatability."],
+      uncertainties: ["Retention is unverified."],
+      counterarguments: ["Early cohorts may understate expansion."],
+      evidenceReferences: [{ referenceId: "material-1#page=4", claim: "Demand is concentrated.", support: "mixed" }],
+      decisionChangingQuestions: ["Do later cohorts retain?"],
+      createdAt: "2026-07-19T09:00:00.000Z"
+    });
+    expect(run).toMatchObject({ status: "independent_completed", sessionFile: "C:\\app\\reflection\\session.jsonl", assessment: { conclusion: "The current case remains uncertain." } });
+    store.createSystemPromptRevision("Changed prompt after run creation", "Must not alter snapshot");
+    expect(store.getReflectionRun(run.id)?.promptSnapshot).toEqual({ revisionId: prompt.id, hash: prompt.hash });
+    expect(store.clearTaskModelAssignment("independent_evidence")).toBe(true);
+    store.close();
+
+    const reopened = new HostStateStore(databasePath);
+    expect(reopened.getReflectionRun(run.id)).toMatchObject({ status: "independent_completed", assessment: { decisionChangingQuestions: ["Do later cohorts retain?"] } });
+    expect(reopened.listTaskModelAssignments()).toEqual([]);
+    expect(reopened.getBootstrapState("0.1.0", idleActivity).runtimeActivity).toEqual(idleActivity);
+    reopened.close();
+  });
+
+  it("persists a sanitized Independent Evidence failure for explicit retry", () => {
+    const { store } = createStore();
+    const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Failed Reflection", path: "C:\\deals\\failed", createdAt: new Date().toISOString() });
+    const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
+    const profile = store.createModelProfile({ name: "Failed evidence", provider: "fixture", model: "failed-model", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
+    const run = store.createReflectionRun({
+      projectId: project.id, framing: "retrospective", objective: "Review whether the earlier judgment held", focus: "Later customer outcomes", promptRevision: prompt, independentProfileId: profile.id,
+      brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "b".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] }
+    });
+    store.markReflectionRunning(run.id);
+    expect(store.failIndependentAssessment(run.id, { kind: "provider", code: "PROVIDER_REJECTED", message: "Sanitized provider failure", provider: "fixture", model: "failed-model" })).toMatchObject({
+      framing: "retrospective", status: "independent_failed", failure: { code: "PROVIDER_REJECTED", message: "Sanitized provider failure" }
+    });
+    expect(() => store.completeIndependentAssessment(run.id, { schemaVersion: 1, conclusion: "Invalid late result", rationale: [], uncertainties: [], counterarguments: [], evidenceReferences: [], decisionChangingQuestions: [], createdAt: new Date().toISOString() })).toThrow("Reflection run is not active");
+    store.close();
+  });
+
+  it("recovers unfinished Independent Evidence as interrupted without model work", () => {
+    const { store } = createStore();
+    const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Interrupted Reflection", path: "C:\\deals\\interrupted", createdAt: new Date().toISOString() });
+    const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
+    const profile = store.createModelProfile({ name: "Evidence", provider: "fixture", model: "evidence-model", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
+    const run = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: profile.id, brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "c".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
+    store.markReflectionRunning(run.id);
+    expect(store.recoverInterruptedReflections()).toMatchObject([{ id: run.id, status: "independent_interrupted" }]);
+    expect(store.recoverInterruptedReflections()).toEqual([]);
+    expect(store.getBootstrapState("0.1.0", idleActivity).runtimeActivity).toEqual(idleActivity);
     store.close();
   });
 

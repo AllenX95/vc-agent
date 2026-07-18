@@ -11,6 +11,7 @@ import {
   type CapabilityExecutionResult,
   type HostCommand,
   type HostEvent,
+  type ReflectionRun,
   type MaterialInventoryItem,
   type ModelProfile,
   type ProvenanceRef,
@@ -24,7 +25,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, buildIndependentEvidencePrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -44,6 +45,8 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "state.recovery.export",
   "profile.list",
   "prompt.revision.list",
+  "task_model_assignment.list",
+  "reflection.list",
   "project.list",
   "project.material.list",
   "project.output.list",
@@ -69,6 +72,17 @@ interface TurnContext {
   recalledStateEstimatedTokens: number;
 }
 
+interface ReflectionExecutionContext {
+  readonly correlationId: string;
+  readonly runId: string;
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly projectId: string;
+  readonly profile: ModelProfile;
+  readonly expectedStateVersion: number;
+  readonly promptRevision: SystemPromptRevision;
+}
+
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
@@ -85,6 +99,7 @@ let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
+const reflectionContexts = new Map<string, ReflectionExecutionContext>();
 const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
@@ -256,6 +271,28 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const revision = stateStore.restoreDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, command.payload.changeNote);
         return { ...eventMetadata(command.correlationId), event: "prompt.revision.activated", payload: { revision } };
       }
+      case "task_model_assignment.list":
+        return { ...eventMetadata(command.correlationId), event: "task_model_assignments.listed", payload: { assignments: stateStore.listTaskModelAssignments() } };
+      case "task_model_assignment.set": {
+        const assignment = stateStore.setTaskModelAssignment(command.payload.taskType, command.payload.profileId);
+        return { ...eventMetadata(command.correlationId), event: "task_model_assignment.updated", payload: { taskType: command.payload.taskType, assignment } };
+      }
+      case "task_model_assignment.clear": {
+        stateStore.clearTaskModelAssignment(command.payload.taskType);
+        return { ...eventMetadata(command.correlationId), event: "task_model_assignment.updated", payload: { taskType: command.payload.taskType } };
+      }
+      case "reflection.list":
+        return { ...eventMetadata(command.correlationId), event: "reflection.runs.listed", payload: { runs: stateStore.listReflectionRuns(command.payload.projectId) } };
+      case "reflection.start.project": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Investment Reflection requires explicit User initiation.");
+        return startProjectReflection(command.correlationId, command.payload);
+      }
+      case "reflection.independent.start": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Independent Evidence requires explicit User initiation.");
+        return startIndependentAssessment(command.correlationId, command.payload.runId, command.payload.profileId);
+      }
+      case "reflection.independent.stop":
+        return stopIndependentAssessment(command.correlationId, command.payload.runId);
       case "project.list":
         return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
       case "project.open":
@@ -586,6 +623,110 @@ async function refreshProjectInventory(correlationId: string, projectId: string,
   } as HostEvent;
   if (broadcast && refreshed.changedMaterialIds.length > 0) emit(event);
   return event;
+}
+
+async function startProjectReflection(correlationId: string, input: { projectId: string; focus?: string | undefined; profileId?: string | undefined }): Promise<HostEvent> {
+  const project = stateStore!.getProject(input.projectId);
+  const promptRevision = stateStore!.getActiveSystemPromptRevision();
+  if (project === undefined || promptRevision === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Project or System Prompt is unavailable.");
+  await refreshProjectInventory(correlationId, project.id, false);
+  const context = projectContexts.rebuildIfExists(project.id, project.path);
+  const brief = buildReflectionProjectBrief({
+    projectId: project.id,
+    context,
+    materials: stateStore!.listMaterials(project.id),
+    outputs: projectOutputs.list(project.id, project.path)
+  });
+  const assignment = stateStore!.getTaskModelAssignment("independent_evidence");
+  const effectiveProfileId = input.profileId ?? assignment?.profileId;
+  const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
+  if (effectiveProfileId !== undefined && profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence Profile is unavailable.");
+  const framing = reflectionFraming(input.focus ?? "");
+  const run = stateStore!.createReflectionRun({
+    projectId: project.id,
+    framing,
+    objective: framing === "retrospective" ? "Review this Project retrospectively against later evidence, subsequent developments, or observed outcomes." : DEFAULT_PROJECT_REFLECTION_OBJECTIVE,
+    ...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
+    brief,
+    promptRevision,
+    ...(profile === undefined ? {} : { independentProfileId: profile.id }),
+    ...(input.profileId === undefined ? {} : { launchOverrideProfileId: input.profileId })
+  });
+  if (profile !== undefined) stateStore!.authorizeProjectProfile(project.id, profile.id, profile.provider);
+  const thread = stateStore!.getThread(run.threadId);
+  if (thread?.scope !== "project") throw new Error("Reflection Thread was not created");
+  return { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+}
+
+async function startIndependentAssessment(correlationId: string, runId: string, profileId?: string): Promise<HostEvent> {
+  let run = stateStore!.getReflectionRun(runId);
+  if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
+  if (run.status === "independent_completed" || run.status === "independent_running") {
+    return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+  }
+  if (profileId !== undefined) run = stateStore!.selectReflectionProfile(run.id, profileId, true);
+  const profile = run.independentProfileId === undefined ? undefined : stateStore!.getModelProfile(run.independentProfileId);
+  if (profile === undefined) {
+    return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+  }
+  const project = stateStore!.getProject(run.projectId);
+  const thread = stateStore!.getThread(run.threadId);
+  const promptRevision = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
+  if (project === undefined || thread?.scope !== "project" || promptRevision?.hash !== run.promptSnapshot.hash) {
+    return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
+  }
+  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
+  if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence credential is unavailable.");
+  stateStore!.authorizeProjectProfile(project.id, profile.id, profile.provider);
+  run = stateStore!.markReflectionRunning(run.id);
+  const turnId = randomUUID();
+  const context: ReflectionExecutionContext = {
+    correlationId,
+    runId: run.id,
+    threadId: run.threadId,
+    turnId,
+    projectId: run.projectId,
+    profile,
+    expectedStateVersion: thread.stateVersion,
+    promptRevision
+  };
+  reflectionContexts.set(turnId, context);
+  const createdAt = new Date().toISOString();
+  const prompt = buildIndependentEvidencePrompt({ objective: run.objective, ...(run.focus === undefined ? {} : { focus: run.focus }), brief: run.brief, createdAt });
+  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1,
+    command: "turn.execute",
+    commandId: randomUUID(),
+    correlationId,
+    threadId: run.threadId,
+    turnId,
+    cwd: project.path,
+    threadDirectory: trajectoryStore!.threadDirectory(run.threadId),
+    contextHistory: [],
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
+    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
+    activeCapabilities: ["material_recall"],
+    expectedStateVersion: thread.stateVersion,
+    executionScope: { kind: "project", projectId: run.projectId },
+    prompt,
+    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS] },
+    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+  };
+  void workerSupervisor!.execute(workerCommand).catch(() => failReflectionExecution(context, {
+    kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before the Independent Evidence Pass completed.", provider: profile.provider, model: profile.model
+  }));
+  return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+}
+
+function stopIndependentAssessment(correlationId: string, runId: string): HostEvent {
+  const context = [...reflectionContexts.values()].find((candidate) => candidate.runId === runId);
+  const run = stateStore!.getReflectionRun(runId);
+  if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
+  if (context !== undefined) {
+    workerSupervisor?.stop({ schemaVersion: 1, command: "turn.stop", commandId: randomUUID(), correlationId: context.correlationId, threadId: context.threadId, turnId: context.turnId });
+  }
+  return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
 }
 
 function startMaterialWatcher(projectId: string): void {
@@ -1106,6 +1247,11 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
   }
+  const reflectionContext = reflectionContexts.get(workerEvent.turnId);
+  if (reflectionContext !== undefined) {
+    void handleReflectionWorkerEvent(reflectionContext, workerEvent);
+    return;
+  }
   const context = turnContexts.get(workerEvent.turnId);
   if (context === undefined) return;
 
@@ -1215,6 +1361,89 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   finishTurn(context);
   acknowledgeTrajectory(context, record);
   emit({ ...ipcMetadata(record), event: "turn.failed", payload: { threadId: context.threadId, turnId: context.turnId, text: context.text, ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }), profile: context.profile, failure: workerEvent.failure } });
+}
+
+async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, workerEvent: WorkerEvent): Promise<void> {
+  if (workerEvent.event === "capability.execution.requested") {
+    const request = workerEvent.request;
+    if (
+      request.threadId !== context.threadId || request.turnId !== context.turnId || request.correlationId !== context.correlationId ||
+      request.capabilityId !== "material_recall" || request.scope.kind !== "project" || request.scope.projectId !== context.projectId
+    ) {
+      resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "rejected", code: "REFLECTION_CAPABILITY_NOT_ALLOWED", content: "Independent Evidence Pass permits only scoped progressive Material recall." });
+      return;
+    }
+    const project = stateStore!.getProject(context.projectId);
+    if (project === undefined) {
+      resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "failed", code: "PROJECT_UNAVAILABLE", content: "The frozen Project scope is unavailable." });
+      return;
+    }
+    const decision = await capabilityGateway!.request(request, {
+      accessMode: stateStore!.getAccessMode(),
+      scope: "project",
+      stateVersion: context.expectedStateVersion,
+      activeCapabilityIds: ["material_recall"],
+      outputIntent: false,
+      outputLocation: join(project.path, "outputs")
+    });
+    if (decision.type === "confirmation_required") {
+      resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "rejected", code: "REFLECTION_CONFIRMATION_UNSUPPORTED", content: "Independent Evidence recall cannot pause for a broader capability grant." });
+    } else {
+      resolveReflectionCapability(context, decision.result);
+    }
+    return;
+  }
+  if (workerEvent.event === "physical_context.ready") {
+    const run = stateStore!.setReflectionSession(context.runId, workerEvent.sessionFile);
+    emitReflectionRun(context.correlationId, run);
+    return;
+  }
+  if (workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "turn.completed") {
+    try {
+      const assessment = parseIndependentAssessment(workerEvent.message);
+      const run = stateStore!.completeIndependentAssessment(context.runId, assessment);
+      finishReflectionExecution(context);
+      emitReflectionRun(context.correlationId, run);
+    } catch {
+      failReflectionExecution(context, {
+        kind: "worker", code: "INVALID_INDEPENDENT_ASSESSMENT", message: "The model response did not match the bounded Independent Assessment contract.", provider: context.profile.provider, model: context.profile.model
+      });
+    }
+    return;
+  }
+  if (workerEvent.event === "turn.interrupted") {
+    const run = stateStore!.interruptIndependentAssessment(context.runId);
+    finishReflectionExecution(context);
+    emitReflectionRun(context.correlationId, run);
+    return;
+  }
+  if (workerEvent.event === "turn.failed") failReflectionExecution(context, workerEvent.failure);
+}
+
+function resolveReflectionCapability(context: ReflectionExecutionContext, result: CapabilityExecutionResult): void {
+  workerSupervisor?.resolveCapability({
+    schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId,
+    threadId: context.threadId, turnId: context.turnId, result
+  });
+}
+
+function failReflectionExecution(context: ReflectionExecutionContext, failure: ProviderFailure): void {
+  if (!reflectionContexts.has(context.turnId)) return;
+  const current = stateStore!.getReflectionRun(context.runId);
+  if (current?.status !== "independent_running") return;
+  const run = stateStore!.failIndependentAssessment(context.runId, failure);
+  finishReflectionExecution(context);
+  emitReflectionRun(context.correlationId, run);
+}
+
+function finishReflectionExecution(context: ReflectionExecutionContext): void {
+  reflectionContexts.delete(context.turnId);
+  workerSupervisor?.retire(context.threadId);
+}
+
+function emitReflectionRun(correlationId: string, run: ReflectionRun): void {
+  emit({ ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } });
 }
 
 function acknowledgeTrajectory(context: TurnContext, record: TrajectoryEvent): void {
@@ -1562,6 +1791,7 @@ app.whenReady().then(() => {
     failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
   });
   const readOnlyRecovery = stateStore.isReadOnlyRecovery;
+  if (!readOnlyRecovery) stateStore.recoverInterruptedReflections();
   longTermMemories = new LongTermMemoryStore(join(app.getPath("userData"), "memory", "long-term"));
   if (!readOnlyRecovery) {
     memoryEvolution = new MemoryEvolutionStore(longTermMemories);
@@ -1700,6 +1930,11 @@ app.on("before-quit", () => {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
+  for (const context of [...reflectionContexts.values()]) {
+    const run = stateStore?.getReflectionRun(context.runId);
+    if (run?.status === "independent_running") stateStore?.interruptIndependentAssessment(context.runId);
+    reflectionContexts.delete(context.turnId);
+  }
   ipcMain.removeHandler(COMMAND_CHANNEL);
   workerSupervisor?.closeAll();
   utilityJobRunner?.close();

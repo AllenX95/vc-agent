@@ -32,6 +32,11 @@ export const modelProfileSchema = z.object({
 });
 export type ModelProfile = z.infer<typeof modelProfileSchema>;
 
+export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "extension_audit", "visual_material_analysis"]);
+export type TaskModelType = z.infer<typeof taskModelTypeSchema>;
+export const taskModelAssignmentSchema = z.object({ taskType: taskModelTypeSchema, profileId: z.string().min(1), updatedAt: z.string().datetime() });
+export type TaskModelAssignment = z.infer<typeof taskModelAssignmentSchema>;
+
 export const unscopedThreadSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -52,6 +57,22 @@ export const projectSchema = z.object({
   updatedAt: z.string().datetime()
 });
 export type Project = z.infer<typeof projectSchema>;
+
+export const reflectionProjectBriefSchema = z.object({
+  schemaVersion: z.literal(1), projectId: z.string().uuid(), sourceVersion: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime(),
+  contextFields: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), value: z.string().max(2_000) })).max(20),
+  materialCards: z.array(z.object({ materialId: z.string().uuid(), displayName: z.string().min(1), mediaType: z.string().min(1), size: z.number().int().nonnegative(), modifiedAt: z.string().datetime(), parseStatus: z.enum(["unparsed", "available", "stale"]) })).max(500),
+  recordReferences: z.array(z.object({ kind: z.enum(["output", "judgment_record"]), id: z.string().min(1), label: z.string().min(1), mediaType: z.string().min(1).optional(), createdAt: z.string().datetime().optional() })).max(200)
+});
+export type ReflectionProjectBrief = z.infer<typeof reflectionProjectBriefSchema>;
+
+export const independentAssessmentSchema = z.object({
+  schemaVersion: z.literal(1), conclusion: z.string().min(1).max(30_000), rationale: z.array(z.string().min(1).max(5_000)).max(20),
+  uncertainties: z.array(z.string().min(1).max(5_000)).max(20), counterarguments: z.array(z.string().min(1).max(5_000)).max(20),
+  evidenceReferences: z.array(z.object({ referenceId: z.string().min(1), claim: z.string().min(1).max(5_000), support: z.enum(["supporting", "disconfirming", "mixed"] ) })).max(100),
+  decisionChangingQuestions: z.array(z.string().min(1).max(5_000)).max(20), createdAt: z.string().datetime()
+});
+export type IndependentAssessment = z.infer<typeof independentAssessmentSchema>;
 
 export const projectThreadSchema = z.object({
   id: z.string().min(1),
@@ -217,6 +238,15 @@ export const providerFailureSchema = z.object({
 });
 export type ProviderFailure = z.infer<typeof providerFailureSchema>;
 
+export const reflectionRunSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().uuid(), threadId: z.string().min(1), projectId: z.string().uuid(), framing: z.enum(["reflection", "retrospective"]),
+  objective: z.string().min(1).max(5_000), focus: z.string().max(5_000).optional(), status: z.enum(["awaiting_profile", "ready", "independent_running", "independent_completed", "independent_failed", "independent_interrupted"]),
+  brief: reflectionProjectBriefSchema, promptSnapshot: z.object({ revisionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }),
+  independentProfileId: z.string().min(1).optional(), launchOverrideProfileId: z.string().min(1).optional(), assessment: independentAssessmentSchema.optional(), failure: providerFailureSchema.optional(),
+  sessionFile: z.string().min(1).optional(), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
+});
+export type ReflectionRun = z.infer<typeof reflectionRunSchema>;
+
 const ipcTrajectoryProfileSchema = modelProfileSchema.pick({
   id: true,
   name: true,
@@ -288,6 +318,13 @@ const activatePromptRevisionCommandSchema = commandMetadataSchema.extend({
 const restoreDefaultPromptCommandSchema = commandMetadataSchema.extend({
   command: z.literal("prompt.restore_default"), payload: z.object({ changeNote: z.string().trim().max(500).optional() })
 });
+const listTaskModelAssignmentsCommandSchema = commandMetadataSchema.extend({ command: z.literal("task_model_assignment.list") });
+const setTaskModelAssignmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("task_model_assignment.set"), payload: z.object({ taskType: taskModelTypeSchema, profileId: z.string().min(1) }) });
+const clearTaskModelAssignmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("task_model_assignment.clear"), payload: z.object({ taskType: taskModelTypeSchema }) });
+const listReflectionRunsCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.list"), payload: z.object({ projectId: z.string().uuid().optional() }) });
+const startProjectReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.start.project"), payload: z.object({ projectId: z.string().uuid(), focus: z.string().trim().max(5_000).optional(), profileId: z.string().min(1).optional() }) });
+const startIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
+const stopIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.stop"), payload: z.object({ runId: z.string().uuid() }) });
 const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
 const listProjectsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.list") });
 const openProjectCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.open") });
@@ -398,6 +435,13 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   createPromptRevisionCommandSchema,
   activatePromptRevisionCommandSchema,
   restoreDefaultPromptCommandSchema,
+  listTaskModelAssignmentsCommandSchema,
+  setTaskModelAssignmentCommandSchema,
+  clearTaskModelAssignmentCommandSchema,
+  listReflectionRunsCommandSchema,
+  startProjectReflectionCommandSchema,
+  startIndependentAssessmentCommandSchema,
+  stopIndependentAssessmentCommandSchema,
   listProjectsCommandSchema,
   openProjectCommandSchema,
   resolveProjectCollisionCommandSchema,
@@ -524,6 +568,11 @@ const systemPromptUpdatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("system_prompt.updated"),
   payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), previousRevisionId: z.string().uuid(), nextRevisionId: z.string().uuid() })
 });
+const taskModelAssignmentsListedEventSchema = eventMetadataSchema.extend({ event: z.literal("task_model_assignments.listed"), payload: z.object({ assignments: z.array(taskModelAssignmentSchema) }) });
+const taskModelAssignmentUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("task_model_assignment.updated"), payload: z.object({ taskType: taskModelTypeSchema, assignment: taskModelAssignmentSchema.optional() }) });
+const reflectionRunsListedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.runs.listed"), payload: z.object({ runs: z.array(reflectionRunSchema) }) });
+const reflectionRunCreatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.created"), payload: z.object({ run: reflectionRunSchema, thread: projectThreadSchema }) });
+const reflectionRunUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.updated"), payload: z.object({ run: reflectionRunSchema }) });
 const threadsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("threads.listed"),
   payload: z.object({ threads: z.array(threadSchema) })
@@ -755,6 +804,11 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   promptRevisionCreatedEventSchema,
   promptRevisionActivatedEventSchema,
   systemPromptUpdatedEventSchema,
+  taskModelAssignmentsListedEventSchema,
+  taskModelAssignmentUpdatedEventSchema,
+  reflectionRunsListedEventSchema,
+  reflectionRunCreatedEventSchema,
+  reflectionRunUpdatedEventSchema,
   projectsListedEventSchema,
   projectOpenedEventSchema,
   projectCollisionDetectedEventSchema,

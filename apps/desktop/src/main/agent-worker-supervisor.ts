@@ -57,6 +57,13 @@ export class AgentWorkerSupervisor {
     this.#workers.get(command.threadId)?.process.postMessage(command);
   }
 
+  retire(threadId: string): void {
+    const record = this.#workers.get(threadId);
+    if (record === undefined || record.activeCommand !== undefined) return;
+    this.#workers.delete(threadId);
+    record.process.kill();
+  }
+
   #startWorker(threadId: string): WorkerRecord {
     const child = utilityProcess.fork(this.#workerEntry, [], {
       serviceName: `vc-agent-unscoped-${threadId}`,

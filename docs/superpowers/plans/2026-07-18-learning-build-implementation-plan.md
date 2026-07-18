@@ -159,16 +159,16 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] Reflection starts only from explicit User action and creates a dedicated Investment Reflection Thread and run record.
-- [ ] The default objective examines the current view, assumptions, risks, counterarguments, and potentially applicable prior learning; focus and Material selection remain optional.
-- [ ] A request mentioning later outcomes or whether an earlier judgment held is visibly framed as Investment Retrospective.
-- [ ] Launch freezes scope, Project Identity, objective, Reflection Project Brief version, Workflow Prompt Snapshot, and effective Independent Evidence Profile.
-- [ ] The Reflection Project Brief contains only bounded basic context fields, Material cards, and record or Output references; it excludes Memory, prior conclusions, paths, and Material bodies.
-- [ ] Independent Evidence Pass receives no Project Memory, Long-term Memory, Memory index result, or Local Memory Provenance.
-- [ ] The model chooses evidence progressively and emits a bounded Independent Assessment with conclusions, uncertainty, rationale, counterarguments, stable evidence references, and decision-changing questions.
-- [ ] Missing assignment or Profile leaves the run locally visible and retryable without starting Pi or selecting a fallback.
-- [ ] Provider Failure preserves the brief and run state, exposes sanitized details, and requires manual retry or Profile adjustment.
-- [ ] App restart displays the run and completed assessment without starting Pi; unfinished model work resumes only after explicit action.
+- [x] Reflection starts only from explicit User action and creates a dedicated Investment Reflection Thread and run record.
+- [x] The default objective examines the current view, assumptions, risks, counterarguments, and potentially applicable prior learning; focus and Material selection remain optional.
+- [x] A request mentioning later outcomes or whether an earlier judgment held is visibly framed as Investment Retrospective.
+- [x] Launch freezes scope, Project Identity, objective, Reflection Project Brief version, Workflow Prompt Snapshot, and effective Independent Evidence Profile.
+- [x] The Reflection Project Brief contains only bounded basic context fields, Material cards, and record or Output references; it excludes Memory, prior conclusions, paths, and Material bodies.
+- [x] Independent Evidence Pass receives no Project Memory, Long-term Memory, Memory index result, or Local Memory Provenance.
+- [x] The model chooses evidence progressively and emits a bounded Independent Assessment with conclusions, uncertainty, rationale, counterarguments, stable evidence references, and decision-changing questions.
+- [x] Missing assignment or Profile leaves the run locally visible and retryable without starting Pi or selecting a fallback.
+- [x] Provider Failure preserves the brief and run state, exposes sanitized details, and requires manual retry or Profile adjustment.
+- [x] App restart displays the run and completed assessment without starting Pi; unfinished model work resumes only after explicit action.
 
 ### L4. Complete Memory-Aware Reflection And Confirm Outcomes
 

@@ -60,4 +60,12 @@ describe("versioned IPC contracts", () => {
     expect(hostCommandSchema.safeParse(base).success).toBe(false);
     expect(hostCommandSchema.safeParse({ ...base, payload: { ...base.payload, confirmed: true } }).success).toBe(true);
   });
+
+  it("requires explicit versioned commands to start and stop Independent Evidence", () => {
+    const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
+    const runId = crypto.randomUUID();
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.start", payload: { runId } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.stop", payload: { runId } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.start", payload: {} }).success).toBe(false);
+  });
 });
