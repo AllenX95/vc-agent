@@ -161,6 +161,32 @@ button { font: inherit; letter-spacing: 0; }
 .memory-editor-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
 .memory-editor-actions span { color: #747b74; font: 9px Consolas, monospace; }
 .memory-editor-actions button { min-height: 32px; padding: 0 11px; border: 1px solid #294a37; border-radius: 5px; background: #294a37; color: #fff; font-size: 11px; }
+.memory-evolution-section, .memory-maintenance-section { margin-top: 28px; padding-top: 22px; border-top: 1px solid #dfe2dd; }
+.memory-evolution-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-top: 15px; padding: 14px; border: 1px solid #d7dbd5; border-radius: 6px; background: #f8f9f6; }
+.memory-evolution-form > label, .memory-evolution-row label, .memory-maintenance-controls label { display: grid; gap: 5px; color: #59615a; font-size: 10px; font-weight: 650; }
+.memory-evolution-form input, .memory-evolution-form select, .memory-evolution-form textarea, .memory-maintenance-controls select { width: 100%; min-height: 31px; padding: 6px 8px; border: 1px solid #c9cec7; border-radius: 4px; background: #fff; color: #28332c; font-size: 11px; }
+.memory-evolution-form select[multiple] { min-height: 92px; }
+.memory-evolution-form textarea { min-height: 74px; resize: vertical; }
+.memory-evolution-form > label:has(textarea), .memory-evolution-form > .primary-button { grid-column: 1 / -1; }
+.memory-evolution-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; grid-column: 1 / -1; }
+.memory-patch-preview { margin-top: 16px; padding: 14px; border: 1px solid #aebbb1; border-radius: 6px; background: #fff; }
+.memory-patch-preview > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+.memory-patch-preview span { color: #727a73; font: 9px Consolas, monospace; overflow-wrap: anywhere; }
+.memory-patch-preview p { color: #465048; font-size: 11px; }
+.memory-patch-preview details { margin-top: 8px; border-top: 1px solid #e3e6e1; padding-top: 8px; }
+.memory-patch-preview summary { cursor: pointer; color: #36423a; font-size: 11px; font-weight: 650; text-transform: capitalize; }
+.memory-patch-preview pre { max-height: 300px; margin: 7px 0 0; overflow: auto; padding: 10px; background: #f3f5f1; color: #263129; font: 10px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-maintenance-controls { display: flex; align-items: end; gap: 18px; margin: 13px 0; }
+.memory-maintenance-controls .checkbox-setting { display: flex; grid-template-columns: 15px auto; align-items: center; min-height: 31px; }
+.memory-maintenance-controls .checkbox-setting input { width: 14px; height: 14px; }
+.archive-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 52px; border-top: 1px solid #e3e6e1; }
+.archive-row > div:first-child { min-width: 0; }
+.archive-row strong, .archive-row span { display: block; }
+.archive-row strong { font-size: 11px; }
+.archive-row span { margin-top: 3px; color: #727a73; font-size: 10px; overflow-wrap: anywhere; }
+.archive-row > div:last-child { display: flex; flex: 0 0 auto; gap: 5px; }
+.archive-row button { min-height: 27px; padding: 0 8px; border: 1px solid #c9cec7; border-radius: 4px; background: #fff; color: #38433b; font-size: 10px; }
+@media (max-width: 760px) { .memory-evolution-form, .memory-evolution-row { grid-template-columns: 1fr; } .memory-evolution-form > * { grid-column: 1; } .archive-row { align-items: flex-start; flex-direction: column; padding: 10px 0; } }
 .settings-view h1 { margin: 3px 0 0; font-size: 24px; line-height: 1.25; font-weight: 680; }
 .eyebrow { color: #567060; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .settings-section { padding: 22px 0; border-bottom: 1px solid #e1e4df; }

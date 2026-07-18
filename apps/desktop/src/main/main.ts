@@ -24,7 +24,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, ProjectOutputRegistry, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -79,6 +79,7 @@ let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
 let projectMemories: ProjectMemoryStore | null = null;
 let longTermMemories: LongTermMemoryStore | null = null;
+let memoryEvolution: MemoryEvolutionStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
@@ -331,6 +332,62 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const error = await shell.openPath(longTermMemories.rootPath);
         if (error !== "") return diagnostic(command.correlationId, "HOST_FAILURE", "The Long-term Memory folder could not be opened.");
         return { ...eventMetadata(command.correlationId), event: "long_term_memory.folder.opened", payload: { path: longTermMemories.rootPath } };
+      }
+      case "long_term_memory.patch.prepare": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Evolution is unavailable in read-only recovery.");
+        try {
+          const patch = memoryEvolution.prepare(command.payload);
+          return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.prepared", payload: { patch } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be prepared."));
+        }
+      }
+      case "long_term_memory.patch.commit": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Evolution is unavailable in read-only recovery.");
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory changes require explicit User confirmation.");
+        try {
+          const document = memoryEvolution.commit(command.payload.patchId);
+          ownLongTermMemoryWriteHash = document.sourceHash;
+          return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.committed", payload: { patchId: command.payload.patchId, document } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be committed."));
+        }
+      }
+      case "long_term_memory.patch.discard": {
+        if (memoryEvolution === null || !memoryEvolution.discard(command.payload.patchId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory patch is no longer available.");
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.discarded", payload: { patchId: command.payload.patchId } };
+      }
+      case "long_term_memory.maintenance.load": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory maintenance is unavailable in read-only recovery.");
+        let state = memoryEvolution.loadMaintenance();
+        if (state.automaticDeletion) state = memoryEvolution.cleanupArchive();
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.maintenance.loaded", payload: { state } };
+      }
+      case "long_term_memory.maintenance.save": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory maintenance is unavailable in read-only recovery.");
+        const state = memoryEvolution.saveMaintenanceSettings(command.payload.retention, command.payload.automaticDeletion);
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.maintenance.updated", payload: { state } };
+      }
+      case "long_term_memory.archive.update": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory maintenance is unavailable in read-only recovery.");
+        try {
+          const state = memoryEvolution.updateArchiveItem(command.payload.archiveId, command.payload.action);
+          return { ...eventMetadata(command.correlationId), event: "long_term_memory.maintenance.updated", payload: { state } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Condensation Archive could not be updated."));
+        }
+      }
+      case "long_term_memory.archive.cleanup": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory maintenance is unavailable in read-only recovery.");
+        const state = memoryEvolution.cleanupArchive(command.payload.archiveIds);
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.maintenance.updated", payload: { state } };
+      }
+      case "long_term_memory.provenance.inspect": {
+        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory provenance is unavailable in read-only recovery.");
+        const thread = stateStore.getThread(command.payload.threadId);
+        if (thread?.scope !== "project" || thread.activeProfileId === undefined || !stateStore.isProjectProfileAuthorized(thread.projectId, thread.activeProfileId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Source verification requires an authorized Profile inside the source Project.");
+        const inspection = memoryEvolution.inspectProvenance(command.payload.sourceReferenceId, thread.projectId);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "long_term_memory.provenance.inspected", payload: inspection };
       }
       case "memory.candidate.dismiss": {
         const candidate = memoryCandidates?.resolve(command.payload.candidateId, "dismissed");
@@ -1463,6 +1520,21 @@ function readString(input: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function memoryEvolutionFailure(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  switch (error.message) {
+    case "STALE_MEMORY_PATCH": return "Long-term Memory or its lineage changed after preview. Prepare a new patch before committing.";
+    case "MEMORY_PATCH_RESOLUTION_SIGNAL_REQUIRED": return "Narrow and Revise require an attributable User correction or approved Reflection or Retrospective conclusion.";
+    case "MEMORY_PATCH_TARGET_NOT_FOUND": return "A target Memory entry is no longer current. Refresh and prepare a new patch.";
+    case "MEMORY_REINFORCEMENT_CANNOT_LOWER_MATURITY": return "Reinforce cannot lower Memory maturity or replace its meaning.";
+    case "MEMORY_PATCH_MATURITY_PROVENANCE_REQUIRED": return "Evidence-backed or retrospectively supported learning requires traceable local provenance.";
+    case "MEMORY_PATCH_NO_CHANGES": return "Memory patch does not change learning, maturity, provenance, or lineage.";
+    case "CONFLICTING_LOCAL_MEMORY_PROVENANCE": return "A source reference is already bound to different local provenance.";
+    case "MEMORY_PATCH_NOT_FOUND": return "Memory patch is no longer available.";
+    default: return fallback;
+  }
+}
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -1492,6 +1564,7 @@ app.whenReady().then(() => {
   const readOnlyRecovery = stateStore.isReadOnlyRecovery;
   longTermMemories = new LongTermMemoryStore(join(app.getPath("userData"), "memory", "long-term"));
   if (!readOnlyRecovery) {
+    memoryEvolution = new MemoryEvolutionStore(longTermMemories);
     projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
     memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
   }

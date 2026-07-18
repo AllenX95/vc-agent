@@ -152,6 +152,36 @@ export const longTermMemoryDocumentSchema = z.object({
   files: z.array(z.object({ kind: z.enum(["active", "condensation_archive", "cognitive_evolution_history"]), name: z.string().min(1), path: z.string().min(1), size: z.number().int().nonnegative(), updatedAt: z.string().datetime(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/) }))
 });
 export type LongTermMemoryDocument = z.infer<typeof longTermMemoryDocumentSchema>;
+export const memoryEvolutionActionSchema = z.enum(["add", "reinforce", "narrow", "revise", "contradict", "merge_condense"]);
+export const memoryLearningDraftSchema = z.object({
+  id: z.string().min(6).max(80).optional(), title: z.string().trim().min(1).max(200), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  tags: z.array(z.string().trim().min(1).max(80)).max(20), applicability: z.array(z.string().trim().min(1).max(200)).max(20),
+  maturity: z.enum(["user-confirmed", "evidence-backed", "retrospectively-supported"]), recallPolicy: z.enum(["automatic", "explicit-only"]),
+  limitations: z.string().trim().max(2_000), content: z.string().trim().min(1).max(50_000), sourceReferenceIds: z.array(z.string().min(6).max(80)).max(40)
+});
+export const localMemoryProvenanceRecordSchema = z.object({
+  schemaVersion: z.literal(1), sourceReferenceId: z.string().min(6).max(80), projectId: z.string().uuid(), workflowType: z.enum(["reflection", "dream"]),
+  workflowRunId: z.string().min(1), judgmentRecordId: z.string().min(1).optional(), threadId: z.string().min(1).optional(), turnId: z.string().min(1).optional(),
+  outputId: z.string().min(1).optional(), evidenceReferences: z.array(z.string().min(1)).max(40), availability: z.enum(["active", "source_unavailable"]), createdAt: z.string().datetime()
+});
+export const memoryPatchRequestSchema = z.object({
+  action: memoryEvolutionActionSchema, targetEntryIds: z.array(z.string().min(6).max(80)).max(20), proposed: memoryLearningDraftSchema.optional(),
+  rationale: z.string().trim().min(1).max(5_000), resolutionSignal: z.object({ type: z.enum(["user_correction", "approved_reflection", "approved_retrospective"]), referenceId: z.string().min(1).max(200) }).optional(),
+  provenanceRecords: z.array(localMemoryProvenanceRecordSchema).max(40).optional()
+});
+export const preparedMemoryPatchSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().min(8).max(80), action: memoryEvolutionActionSchema, targetEntryIds: z.array(z.string()), rationale: z.string(), createdAt: z.string().datetime(),
+  confirmationRequired: z.literal(true), lineageDiff: z.string().max(100_000), files: z.array(z.object({
+    kind: z.enum(["active", "condensation_archive", "cognitive_evolution_history", "local_provenance", "recall_index"]), path: z.string().min(1),
+    baseHash: z.union([z.literal("missing"), z.string().regex(/^[a-f0-9]{64}$/)]), resultHash: z.union([z.literal("missing"), z.string().regex(/^[a-f0-9]{64}$/)]), changed: z.boolean(), diff: z.string().max(1_500_000)
+  })).length(5)
+});
+export type PreparedMemoryPatch = z.infer<typeof preparedMemoryPatchSchema>;
+export const memoryMaintenanceStateSchema = z.object({
+  schemaVersion: z.literal(1), retention: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365), z.literal("permanent")]), automaticDeletion: z.boolean(),
+  archiveItems: z.array(z.object({ archiveId: z.string().min(1), archivedAt: z.string().datetime(), reason: z.string(), sourceEntries: z.array(z.string()), replacement: z.string(), kept: z.boolean(), eligibleForCleanup: z.boolean(), expiresAt: z.string().datetime().optional() }))
+});
+export type MemoryMaintenanceState = z.infer<typeof memoryMaintenanceStateSchema>;
 export const memoryCandidateSchema = z.object({
   id: z.string().uuid(), scope: z.enum(["project", "unscoped"]), projectId: z.string().uuid().optional(), threadId: z.string().min(1), turnId: z.string().min(1),
   capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), signal: z.enum(["explicit_remember", "strong_user_judgment"]), status: z.enum(["active", "dismissed", "promoted"])
@@ -284,6 +314,14 @@ const loadLongTermMemoryCommandSchema = commandMetadataSchema.extend({ command: 
 const refreshLongTermMemoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.refresh") });
 const saveLongTermMemoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.save"), payload: z.object({ content: z.string().max(500_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) }) });
 const openLongTermMemoryFolderCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.open_folder") });
+const prepareLongTermMemoryPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.patch.prepare"), payload: memoryPatchRequestSchema });
+const commitLongTermMemoryPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.patch.commit"), payload: z.object({ patchId: z.string().min(8).max(80), confirmed: z.literal(true) }) });
+const discardLongTermMemoryPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.patch.discard"), payload: z.object({ patchId: z.string().min(8).max(80) }) });
+const loadMemoryMaintenanceCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.maintenance.load") });
+const saveMemoryMaintenanceCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.maintenance.save"), payload: memoryMaintenanceStateSchema.pick({ retention: true, automaticDeletion: true }) });
+const updateCondensationArchiveCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.archive.update"), payload: z.object({ archiveId: z.string().min(1), action: z.enum(["keep", "refresh"]) }) });
+const cleanupCondensationArchiveCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.archive.cleanup"), payload: z.object({ archiveIds: z.array(z.string().min(1)).max(100) }) });
+const inspectLongTermMemoryProvenanceCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.provenance.inspect"), payload: z.object({ threadId: z.string().min(1), sourceReferenceId: z.string().min(6).max(80) }) });
 const dismissMemoryCandidateCommandSchema = commandMetadataSchema.extend({ command: z.literal("memory.candidate.dismiss"), payload: z.object({ candidateId: z.string().uuid() }) });
 const confirmProjectMemoryAppendCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.memory.append.confirm"),
@@ -373,6 +411,14 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   refreshLongTermMemoryCommandSchema,
   saveLongTermMemoryCommandSchema,
   openLongTermMemoryFolderCommandSchema,
+  prepareLongTermMemoryPatchCommandSchema,
+  commitLongTermMemoryPatchCommandSchema,
+  discardLongTermMemoryPatchCommandSchema,
+  loadMemoryMaintenanceCommandSchema,
+  saveMemoryMaintenanceCommandSchema,
+  updateCondensationArchiveCommandSchema,
+  cleanupCondensationArchiveCommandSchema,
+  inspectLongTermMemoryProvenanceCommandSchema,
   dismissMemoryCandidateCommandSchema,
   confirmProjectMemoryAppendCommandSchema,
   listProjectOutputsCommandSchema,
@@ -647,6 +693,13 @@ const longTermMemoryEventSchema = eventMetadataSchema.extend({
 const longTermMemoryFolderOpenedEventSchema = eventMetadataSchema.extend({
   event: z.literal("long_term_memory.folder.opened"), payload: z.object({ path: z.string().min(1) })
 });
+const longTermMemoryPatchPreparedEventSchema = eventMetadataSchema.extend({ event: z.literal("long_term_memory.patch.prepared"), payload: z.object({ patch: preparedMemoryPatchSchema }) });
+const longTermMemoryPatchCommittedEventSchema = eventMetadataSchema.extend({ event: z.literal("long_term_memory.patch.committed"), payload: z.object({ patchId: z.string().min(8), document: longTermMemoryDocumentSchema }) });
+const longTermMemoryPatchDiscardedEventSchema = eventMetadataSchema.extend({ event: z.literal("long_term_memory.patch.discarded"), payload: z.object({ patchId: z.string().min(8) }) });
+const memoryMaintenanceEventSchema = eventMetadataSchema.extend({ event: z.enum(["long_term_memory.maintenance.loaded", "long_term_memory.maintenance.updated"]), payload: z.object({ state: memoryMaintenanceStateSchema }) });
+const longTermMemoryProvenanceInspectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("long_term_memory.provenance.inspected"), payload: z.object({ sourceReferenceId: z.string().min(6), status: z.enum(["available", "source_unavailable"]), record: localMemoryProvenanceRecordSchema.optional() })
+});
 const memoryCandidateEventSchema = eventMetadataSchema.extend({
   event: z.enum(["memory.candidate.captured", "memory.candidate.resolved"]), payload: z.object({ candidate: memoryCandidateSchema })
 });
@@ -731,6 +784,11 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   projectMemoryEventSchema,
   longTermMemoryEventSchema,
   longTermMemoryFolderOpenedEventSchema,
+  longTermMemoryPatchPreparedEventSchema,
+  longTermMemoryPatchCommittedEventSchema,
+  longTermMemoryPatchDiscardedEventSchema,
+  memoryMaintenanceEventSchema,
+  longTermMemoryProvenanceInspectedEventSchema,
   memoryCandidateEventSchema,
   projectOutputsEventSchema,
   projectOutputOpenedEventSchema,

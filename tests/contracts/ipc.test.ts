@@ -51,4 +51,13 @@ describe("versioned IPC contracts", () => {
     };
     expect(trajectoryEventSchema.parse(event).provenance.producerId).toBe("agent-2");
   });
+
+  it("requires an affirmative Memory Patch confirmation in the IPC contract", () => {
+    const base = {
+      schemaVersion: 1, command: "long_term_memory.patch.commit", commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(),
+      actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString(), payload: { patchId: "patch-00000001", confirmed: false }
+    };
+    expect(hostCommandSchema.safeParse(base).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...base, payload: { ...base.payload, confirmed: true } }).success).toBe(true);
+  });
 });

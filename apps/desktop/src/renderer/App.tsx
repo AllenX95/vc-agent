@@ -7,6 +7,7 @@ import {
   type HostCommand,
   type HostEvent,
   type LongTermMemoryDocument,
+  type MemoryMaintenanceState,
   type MaterialInventoryItem,
   type MemoryCandidate,
   type ModelProfile,
@@ -14,6 +15,7 @@ import {
   type ProjectContextDocument,
   type ProjectMemoryDocument,
   type ProjectOutputArtifact,
+  type PreparedMemoryPatch,
   type PromptContribution,
   type ProviderFailure,
   type SystemPromptRevision,
@@ -115,6 +117,8 @@ export function App() {
   const [recoveryExport, setRecoveryExport] = useState<string | null>(null);
   const [longTermMemoryDocument, setLongTermMemoryDocument] = useState<LongTermMemoryDocument | null>(null);
   const [longTermMemoryDraft, setLongTermMemoryDraft] = useState("");
+  const [preparedMemoryPatch, setPreparedMemoryPatch] = useState<PreparedMemoryPatch | null>(null);
+  const [memoryMaintenance, setMemoryMaintenance] = useState<MemoryMaintenanceState | null>(null);
   const longTermMemoryDirty = useRef(false);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
@@ -141,6 +145,17 @@ export function App() {
         setLongTermMemoryDraft(event.payload.document.content);
         break;
       case "long_term_memory.folder.opened": break;
+      case "long_term_memory.patch.prepared": setPreparedMemoryPatch(event.payload.patch); break;
+      case "long_term_memory.patch.committed":
+        longTermMemoryDirty.current = false;
+        setLongTermMemoryDocument(event.payload.document);
+        setLongTermMemoryDraft(event.payload.document.content);
+        setPreparedMemoryPatch(null);
+        break;
+      case "long_term_memory.patch.discarded": setPreparedMemoryPatch(null); break;
+      case "long_term_memory.maintenance.loaded":
+      case "long_term_memory.maintenance.updated": setMemoryMaintenance(event.payload.state); break;
+      case "long_term_memory.provenance.inspected": break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
       case "prompt.revisions.listed": setPromptRevisions(event.payload.revisions); setActivePromptRevisionId(event.payload.activeRevisionId); break;
@@ -480,7 +495,7 @@ export function App() {
         <RecoveryBanner bootstrap={bootstrap} />
         <DiagnosticBanner event={diagnostic} />
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -579,7 +594,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   promptRevisions: SystemPromptRevision[];
@@ -591,6 +606,8 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   recoveryExport: string | null;
   longTermMemoryDocument: LongTermMemoryDocument | null;
   longTermMemoryDraft: string;
+  preparedMemoryPatch: PreparedMemoryPatch | null;
+  memoryMaintenance: MemoryMaintenanceState | null;
   onLongTermMemoryChange(content: string): void;
   onLongTermMemoryRefresh(): void;
 }) {
@@ -611,6 +628,7 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   const openMemory = () => {
     setTab("memory");
     if (longTermMemoryDocument === null) void invoke(createCommand({ command: "long_term_memory.load" }));
+    if (memoryMaintenance === null) void invoke(createCommand({ command: "long_term_memory.maintenance.load" }));
   };
   const saveLongTermMemory = () => {
     if (longTermMemoryDocument === null) return;
@@ -620,7 +638,7 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
     <section className="settings-view" aria-labelledby="settings-title">
       <header><div><span className="eyebrow">Application</span><h1 id="settings-title">Settings</h1></div><SlidersHorizontal size={20} /></header>
       <div className="settings-tabs" role="tablist" aria-label="Settings views"><button type="button" role="tab" aria-selected={tab === "general"} className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button><button type="button" role="tab" aria-selected={tab === "memory"} className={tab === "memory" ? "active" : ""} onClick={openMemory} disabled={readOnly}>Memory</button></div>
-      {tab === "memory" ? <LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /> : <>
+      {tab === "memory" ? <LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} patch={preparedMemoryPatch} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /> : <>
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>
       <div className="settings-section profile-settings">
@@ -646,16 +664,44 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   );
 }
 
-function LongTermMemorySettings({ document, draft, onChange, onRefresh, onSave, openFolder }: {
+function LongTermMemorySettings({ document, draft, patch, maintenance, invoke, onChange, onRefresh, onSave, openFolder }: {
   document: LongTermMemoryDocument | null;
   draft: string;
+  patch: PreparedMemoryPatch | null;
+  maintenance: MemoryMaintenanceState | null;
+  invoke(command: HostCommand): Promise<void>;
   onChange(content: string): void;
   onRefresh(): void;
   onSave(): void;
   openFolder(): void;
 }) {
+  const [proposalOpen, setProposalOpen] = useState(false);
+  const [action, setAction] = useState<PreparedMemoryPatch["action"]>("add");
+  const [targetEntryIds, setTargetEntryIds] = useState<string[]>([]);
+  const [entryId, setEntryId] = useState("");
+  const [title, setTitle] = useState("");
+  const [tags, setTags] = useState("");
+  const [applicability, setApplicability] = useState("");
+  const [maturity, setMaturity] = useState<"user-confirmed" | "evidence-backed" | "retrospectively-supported">("user-confirmed");
+  const [recallPolicy, setRecallPolicy] = useState<"automatic" | "explicit-only">("automatic");
+  const [limitations, setLimitations] = useState("");
+  const [content, setContent] = useState("");
+  const [rationale, setRationale] = useState("");
+  const [resolutionType, setResolutionType] = useState<"user_correction" | "approved_reflection" | "approved_retrospective">("approved_reflection");
+  const [resolutionReference, setResolutionReference] = useState("");
   if (document === null) return <div className="memory-settings-loading">Loading Long-term Memory...</div>;
   const currentEntries = document.entries.filter((entry) => entry.status === "current");
+  const preparePatch = () => {
+    const proposed = {
+      ...(entryId.trim() ? { id: entryId.trim() } : {}), title: title.trim(), date: new Date().toISOString().slice(0, 10),
+      tags: commaValues(tags), applicability: commaValues(applicability), maturity, recallPolicy, limitations: limitations.trim(), content: content.trim(), sourceReferenceIds: []
+    };
+    void invoke(createCommand({ command: "long_term_memory.patch.prepare", payload: {
+      action, targetEntryIds: action === "add" ? [] : targetEntryIds, proposed, rationale: rationale.trim(),
+      ...((action === "narrow" || action === "revise") ? { resolutionSignal: { type: resolutionType, referenceId: resolutionReference.trim() } } : {})
+    } }));
+  };
+  const selectTargets = (event: React.ChangeEvent<HTMLSelectElement>) => setTargetEntryIds([...event.target.selectedOptions].map((option) => option.value));
   return <div className="long-term-memory-settings">
     <div className="memory-settings-heading"><div><span className="eyebrow">Personal cognition</span><h2>Long-term Memory</h2><p title={document.rootPath}>{document.rootPath}</p></div><div><button className="icon-button" type="button" title="Open memory folder" aria-label="Open memory folder" onClick={openFolder}><FolderOpen size={16} /></button><button className="icon-button" type="button" title="Refresh and re-index" aria-label="Refresh and re-index" onClick={onRefresh}><RefreshCw size={16} /></button></div></div>
     <div className="memory-summary"><span><strong>{currentEntries.length}</strong> current entries</span><span><strong>{currentEntries.filter((entry) => entry.recallPolicy === "explicit-only").length}</strong> explicit only</span><span><strong>{currentEntries.filter((entry) => entry.conflictState.startsWith("unresolved:")).length}</strong> unresolved views</span><span>Updated {new Date(document.updatedAt).toLocaleString()}</span></div>
@@ -663,6 +709,25 @@ function LongTermMemorySettings({ document, draft, onChange, onRefresh, onSave, 
     {document.warnings.length > 0 && <div className="context-warnings" role="status">{document.warnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.line ? `Line ${warning.line}: ` : ""}{warning.message}</span>)}</div>}
     <label className="memory-editor">Active memory<textarea aria-label="Long-term Memory" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" /></label>
     <div className="memory-editor-actions"><span>{document.sourceHash.slice(0, 12)}</span><button className="primary-button" type="button" onClick={onSave}>Save Memory</button></div>
+    <section className="memory-evolution-section">
+      <div className="settings-section-header"><div><h2>Memory Evolution</h2><p>Reviewed changes preserve lineage across all cognition files.</p></div><button className="compact-button" type="button" onClick={() => setProposalOpen((open) => !open)}>{proposalOpen ? "Close" : "Prepare patch"}</button></div>
+      {proposalOpen && <div className="memory-evolution-form">
+        <label>Action<select aria-label="Memory Evolution action" value={action} onChange={(event) => { setAction(event.target.value as PreparedMemoryPatch["action"]); setTargetEntryIds([]); }}><option value="add">Add</option><option value="reinforce">Reinforce</option><option value="narrow">Narrow</option><option value="revise">Revise</option><option value="contradict">Contradict</option><option value="merge_condense">Merge / Condense</option></select></label>
+        {action !== "add" && <label>Current entries<select aria-label="Memory Evolution targets" multiple={action === "merge_condense"} value={targetEntryIds} onChange={selectTargets}>{currentEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.title} · v{entry.version}</option>)}</select></label>}
+        <label>Entry ID<input value={entryId} onChange={(event) => setEntryId(event.target.value)} placeholder="Optional stable opaque id" /></label>
+        <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+        <label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="memo, diligence" /></label>
+        <label>Applies to<input value={applicability} onChange={(event) => setApplicability(event.target.value)} /></label>
+        <div className="memory-evolution-row"><label>Maturity<select value={maturity} onChange={(event) => setMaturity(event.target.value as typeof maturity)}><option value="user-confirmed">User confirmed</option><option value="evidence-backed">Evidence backed</option><option value="retrospectively-supported">Retrospectively supported</option></select></label><label>Recall<select value={recallPolicy} onChange={(event) => setRecallPolicy(event.target.value as typeof recallPolicy)}><option value="automatic">Automatic</option><option value="explicit-only">Explicit only</option></select></label></div>
+        <label>Limitations<textarea value={limitations} onChange={(event) => setLimitations(event.target.value)} /></label>
+        <label>Learning<textarea aria-label="Proposed learning" value={content} onChange={(event) => setContent(event.target.value)} /></label>
+        <label>Rationale<textarea aria-label="Memory Evolution rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} /></label>
+        {(action === "narrow" || action === "revise") && <div className="memory-evolution-row"><label>Resolution signal<select value={resolutionType} onChange={(event) => setResolutionType(event.target.value as typeof resolutionType)}><option value="approved_reflection">Approved Reflection</option><option value="approved_retrospective">Approved Retrospective</option><option value="user_correction">User correction</option></select></label><label>Reference<input aria-label="Resolution reference" value={resolutionReference} onChange={(event) => setResolutionReference(event.target.value)} /></label></div>}
+        <button className="primary-button" type="button" disabled={!title.trim() || !content.trim() || !rationale.trim() || (action !== "add" && targetEntryIds.length === 0) || (action === "merge_condense" && targetEntryIds.length < 2) || ((action === "narrow" || action === "revise") && !resolutionReference.trim())} onClick={preparePatch}>Preview final patch</button>
+      </div>}
+      {patch && <div className="memory-patch-preview" role="dialog" aria-label="Memory patch preview"><div><strong>{patch.action.replace("_", " / ")}</strong><span>{patch.id} · {new Date(patch.createdAt).toLocaleString()}</span></div><p>{patch.rationale}</p><pre>{patch.lineageDiff}</pre>{patch.files.map((file) => <details key={file.kind} open={file.changed}><summary>{file.kind.replaceAll("_", " ")} · {file.changed ? "changed" : "unchanged"}</summary><span title={file.path}>{file.path}</span><pre>{file.diff}</pre></details>)}<div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.discard", payload: { patchId: patch.id } }))}>Discard</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.commit", payload: { patchId: patch.id, confirmed: true } }))}>Confirm Memory change</button></div></div>}
+    </section>
+    {maintenance && <section className="memory-maintenance-section"><div className="settings-section-header"><div><h2>Condensation Archive</h2><p>Cognitive Evolution History is permanent and excluded from this policy.</p></div><span>{maintenance.archiveItems.length} items</span></div><div className="memory-maintenance-controls"><label>Retention<select value={maintenance.retention} onChange={(event) => void invoke(createCommand({ command: "long_term_memory.maintenance.save", payload: { retention: event.target.value === "permanent" ? "permanent" : Number(event.target.value) as 30 | 90 | 180 | 365, automaticDeletion: maintenance.automaticDeletion } }))}><option value={30}>30 days</option><option value={90}>90 days</option><option value={180}>180 days</option><option value={365}>365 days</option><option value="permanent">Permanent</option></select></label><label className="checkbox-setting"><input type="checkbox" checked={maintenance.automaticDeletion} onChange={(event) => void invoke(createCommand({ command: "long_term_memory.maintenance.save", payload: { retention: maintenance.retention, automaticDeletion: event.target.checked } }))} /> Automatic cleanup</label></div>{maintenance.archiveItems.map((item) => <div className="archive-row" key={item.archiveId}><div><strong>{item.replacement || item.archiveId}</strong><span>{item.reason} · {item.eligibleForCleanup ? "Eligible for cleanup" : item.kept ? "Kept" : item.expiresAt ? `Expires ${new Date(item.expiresAt).toLocaleDateString()}` : "Permanent"}</span></div><div>{!item.kept && <button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.archive.update", payload: { archiveId: item.archiveId, action: "keep" } }))}>Keep</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.archive.update", payload: { archiveId: item.archiveId, action: "refresh" } }))}>Re-archive</button>{item.eligibleForCleanup && <button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.archive.cleanup", payload: { archiveIds: [item.archiveId] } }))}>Delete</button>}</div></div>)}</section>}
   </div>;
 }
 
@@ -825,6 +890,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function commaValues(value: string): string[] {
+  return value.split(/[,，]/u).map((item) => item.trim()).filter(Boolean);
 }
 
 function doctorLabel(name: string): string {

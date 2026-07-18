@@ -172,6 +172,46 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
     await expect(window.getByText("Memory entry requires a title, YYYY-MM-DD date, metadata block, blank line, and content.", { exact: false })).toBeVisible();
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { entityCounts: { projects: 0 }, runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
 
+    await invokeRaw(window, "access.mode.set", { mode: "full" });
+    await window.getByRole("button", { name: "Prepare patch" }).click();
+    const evolutionForm = window.locator(".memory-evolution-form");
+    await evolutionForm.getByLabel("Entry ID").fill("ltm-bottom-up-market");
+    await evolutionForm.getByLabel("Title").fill("Bottom-up market framing");
+    await evolutionForm.getByLabel("Tags").fill("memo, market sizing");
+    await evolutionForm.getByLabel("Applies to").fill("pre-revenue hard tech");
+    await evolutionForm.getByLabel("Limitations").fill("Less useful after repeatable sales.");
+    await evolutionForm.getByLabel("Proposed learning").fill("Prefer bottom-up serviceable-market assumptions before repeatable sales.");
+    await evolutionForm.getByLabel("Memory Evolution rationale").fill("Explicitly reviewed reusable framing.");
+    await evolutionForm.getByRole("button", { name: "Preview final patch" }).click();
+    const preview = window.getByRole("dialog", { name: "Memory patch preview" });
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText("Add ltm-bottom-up-market v1 as current.");
+    await expect(preview.getByText("active · changed", { exact: true })).toBeVisible();
+    expect(readFileSync(join(memoryRoot, "long-term-memory.md"), "utf8")).not.toContain("Bottom-up market framing");
+    await preview.getByRole("button", { name: "Confirm Memory change" }).click();
+    await expect(window.getByText("3 current entries", { exact: true })).toBeVisible();
+    expect(readFileSync(join(memoryRoot, "long-term-memory.md"), "utf8")).toContain("Bottom-up market framing");
+    expect(readFileSync(join(memoryRoot, "long-term-memory.md"), "utf8")).toContain("## Broken entry");
+
+    const stalePreview = await invokeRaw(window, "long_term_memory.patch.prepare", {
+      action: "add", targetEntryIds: [], rationale: "Prepare a stale patch fixture.",
+      proposed: { id: "ltm-stale-fixture", title: "Stale fixture", date: "2026-07-19", tags: ["fixture"], applicability: ["seed financing"], maturity: "user-confirmed", recallPolicy: "automatic", limitations: "Fixture only.", content: "This proposal must not survive an external target change.", sourceReferenceIds: [] }
+    }) as { event: string; payload: { patch: { id: string } } };
+    expect(stalePreview.event).toBe("long_term_memory.patch.prepared");
+    const agentCommit = await window.evaluate(async (patchId) => {
+      return (window as unknown as { vcAgent: { invoke(command: unknown): Promise<unknown> } }).vcAgent.invoke({
+        schemaVersion: 1, command: "long_term_memory.patch.commit", commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(),
+        actor: { actorType: "agent", actorId: "primary-agent" }, sentAt: new Date().toISOString(), payload: { patchId, confirmed: true }
+      });
+    }, stalePreview.payload.patch.id);
+    expect(agentCommit).toMatchObject({ event: "diagnostic.raised", payload: { message: "Memory changes require explicit User confirmation." } });
+    const archivePath = join(memoryRoot, "long-term-memory-condensation-archive.md");
+    writeFileSync(archivePath, `${readFileSync(archivePath, "utf8")}\nExternal archive change.\n`, "utf8");
+    const staleCommit = await invokeRaw(window, "long_term_memory.patch.commit", { patchId: stalePreview.payload.patch.id, confirmed: true });
+    expect(staleCommit).toMatchObject({ event: "diagnostic.raised", payload: { message: "Long-term Memory or its lineage changed after preview. Prepare a new patch before committing." } });
+    expect(readFileSync(join(memoryRoot, "long-term-memory.md"), "utf8")).not.toContain("Stale fixture");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
     await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
     await createProfile(window, { name: "Memory fixture", provider: "vc-agent-memory-faux", model: "memory-fixture", apiKey: "fixture-key" });
     await window.getByRole("button", { name: "New thread" }).click();
@@ -209,6 +249,43 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("permits Long-term Memory source drilldown only inside its authorized source Project", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-provenance-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-provenance-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    const window = await application.firstWindow();
+    const opened = await invokeRaw(window, "project.open") as { payload: { project: { id: string } } };
+    const projectId = opened.payload.project.id;
+    const created = await invokeRaw(window, "thread.create.project", { projectId, title: "Source verification" }) as { payload: { thread: { id: string } } };
+    const threadId = created.payload.thread.id;
+    const profile = await invokeRaw(window, "profile.create", { name: "Authorized source profile", provider: "fixture-provider", model: "fixture-model", apiKey: "fixture-key", thinkingLevel: "off" }) as { payload: { profile: { id: string } } };
+    await invokeRaw(window, "thread.profile.select", { threadId, profileId: profile.payload.profile.id });
+    await invokeRaw(window, "long_term_memory.load");
+    const prepared = await invokeRaw(window, "long_term_memory.patch.prepare", {
+      action: "add", targetEntryIds: [], rationale: "Approved source-linked learning.",
+      proposed: { id: "ltm-source-linked", title: "Source-linked learning", date: "2026-07-19", tags: ["diligence"], applicability: ["seed financing"], maturity: "evidence-backed", recallPolicy: "automatic", limitations: "Confirm applicability case by case.", content: "Use independent customer evidence to test unusually coherent management narratives.", sourceReferenceIds: ["src_ref_project_one"] },
+      provenanceRecords: [{ schemaVersion: 1, sourceReferenceId: "src_ref_project_one", projectId, workflowType: "reflection", workflowRunId: "reflection-run-e2e", judgmentRecordId: "judgment-e2e", threadId, evidenceReferences: ["memo.md#page=1"], availability: "active", createdAt: "2026-07-19T08:00:00.000Z" }]
+    }) as { payload: { patch: { id: string } } };
+    await invokeRaw(window, "long_term_memory.patch.commit", { patchId: prepared.payload.patch.id, confirmed: true });
+
+    const available = await invokeRaw(window, "long_term_memory.provenance.inspect", { threadId, sourceReferenceId: "src_ref_project_one" });
+    expect(available).toMatchObject({ event: "long_term_memory.provenance.inspected", payload: { status: "available", record: { projectId, workflowRunId: "reflection-run-e2e" } } });
+    const missing = await invokeRaw(window, "long_term_memory.provenance.inspect", { threadId, sourceReferenceId: "src_ref_missing" });
+    expect(missing).toMatchObject({ event: "long_term_memory.provenance.inspected", payload: { status: "source_unavailable" } });
+    const unscoped = await invokeRaw(window, "thread.create.unscoped", { title: "Wrong scope" }) as { payload: { thread: { id: string } } };
+    const rejected = await invokeRaw(window, "long_term_memory.provenance.inspect", { threadId: unscoped.payload.thread.id, sourceReferenceId: "src_ref_project_one" });
+    expect(rejected).toMatchObject({ event: "diagnostic.raised", payload: { message: "Source verification requires an authorized Profile inside the source Project." } });
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
   }
 });
 

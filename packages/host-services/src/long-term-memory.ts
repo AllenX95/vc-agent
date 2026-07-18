@@ -106,17 +106,17 @@ export class LongTermMemoryStore {
 
   rebuild(): LongTermMemoryDocument {
     const content = readFileSync(this.markdownPath, "utf8");
+    mkdirSync(this.#indexRoot, { recursive: true });
+    atomicWrite(this.indexPath, createLongTermMemoryIndexContent(content));
+    return this.readCurrent();
+  }
+
+  readCurrent(): LongTermMemoryDocument {
+    if (!existsSync(this.markdownPath)) throw new Error("Long-term Memory is not initialized.");
+    const content = readFileSync(this.markdownPath, "utf8");
     const parsed = parseLongTermMemory(content);
     const sourceHash = hash(content);
     const updatedAt = statSync(this.markdownPath).mtime.toISOString();
-    const index: LongTermMemoryIndex = {
-      schemaVersion: 1,
-      sourceHash,
-      entries: parsed.entries.filter((entry) => entry.status === "current").map(indexEntry),
-      warnings: parsed.warnings
-    };
-    mkdirSync(this.#indexRoot, { recursive: true });
-    atomicWrite(this.indexPath, `${JSON.stringify(index, null, 2)}\n`);
     return {
       schemaVersion: 1,
       rootPath: this.#root,
@@ -153,6 +153,17 @@ export class LongTermMemoryStore {
     createIfMissing(this.archivePath, LONG_TERM_MEMORY_ARCHIVE_HEADER);
     createIfMissing(this.historyPath, COGNITIVE_EVOLUTION_HISTORY_HEADER);
   }
+}
+
+export function createLongTermMemoryIndexContent(content: string): string {
+  const parsed = parseLongTermMemory(content);
+  const index: LongTermMemoryIndex = {
+    schemaVersion: 1,
+    sourceHash: hash(content),
+    entries: parsed.entries.filter((entry) => entry.status === "current").map(indexEntry),
+    warnings: parsed.warnings
+  };
+  return `${JSON.stringify(index, null, 2)}\n`;
 }
 
 export function parseLongTermMemory(content: string): { entries: LongTermMemoryEntry[]; warnings: LongTermMemoryWarning[] } {

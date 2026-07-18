@@ -137,17 +137,17 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] Every patch records base hashes for all target files and becomes stale after a manual or workflow write changes any target.
-- [ ] `Add` creates a new stable entry; `Reinforce` adds provenance or maturity without duplicating meaning.
-- [ ] `Narrow` and `Revise` create a new current version and preserve prior wording and rationale in Cognitive Evolution History.
-- [ ] `Contradict` preserves both substantive views as an Unresolved Memory Conflict.
-- [ ] `Merge / Condense` moves removed redundant content to the Condensation Archive and does not create false cognitive evolution.
-- [ ] Recency, repetition, confidence language, or model preference cannot select `Revise` over `Contradict`.
-- [ ] A final Markdown and lineage diff is visible before commit; confirmation remains mandatory in Full Access.
-- [ ] Commit either activates every active-memory, history, archive, provenance, and index change or activates none.
-- [ ] Manual edits and deletions do not infer evolution actions, archive entries, provenance, or history.
-- [ ] Archive retention settings support 30, 90, 180, 365 days, or permanent; automatic deletion is off by default and never includes Cognitive Evolution History.
-- [ ] Source drilldown is available only inside the source Project under its Provider Authorization; missing or restored-away sources remain visibly unavailable.
+- [x] Every patch records base hashes for all target files and becomes stale after a manual or workflow write changes any target.
+- [x] `Add` creates a new stable entry; `Reinforce` adds provenance or maturity without duplicating meaning.
+- [x] `Narrow` and `Revise` create a new current version and preserve prior wording and rationale in Cognitive Evolution History.
+- [x] `Contradict` preserves both substantive views as an Unresolved Memory Conflict.
+- [x] `Merge / Condense` moves removed redundant content to the Condensation Archive and does not create false cognitive evolution.
+- [x] Recency, repetition, confidence language, or model preference cannot select `Revise` over `Contradict`.
+- [x] A final Markdown and lineage diff is visible before commit; confirmation remains mandatory in Full Access.
+- [x] Commit either activates every active-memory, history, archive, provenance, and index change or activates none.
+- [x] Manual edits and deletions do not infer evolution actions, archive entries, provenance, or history.
+- [x] Archive retention settings support 30, 90, 180, 365 days, or permanent; automatic deletion is off by default and never includes Cognitive Evolution History.
+- [x] Source drilldown is available only inside the source Project under its Provider Authorization; missing or restored-away sources remain visibly unavailable.
 
 ### L3. Run A Broad Project Independent Evidence Pass
 
