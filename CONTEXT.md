@@ -377,8 +377,12 @@ A user-reviewed comparison of an earlier investment judgment and its original ra
 _Avoid_: Memory summary, outcome-only scoring, hindsight rewrite
 
 **Investment Reflection Thread**:
-A user-triggered dedicated Project Thread or Unscoped Thread in which the User and agent examine current or prior investment judgments through guided dialogue using evidence and memory available to that Thread scope. The agent actively questions, challenges, and synthesizes rather than merely collecting facts.
+A user-triggered dedicated Project Thread or Unscoped Thread in which the User and agent examine current or prior investment judgments through guided dialogue using evidence and memory available to that Thread scope. A Project Reflection may begin from the broad objective of reviewing the current Project; a narrower focus is optional. The agent actively questions, challenges, and synthesizes rather than merely collecting facts.
 _Avoid_: Ordinary Thread, automatic review, form-filling workflow, Session
+
+**Reflection Project Brief**:
+A bounded, non-memory description of the current Project supplied to a broadly launched Project Reflection, containing only the scope, basic Project Context fields, Material inventory, and available record or Output references needed for the Independent Evidence Pass to choose evidence progressively.
+_Avoid_: Project Memory, Long-term Memory, full Project Context dump, eager material load, prior investment conclusion
 
 **Critical Reflection Stance**:
 The agent's intellectually independent stance inside an Investment Reflection Thread: it treats memory as historical evidence about the User, tests claims against available evidence, and surfaces reasoned disagreement or contradiction when warranted.
@@ -395,6 +399,10 @@ _Avoid_: Raw material dump, full model reasoning, final Judgment Record
 **Memory-Aware Reflection Pass**:
 The second stage of an Investment Reflection Thread, in which the agent discusses the Independent Assessment with the User in light of relevant memory without inheriting the first stage's full context.
 _Avoid_: Re-running the evidence pass, full-context continuation, memory obedience
+
+**Local Memory Provenance**:
+A User-inspectable local mapping from an opaque Long-term Memory source reference to the source Project, Reflection or Dream run, Judgment Record, Thread, Turn, and eligible evidence references. It supports explicit source verification without exposing Project identity or content in ordinary Long-term Memory recall.
+_Avoid_: Model-facing memory content, cross-Project authorization, source evidence, backup Project metadata
 
 **Evidence Drilldown**:
 An on-demand retrieval of a bounded original-source excerpt during the Memory-Aware Reflection Pass, using an Independent Assessment evidence reference to verify or challenge a claim.
