@@ -342,7 +342,7 @@ export function createMemoryRecallCapability(
     inputSchema: memoryRecallInputSchema,
     inspect: () => undefined,
     async execute(input, context) {
-      if (input.source === "long_term_memory" || context.request.scope.kind !== "project") return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "The requested Memory source is not available in this build; no data was loaded." };
+      if (input.source === "project_memory" && context.request.scope.kind !== "project") return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "Project Memory is unavailable outside its Project scope; no Project state was loaded." };
       const recalled = await recall(input, context);
       return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
     }

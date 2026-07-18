@@ -140,6 +140,78 @@ test("keeps old state active when staged migration fails", async () => {
   }
 });
 
+test("edits and recalls de-identified Long-term Memory without Project state", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-ltm-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const memoryRoot = join(userDataDirectory, "memory", "long-term");
+  const application = await launchApplication(root, userDataDirectory);
+
+  try {
+    const window = await application.firstWindow();
+    expect(existsSync(memoryRoot)).toBe(false);
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await expect(window.getByRole("heading", { name: "Long-term Memory" })).toBeVisible();
+    for (const file of ["long-term-memory.md", "long-term-memory-condensation-archive.md", "cognitive-evolution-history.md"]) {
+      expect(existsSync(join(memoryRoot, file))).toBe(true);
+      await expect(window.getByText(file, { exact: true })).toBeVisible();
+    }
+    await expect(window.getByRole("button", { name: "Open memory folder" })).toBeVisible();
+    await window.getByRole("button", { name: "Refresh and re-index" }).click();
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByLabel("Long-term Memory").fill(longTermMemoryFixture());
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await expect(window.getByText("1 current entries", { exact: true })).toBeVisible();
+    const externallyEdited = `${longTermMemoryFixture()}\n${explicitOnlyMemoryFixture()}\n## Broken entry\nScope: global\n`;
+    writeFileSync(join(memoryRoot, "long-term-memory.md"), externallyEdited, "utf8");
+    await expect(window.getByLabel("Long-term Memory")).toHaveValue(externallyEdited, { timeout: 10_000 });
+    await expect(window.getByText("2 current entries", { exact: true })).toBeVisible();
+    await expect(window.getByText("1 explicit only", { exact: true })).toBeVisible();
+    await expect(window.getByText("Memory entry requires a title, YYYY-MM-DD date, metadata block, blank line, and content.", { exact: false })).toBeVisible();
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { entityCounts: { projects: 0 }, runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
+    await createProfile(window, { name: "Memory fixture", provider: "vc-agent-memory-faux", model: "memory-fixture", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Memory fixture" });
+    await window.getByLabel("Message").fill("Provide an investment judgment on market sizing for an early-stage hard tech opportunity.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Recalled relevant Long-term Memory as prior judgment, not source evidence.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.locator(".tool-activity").filter({ hasText: "ltm-tam-framing" })).toHaveCount(2);
+    await expect(window.locator(".conversation")).not.toContainText("src_ref_alpha");
+    await expect(window.locator(".conversation")).not.toContainText("projectId");
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Explicit Memory fixture", provider: "vc-agent-explicit-memory-faux", model: "memory-policy-fixture", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
+    await window.getByLabel("Message").fill("Use my long-term memory about founder reference diligence.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.locator(".tool-activity").filter({ hasText: "ltm-founder-reference" })).toHaveCount(2);
+
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
+    await window.getByLabel("Message").fill("Provide an investment judgment on founder references for seed financing.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.locator(".tool-activity").filter({ hasText: "ltm-founder-reference" })).toHaveCount(0);
+
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
+    await window.getByLabel("Message").fill("Summarize the supplied text neutrally.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.locator(".tool-activity.failed").filter({ hasText: "requires judgment-heavy work or an explicit User request" })).toHaveCount(2);
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("retains a missing-Profile turn and runs Pi only after manual Profile selection and retry", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-f2-e2e-"));
@@ -849,6 +921,47 @@ async function invokeRaw(window: import("@playwright/test").Page, command: strin
       ...(payload === undefined ? {} : { payload })
     });
   }, { command, payload });
+}
+
+function longTermMemoryFixture(): string {
+  return `# Long-term Memory
+
+Schema-Version: 1
+
+## 2026-07-19 - Conservative TAM framing
+ID: ltm-tam-framing
+Version: 1
+Status: current
+Tags: memo, market sizing
+Source: reflection-approved
+Scope: global
+Applies To: early-stage hard tech, IC memo
+Maturity: evidence-backed
+Recall: automatic
+Conflict: none
+Limitations: Less useful after repeatable sales establish a bottom-up market.
+Source References: src_ref_alpha
+
+早期硬科技项目应保守界定可服务市场，不把远期平台市场全部计入 TAM。
+`;
+}
+
+function explicitOnlyMemoryFixture(): string {
+  return `## 2026-07-19 - Founder reference caution
+ID: ltm-founder-reference
+Version: 1
+Status: current
+Tags: founder, diligence
+Scope: global
+Applies To: seed financing, founder diligence
+Maturity: user-confirmed
+Recall: explicit-only
+Conflict: none
+Limitations: Use only when references are available.
+Source References:
+
+Treat unusually polished references as a prompt for deeper triangulation, not as proof of operating quality.
+`;
 }
 
 async function createProfile(window: import("@playwright/test").Page, input: { name: string; provider: string; model: string; apiKey: string }) {

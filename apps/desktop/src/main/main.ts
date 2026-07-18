@@ -24,7 +24,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, MemoryCandidateStore, ProjectOutputRegistry, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, ProjectOutputRegistry, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -58,6 +58,8 @@ interface TurnContext {
   readonly text: string;
   readonly profile: ModelProfile;
   readonly outputIntent: boolean;
+  readonly memoryRecallMode: "none" | "automatic" | "explicit";
+  readonly longTermMemoryCardIds: Set<string>;
   readonly activeCapabilities: string[];
   readonly expectedStateVersion: number;
   readonly promptRevision: SystemPromptRevision;
@@ -76,6 +78,7 @@ let capabilityGateway: CapabilityGateway | null = null;
 let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
 let projectMemories: ProjectMemoryStore | null = null;
+let longTermMemories: LongTermMemoryStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
@@ -91,6 +94,9 @@ const projectIdentities = new ProjectIdentityStore();
 const projectContexts = new ProjectContextStore();
 const ownProjectContextWrites = new Map<string, string>();
 const ownProjectMemoryWrites = new Map<string, string>();
+let ownLongTermMemoryWriteHash: string | undefined;
+let longTermMemoryWatcher: FSWatcher | null = null;
+let longTermMemoryWatchTimer: ReturnType<typeof setTimeout> | undefined;
 const projectOutputs = new ProjectOutputRegistry();
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
@@ -296,6 +302,35 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before saving." : "Project Memory could not be saved.");
         }
+      }
+      case "long_term_memory.load": {
+        if (longTermMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Long-term Memory is unavailable.");
+        const existed = existsSync(longTermMemories.markdownPath);
+        const document = longTermMemories.load(true)!;
+        startLongTermMemoryWatcher();
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.loaded", payload: { document, source: existed ? "load" : "lazy_create" } };
+      }
+      case "long_term_memory.refresh": {
+        const document = longTermMemories?.refreshIfExists();
+        if (document === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Open the Long-term Memory view before refreshing it.");
+        startLongTermMemoryWatcher();
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "manual_refresh" } };
+      }
+      case "long_term_memory.save": {
+        if (longTermMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Long-term Memory is unavailable.");
+        try {
+          const document = longTermMemories.save(command.payload.content, command.payload.expectedSourceHash);
+          ownLongTermMemoryWriteHash = document.sourceHash;
+          return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "user_save" } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_LONG_TERM_MEMORY_WRITE" ? "Long-term Memory changed externally. Refresh before saving." : "Long-term Memory could not be saved.");
+        }
+      }
+      case "long_term_memory.open_folder": {
+        if (longTermMemories === null || !existsSync(longTermMemories.rootPath)) return diagnostic(command.correlationId, "HOST_FAILURE", "Open the Long-term Memory view first.");
+        const error = await shell.openPath(longTermMemories.rootPath);
+        if (error !== "") return diagnostic(command.correlationId, "HOST_FAILURE", "The Long-term Memory folder could not be opened.");
+        return { ...eventMetadata(command.correlationId), event: "long_term_memory.folder.opened", payload: { path: longTermMemories.rootPath } };
       }
       case "memory.candidate.dismiss": {
         const candidate = memoryCandidates?.resolve(command.payload.candidateId, "dismissed");
@@ -555,6 +590,35 @@ function startMaterialWatcher(projectId: string): void {
   }
 }
 
+function startLongTermMemoryWatcher(): void {
+  if (longTermMemoryWatcher !== null || longTermMemories === null || !existsSync(longTermMemories.rootPath)) return;
+  try {
+    longTermMemoryWatcher = watch(longTermMemories.rootPath, (_eventType, filename) => {
+      if (filename?.toString().toLocaleLowerCase() !== "long-term-memory.md") return;
+      if (longTermMemoryWatchTimer !== undefined) clearTimeout(longTermMemoryWatchTimer);
+      longTermMemoryWatchTimer = setTimeout(() => {
+        try {
+          const document = longTermMemories?.refreshIfExists();
+          if (document === undefined) return;
+          if (ownLongTermMemoryWriteHash === document.sourceHash) {
+            ownLongTermMemoryWriteHash = undefined;
+            return;
+          }
+          emit({ ...eventMetadata(randomUUID()), event: "long_term_memory.updated", payload: { document, source: "external_edit" } });
+        } catch {
+          // Manual refresh retries deterministic parsing after an unstable external write.
+        }
+      }, 750);
+    });
+    longTermMemoryWatcher.on("error", () => {
+      longTermMemoryWatcher?.close();
+      longTermMemoryWatcher = null;
+    });
+  } catch {
+    longTermMemoryWatcher = null;
+  }
+}
+
 async function parseMaterial(correlationId: string, materialId: string, refreshRequestId?: string): Promise<HostEvent> {
   let material = stateStore!.getMaterial(materialId);
   if (material === undefined || material.availability !== "active") return materialParseFailure(correlationId, materialId, "MATERIAL_UNAVAILABLE", "Material is unavailable.");
@@ -736,6 +800,7 @@ function submitTurn(
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
   const outputIntent = detectOutputIntent(input.text);
+  const memoryRecallMode = detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   const activeCapabilities = [...coreCapabilitiesForScope(thread.scope)];
   if (detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
@@ -841,6 +906,8 @@ function submitTurn(
     text: input.text,
     profile,
     outputIntent,
+    memoryRecallMode,
+    longTermMemoryCardIds: new Set(),
     activeCapabilities,
     expectedStateVersion: thread.stateVersion,
     promptRevision,
@@ -930,6 +997,8 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     text: "",
     profile,
     outputIntent: false,
+    memoryRecallMode: "none",
+    longTermMemoryCardIds: new Set(),
     activeCapabilities: [],
     expectedStateVersion: thread.stateVersion,
     promptRevision,
@@ -1421,6 +1490,7 @@ app.whenReady().then(() => {
     failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
   });
   const readOnlyRecovery = stateStore.isReadOnlyRecovery;
+  longTermMemories = new LongTermMemoryStore(join(app.getPath("userData"), "memory", "long-term"));
   if (!readOnlyRecovery) {
     projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
     memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
@@ -1493,11 +1563,26 @@ app.whenReady().then(() => {
   }));
   capabilityRegistry.register(createMemoryRecallCapability(async (input, context) => {
     const scope = context.request.scope;
-    if (scope.kind !== "project") throw new Error("Project Memory requires Project scope.");
-    const project = stateStore!.getProject(scope.projectId);
-    if (project === undefined || projectMemories === null) throw new Error("Project Memory is unavailable.");
-    const source = new ProjectMemoryRecallSource(() => projectMemories!.load(project.id, project.path, false));
-    const envelope = await source.recall({ disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+    const turn = turnContexts.get(context.request.turnId);
+    if (turn === undefined || turn.memoryRecallMode === "none") throw new Error("Memory recall requires judgment-heavy work or an explicit User request.");
+    let envelope;
+    if (input.source === "project_memory") {
+      if (scope.kind !== "project") throw new Error("Project Memory requires Project scope.");
+      const project = stateStore!.getProject(scope.projectId);
+      if (project === undefined || projectMemories === null) throw new Error("Project Memory is unavailable.");
+      const source = new ProjectMemoryRecallSource(() => projectMemories!.load(project.id, project.path, false));
+      envelope = await source.recall({ disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+    } else {
+      if (longTermMemories === null) throw new Error("Long-term Memory is unavailable.");
+      if (input.disclosureLevel === "full") {
+        if (input.entryIds === undefined || input.entryIds.length === 0 || input.entryIds.some((id) => !turn.longTermMemoryCardIds.has(id))) {
+          throw new Error("Expand only Long-term Memory cards returned earlier in this Turn.");
+        }
+      }
+      const source = new LongTermMemoryRecallSource(longTermMemories);
+      envelope = await source.recall({ mode: turn.memoryRecallMode, disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+      if (input.disclosureLevel === "cards") for (const item of envelope.items) turn.longTermMemoryCardIds.add(item.id);
+    }
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));
@@ -1553,9 +1638,14 @@ app.on("before-quit", () => {
     if (state.memoryTimer !== undefined) clearTimeout(state.memoryTimer);
   }
   materialWatchers.clear();
+  longTermMemoryWatcher?.close();
+  longTermMemoryWatcher = null;
+  if (longTermMemoryWatchTimer !== undefined) clearTimeout(longTermMemoryWatchTimer);
+  longTermMemoryWatchTimer = undefined;
   workerSupervisor = null;
   stateStore?.close();
   stateStore = null;
   projectMemories = null;
+  longTermMemories = null;
   memoryCandidates = null;
 });

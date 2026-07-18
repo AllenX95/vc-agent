@@ -8,7 +8,7 @@ import {
 } from "@vc-agent/contracts";
 import { createPiSession, sanitizeProviderFailure, type PiSessionEvent, type PiSessionHandle } from "@vc-agent/pi-adapter";
 import { createFauxPiSession } from "@vc-agent/pi-adapter/testing";
-import { dogfoodFixtureResponses } from "./dogfood-fixture.js";
+import { dogfoodFixtureResponses, explicitLongTermMemoryFixtureResponses, longTermMemoryFixtureResponses } from "./dogfood-fixture.js";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Agent Worker requires an Electron Utility Process parent port");
@@ -132,8 +132,8 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
             });
           }
       };
-      session = command.profile.provider === "vc-agent-faux" && process.env.NODE_ENV === "test"
-        ? await createFauxPiSession({ config: sessionConfig, responses: dogfoodFixtureResponses(), onEvent: onSessionEvent })
+      session = (["vc-agent-faux", "vc-agent-memory-faux", "vc-agent-explicit-memory-faux"].includes(command.profile.provider)) && process.env.NODE_ENV === "test"
+        ? await createFauxPiSession({ config: sessionConfig, responses: command.profile.provider === "vc-agent-memory-faux" ? longTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-explicit-memory-faux" ? explicitLongTermMemoryFixtureResponses() : dogfoodFixtureResponses(), onEvent: onSessionEvent })
         : await createPiSession({ ...sessionConfig, profile: command.profile }, onSessionEvent);
       sessionProfileKey = profileKey;
       send({

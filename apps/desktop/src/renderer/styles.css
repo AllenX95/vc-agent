@@ -136,6 +136,31 @@ button { font: inherit; letter-spacing: 0; }
 .recovery-export p { margin: 0 0 10px; color: #747b74; font-size: 11px; line-height: 1.5; }
 .recovery-export span { display: block; margin-top: 8px; overflow: hidden; color: #626a63; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-view header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #dcdfda; }
+.settings-tabs { display: inline-grid; grid-template-columns: 1fr 1fr; min-width: 220px; margin-top: 18px; padding: 3px; border: 1px solid #ccd2cb; border-radius: 6px; background: #eef1ed; }
+.settings-tabs button { min-height: 30px; border: 0; border-radius: 4px; background: transparent; color: #616961; font-size: 11px; }
+.settings-tabs button.active { background: #fff; color: #29352e; box-shadow: 0 1px 4px rgba(36, 48, 40, .1); }
+.settings-tabs button:disabled { color: #a0a6a0; }
+.memory-settings-loading { padding: 40px 0; color: #747b74; font-size: 12px; }
+.long-term-memory-settings { padding: 24px 0 40px; }
+.memory-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid #dfe2dd; }
+.memory-settings-heading h2 { margin: 3px 0 0; font-size: 18px; }
+.memory-settings-heading p { max-width: 540px; margin: 6px 0 0; overflow: hidden; color: #747b74; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.memory-settings-heading > div:last-child { display: flex; gap: 3px; }
+.memory-settings-heading .icon-button { margin-left: 0; }
+.memory-summary { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 0; border-bottom: 1px solid #e1e4df; color: #687069; font-size: 10px; }
+.memory-summary strong { color: #29322b; font-size: 12px; }
+.memory-file-list { border-bottom: 1px solid #e1e4df; }
+.memory-file-list > div { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 44px; }
+.memory-file-list > div + div { border-top: 1px solid #e7e9e5; }
+.memory-file-list > div > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.memory-file-list strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.memory-file-list span, .memory-file-list time { color: #767d76; font-size: 9px; }
+.memory-editor { display: grid; gap: 7px; margin-top: 18px; color: #59615a; font-size: 10px; font-weight: 650; }
+.memory-editor textarea { width: 100%; min-height: 280px; resize: vertical; padding: 12px; border: 1px solid #ccd2cb; border-radius: 6px; outline: 0; background: #fff; color: #202720; font: 11px/1.55 Consolas, monospace; }
+.memory-editor textarea:focus { border-color: #52715e; box-shadow: 0 0 0 2px rgba(82, 113, 94, .12); }
+.memory-editor-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.memory-editor-actions span { color: #747b74; font: 9px Consolas, monospace; }
+.memory-editor-actions button { min-height: 32px; padding: 0 11px; border: 1px solid #294a37; border-radius: 5px; background: #294a37; color: #fff; font-size: 11px; }
 .settings-view h1 { margin: 3px 0 0; font-size: 24px; line-height: 1.25; font-weight: 680; }
 .eyebrow { color: #567060; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .settings-section { padding: 22px 0; border-bottom: 1px solid #e1e4df; }

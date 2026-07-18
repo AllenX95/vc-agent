@@ -115,17 +115,17 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] First launch creates no Long-term Memory file; opening the Settings memory view creates the minimal active file lazily.
-- [ ] Settings shows the global location, open-folder, refresh/re-index, file summary, warnings, and recent update state.
-- [ ] Active entries carry stable id, version, current status, title, tags, applicability, maturity, Recall policy, conflict state, content, and opaque source references.
-- [ ] The parser preserves malformed content, indexes only safe entries, and surfaces warnings without an LLM repair.
-- [ ] External edits change the authoritative version and rebuild the derived index without starting Pi.
-- [ ] Automatic Judgment Recall searches only `automatic` entries relevant to judgment-heavy work.
-- [ ] Explicit Memory Recall bypasses task classification but not relevance, scope, de-identification, conflict, active-version, or budget rules.
-- [ ] `explicit-only` entries appear only after an explicit request that covers them.
-- [ ] Unscoped recall returns de-identified Long-term Memory and cannot access a source Project, Project Memory, Project Context, Materials, or Outputs.
-- [ ] Conflicting active views are returned together and identified as Memory rather than source evidence.
-- [ ] Ordinary recall payloads contain no Project identity, company name, path, unpublished metric, transaction term, original excerpt, or local provenance mapping.
+- [x] First launch creates no Long-term Memory file; opening the Settings memory view creates the minimal active file lazily.
+- [x] Settings shows the global location, open-folder, refresh/re-index, file summary, warnings, and recent update state.
+- [x] Active entries carry stable id, version, current status, title, tags, applicability, maturity, Recall policy, conflict state, content, and opaque source references.
+- [x] The parser preserves malformed content, indexes only safe entries, and surfaces warnings without an LLM repair.
+- [x] External edits change the authoritative version and rebuild the derived index without starting Pi.
+- [x] Automatic Judgment Recall searches only `automatic` entries relevant to judgment-heavy work.
+- [x] Explicit Memory Recall bypasses task classification but not relevance, scope, de-identification, conflict, active-version, or budget rules.
+- [x] `explicit-only` entries appear only after an explicit request that covers them.
+- [x] Unscoped recall returns de-identified Long-term Memory and cannot access a source Project, Project Memory, Project Context, Materials, or Outputs.
+- [x] Conflicting active views are returned together and identified as Memory rather than source evidence.
+- [x] Ordinary recall payloads contain no Project identity, company name, path, unpublished metric, transaction term, original excerpt, or local provenance mapping.
 
 ### L2. Apply Memory Evolution Without Rewriting History
 

@@ -64,4 +64,11 @@ describe("Dogfood adapter boundaries", () => {
     expect(migration).toContain("PRAGMA integrity_check");
     expect(migration).not.toMatch(/@vc-agent\/(?:pi-adapter|capabilities)|pi-coding-agent|provider|modelProfile|memory_recall/iu);
   });
+
+  it("keeps Long-term Memory parsing and retrieval independent from Pi and Project sources", () => {
+    const source = readFileSync(join(root, "packages/host-services/src/long-term-memory.ts"), "utf8");
+    expect(source).toContain("export class LongTermMemoryStore");
+    expect(source).toContain("export class LongTermMemoryRecallSource");
+    expect(source).not.toMatch(/@vc-agent\/(?:pi-adapter|persistence)|ProjectMemoryStore|ProjectContextStore|MaterialRecallSource|provider|pi-coding-agent/iu);
+  });
 });

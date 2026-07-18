@@ -6,6 +6,7 @@ import {
   type BootstrapState,
   type HostCommand,
   type HostEvent,
+  type LongTermMemoryDocument,
   type MaterialInventoryItem,
   type MemoryCandidate,
   type ModelProfile,
@@ -25,6 +26,7 @@ import {
   CircleStop,
   ExternalLink,
   Folder,
+  FolderOpen,
   KeyRound,
   MessageSquare,
   Minimize2,
@@ -111,6 +113,9 @@ export function App() {
   const [candidateDraft, setCandidateDraft] = useState<{ candidate: MemoryCandidate; title: string; tags: string; body: string } | null>(null);
   const [outputsByProject, setOutputsByProject] = useState<Record<string, ProjectOutputArtifact[]>>({});
   const [recoveryExport, setRecoveryExport] = useState<string | null>(null);
+  const [longTermMemoryDocument, setLongTermMemoryDocument] = useState<LongTermMemoryDocument | null>(null);
+  const [longTermMemoryDraft, setLongTermMemoryDraft] = useState("");
+  const longTermMemoryDirty = useRef(false);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -125,6 +130,17 @@ export function App() {
     switch (event.event) {
       case "app.bootstrap.completed": setBootstrap(event.payload); break;
       case "state.recovery.export.completed": setRecoveryExport(event.payload.status === "exported" ? event.payload.destination ?? "Export completed" : "Export canceled"); break;
+      case "long_term_memory.loaded":
+      case "long_term_memory.updated":
+        if (event.payload.source === "external_edit" && longTermMemoryDirty.current) {
+          setDiagnostic(localDiagnostic("Long-term Memory changed outside vc-agent while this view has unsaved edits. Refresh to use the external version."));
+          break;
+        }
+        longTermMemoryDirty.current = false;
+        setLongTermMemoryDocument(event.payload.document);
+        setLongTermMemoryDraft(event.payload.document.content);
+        break;
+      case "long_term_memory.folder.opened": break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
       case "prompt.revisions.listed": setPromptRevisions(event.payload.revisions); setActivePromptRevisionId(event.payload.activeRevisionId); break;
@@ -464,7 +480,7 @@ export function App() {
         <RecoveryBanner bootstrap={bootstrap} />
         <DiagnosticBanner event={diagnostic} />
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -563,7 +579,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport }: {
+function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   promptRevisions: SystemPromptRevision[];
@@ -573,7 +589,12 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   invoke(command: HostCommand): Promise<void>;
   readOnly: boolean;
   recoveryExport: string | null;
+  longTermMemoryDocument: LongTermMemoryDocument | null;
+  longTermMemoryDraft: string;
+  onLongTermMemoryChange(content: string): void;
+  onLongTermMemoryRefresh(): void;
 }) {
+  const [tab, setTab] = useState<"general" | "memory">("general");
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
@@ -587,9 +608,19 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
       setName(""); setProvider(""); setModel(""); setApiKey(""); setThinkingLevel("off");
     });
   };
+  const openMemory = () => {
+    setTab("memory");
+    if (longTermMemoryDocument === null) void invoke(createCommand({ command: "long_term_memory.load" }));
+  };
+  const saveLongTermMemory = () => {
+    if (longTermMemoryDocument === null) return;
+    void invoke(createCommand({ command: "long_term_memory.save", payload: { content: longTermMemoryDraft, expectedSourceHash: longTermMemoryDocument.sourceHash } }));
+  };
   return (
     <section className="settings-view" aria-labelledby="settings-title">
       <header><div><span className="eyebrow">Application</span><h1 id="settings-title">Settings</h1></div><SlidersHorizontal size={20} /></header>
+      <div className="settings-tabs" role="tablist" aria-label="Settings views"><button type="button" role="tab" aria-selected={tab === "general"} className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button><button type="button" role="tab" aria-selected={tab === "memory"} className={tab === "memory" ? "active" : ""} onClick={openMemory} disabled={readOnly}>Memory</button></div>
+      {tab === "memory" ? <LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /> : <>
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>
       <div className="settings-section profile-settings">
@@ -610,8 +641,29 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>Storage mode</dt><dd>{bootstrap?.storageMode ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Supported schema</dt><dd>{bootstrap?.migration.supportedVersion ?? "Loading"}</dd></div><div><dt>Migration status</dt><dd>{bootstrap?.migration.status ?? "Loading"}</dd></div><div><dt>Rollback</dt><dd>{bootstrap?.migration.rollbackAvailable ? "Available" : "Unavailable"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Environment Doctor</h2><dl>{bootstrap?.environmentDoctor === undefined ? <div><dt>Status</dt><dd>Loading</dd></div> : Object.entries(bootstrap.environmentDoctor).map(([name, diagnostic]) => <div key={name}><dt>{doctorLabel(name)}</dt><dd><span className={`doctor-status ${diagnostic.status}`}>{diagnostic.status}</span> {diagnostic.message}</dd></div>)}</dl></div>
+      </>}
     </section>
   );
+}
+
+function LongTermMemorySettings({ document, draft, onChange, onRefresh, onSave, openFolder }: {
+  document: LongTermMemoryDocument | null;
+  draft: string;
+  onChange(content: string): void;
+  onRefresh(): void;
+  onSave(): void;
+  openFolder(): void;
+}) {
+  if (document === null) return <div className="memory-settings-loading">Loading Long-term Memory...</div>;
+  const currentEntries = document.entries.filter((entry) => entry.status === "current");
+  return <div className="long-term-memory-settings">
+    <div className="memory-settings-heading"><div><span className="eyebrow">Personal cognition</span><h2>Long-term Memory</h2><p title={document.rootPath}>{document.rootPath}</p></div><div><button className="icon-button" type="button" title="Open memory folder" aria-label="Open memory folder" onClick={openFolder}><FolderOpen size={16} /></button><button className="icon-button" type="button" title="Refresh and re-index" aria-label="Refresh and re-index" onClick={onRefresh}><RefreshCw size={16} /></button></div></div>
+    <div className="memory-summary"><span><strong>{currentEntries.length}</strong> current entries</span><span><strong>{currentEntries.filter((entry) => entry.recallPolicy === "explicit-only").length}</strong> explicit only</span><span><strong>{currentEntries.filter((entry) => entry.conflictState.startsWith("unresolved:")).length}</strong> unresolved views</span><span>Updated {new Date(document.updatedAt).toLocaleString()}</span></div>
+    <div className="memory-file-list">{document.files.map((file) => <div key={file.kind}><div><strong>{file.name}</strong><span>{formatBytes(file.size)}</span></div><time dateTime={file.updatedAt}>{new Date(file.updatedAt).toLocaleString()}</time></div>)}</div>
+    {document.warnings.length > 0 && <div className="context-warnings" role="status">{document.warnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.line ? `Line ${warning.line}: ` : ""}{warning.message}</span>)}</div>}
+    <label className="memory-editor">Active memory<textarea aria-label="Long-term Memory" value={draft} onChange={(event) => onChange(event.target.value)} spellCheck="false" /></label>
+    <div className="memory-editor-actions"><span>{document.sourceHash.slice(0, 12)}</span><button className="primary-button" type="button" onClick={onSave}>Save Memory</button></div>
+  </div>;
 }
 
 function PromptSettings({ revisions, activeRevisionId, invoke }: {

@@ -16,3 +16,19 @@ export function dogfoodFixtureResponses() {
     fauxAssistantMessage("Completed the bounded project review and created dogfood-investment-note.md.")
   ];
 }
+
+export function longTermMemoryFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "cards", query: "market sizing memo", maxItems: 4, maxChars: 2_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "full", entryIds: ["ltm-tam-framing"], maxItems: 2, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("Recalled relevant Long-term Memory as prior judgment, not source evidence.")
+  ];
+}
+
+export function explicitLongTermMemoryFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "cards", query: "founder reference diligence", maxItems: 4, maxChars: 2_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "full", entryIds: ["ltm-founder-reference"], maxItems: 2, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("Completed the Long-term Memory policy fixture.")
+  ];
+}
