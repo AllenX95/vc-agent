@@ -41,6 +41,12 @@ button { font: inherit; letter-spacing: 0; }
 .settings-button:hover, .settings-button.active { background: #dfe4dd; color: #1f2e26; }
 
 .center-pane { position: relative; display: flex; min-width: 0; background: #fafbf9; }
+.center-pane.recovery { flex-direction: column; }
+.center-pane.recovery .conversation { flex: 1; min-height: 0; }
+.recovery-banner { flex: none; display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 8px 18px; border-bottom: 1px solid #d9a94c; background: #fff7df; color: #553f14; font-size: 11px; }
+.recovery-banner strong { font-size: 12px; white-space: nowrap; }
+.recovery-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.read-only-recovery .section-action:disabled { color: #a2a8a2; background: transparent; }
 .empty-workspace { margin: auto; width: min(360px, 80%); text-align: center; color: #70776f; }
 .empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 14px; border: 1px solid #d6dad4; border-radius: 8px; background: #fff; color: #3f5f4d; }
 .empty-workspace h1 { margin: 0; font-size: 18px; line-height: 1.35; color: #303630; font-weight: 650; }
@@ -124,6 +130,11 @@ button { font: inherit; letter-spacing: 0; }
 .diagnostic strong { font-size: 11px; }
 
 .settings-view { width: min(740px, calc(100% - 64px)); margin: 42px auto; overflow: auto; }
+.settings-write-controls { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-write-controls:disabled { color: inherit; }
+.settings-write-controls:disabled button, .settings-write-controls:disabled input, .settings-write-controls:disabled select, .settings-write-controls:disabled textarea { cursor: not-allowed; opacity: .58; }
+.recovery-export p { margin: 0 0 10px; color: #747b74; font-size: 11px; line-height: 1.5; }
+.recovery-export span { display: block; margin-top: 8px; overflow: hidden; color: #626a63; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-view header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #dcdfda; }
 .settings-view h1 { margin: 3px 0 0; font-size: 24px; line-height: 1.25; font-weight: 680; }
 .eyebrow { color: #567060; font-size: 11px; font-weight: 700; text-transform: uppercase; }

@@ -31,9 +31,9 @@ const HOST_PROVENANCE = { producerType: "host", producerId: "desktop-host" } as 
 export class ThreadTrajectoryStore {
   readonly #threadsRoot: string;
 
-  constructor(threadsRoot: string) {
+  constructor(threadsRoot: string, options: { readonly createRoot?: boolean } = {}) {
     this.#threadsRoot = threadsRoot;
-    mkdirSync(threadsRoot, { recursive: true });
+    if (options.createRoot !== false) mkdirSync(threadsRoot, { recursive: true });
   }
 
   threadDirectory(threadId: string): string {

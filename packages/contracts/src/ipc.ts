@@ -218,6 +218,7 @@ const commandMetadataSchema = z.object({
 });
 
 const bootstrapCommandSchema = commandMetadataSchema.extend({ command: z.literal("app.bootstrap") });
+const exportRecoveryStateCommandSchema = commandMetadataSchema.extend({ command: z.literal("state.recovery.export") });
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
 const setAccessModeCommandSchema = commandMetadataSchema.extend({
   command: z.literal("access.mode.set"),
@@ -334,6 +335,7 @@ const resolveCapabilityConfirmationCommandSchema = commandMetadataSchema.extend(
 
 export const hostCommandSchema = z.discriminatedUnion("command", [
   bootstrapCommandSchema,
+  exportRecoveryStateCommandSchema,
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
   createProfileCommandSchema,
@@ -385,6 +387,15 @@ export const bootstrapStateSchema = z.object({
   applicationVersion: z.string().min(1),
   stateSchemaVersion: z.number().int().positive(),
   storagePath: z.string().min(1),
+  storageMode: z.enum(["read_write", "read_only_recovery"]),
+  migration: z.object({
+    status: z.enum(["fresh", "ready", "migrated", "newer_state", "migration_failed"]),
+    storedVersion: z.number().int().nonnegative(),
+    supportedVersion: z.number().int().positive(),
+    rollbackAvailable: z.boolean(),
+    diagnosticCode: z.string().min(1).max(80).optional(),
+    diagnosticMessage: z.string().min(1).max(200).optional()
+  }),
   accessMode: z.enum(["standard", "full"]),
   entityCounts: z.object({
     projects: z.number().int().nonnegative(),
@@ -398,7 +409,7 @@ export const bootstrapStateSchema = z.object({
     providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
   }),
-  environmentDoctor: z.record(z.enum(["pi", "provider", "parser", "credentialReference", "storage", "bundledExtensions"]), z.object({
+  environmentDoctor: z.record(z.enum(["pi", "provider", "parser", "credentialReference", "storage", "migration", "bundledExtensions"]), z.object({
     status: z.enum(["ready", "attention", "unavailable"]),
     message: z.string().min(1).max(200)
   })).optional()
@@ -408,6 +419,10 @@ const bootstrapCompletedEventSchema = eventMetadataSchema.extend({
   event: z.literal("app.bootstrap.completed"),
   payload: bootstrapStateSchema
 });
+const recoveryStateExportCompletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("state.recovery.export.completed"),
+  payload: z.object({ status: z.enum(["exported", "canceled"]), destination: z.string().min(1).max(4096).optional(), fileCount: z.number().int().nonnegative() })
+});
 const accessModeChangedEventSchema = eventMetadataSchema.extend({
   event: z.literal("access.mode.changed"),
   payload: z.object({ mode: z.enum(["standard", "full"]) })
@@ -415,7 +430,7 @@ const accessModeChangedEventSchema = eventMetadataSchema.extend({
 const diagnosticRaisedEventSchema = eventMetadataSchema.extend({
   event: z.literal("diagnostic.raised"),
   payload: z.object({
-    code: z.enum(["UNSUPPORTED_SCHEMA_VERSION", "INVALID_COMMAND", "HOST_FAILURE"]),
+    code: z.enum(["UNSUPPORTED_SCHEMA_VERSION", "INVALID_COMMAND", "HOST_FAILURE", "READ_ONLY_RECOVERY_MODE"]),
     message: z.string().min(1),
     recoverable: z.boolean()
   })
@@ -650,6 +665,7 @@ const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
 
 export const hostEventSchema = z.discriminatedUnion("event", [
   bootstrapCompletedEventSchema,
+  recoveryStateExportCompletedEventSchema,
   accessModeChangedEventSchema,
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,

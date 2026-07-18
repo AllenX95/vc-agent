@@ -57,4 +57,11 @@ describe("Dogfood adapter boundaries", () => {
     const dogfoodSources = [supervisor, adapter, readFileSync(join(root, "apps/desktop/src/main/main.ts"), "utf8")].join("\n");
     expect(dogfoodSources).not.toMatch(/from ["'][^"']*(dream|reflection|long-term-memory|sub-agent|office|ocr|mcp|extension-audit)/iu);
   });
+
+  it("keeps state migration deterministic and independent from model execution", () => {
+    const migration = readFileSync(join(root, "packages/persistence/src/state-migration.ts"), "utf8");
+    expect(migration).toContain("export function prepareStateStorage");
+    expect(migration).toContain("PRAGMA integrity_check");
+    expect(migration).not.toMatch(/@vc-agent\/(?:pi-adapter|capabilities)|pi-coding-agent|provider|modelProfile|memory_recall/iu);
+  });
 });

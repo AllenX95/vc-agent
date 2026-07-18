@@ -4,9 +4,10 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 import type { AccessMode, ArtifactRecord, BootstrapState, MaterialInventoryItem, ModelProfile, Project, ProjectThread, SystemPromptRevision, ThinkingLevel, Thread, UnscopedThread } from "@vc-agent/contracts";
+import { immutableDatabaseUrl, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
+export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 
-const STATE_SCHEMA_VERSION = 7;
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
@@ -98,18 +99,40 @@ export interface PhysicalContextState {
 export class HostStateStore {
   readonly #database: DatabaseSyncInstance;
   readonly #storagePath: string;
+  readonly #preparation: StatePreparation;
 
-  constructor(storagePath: string) {
+  constructor(storagePath: string, options: StateMigrationTestOptions & { readonly skipPreparation?: boolean } = {}) {
     mkdirSync(dirname(storagePath), { recursive: true });
     this.#storagePath = storagePath;
-    this.#database = new DatabaseSync(storagePath);
-    this.#database.exec("PRAGMA journal_mode = WAL");
-    this.#database.exec("PRAGMA foreign_keys = ON");
-    this.#migrate();
+    this.#preparation = options.skipPreparation === true
+      ? { status: "ready", mode: "read_write", storedVersion: STATE_SCHEMA_VERSION, supportedVersion: STATE_SCHEMA_VERSION, rollbackAvailable: false }
+      : prepareStateStorage(storagePath, (path) => {
+          const migrating = new HostStateStore(path, { skipPreparation: true });
+          migrating.close();
+        }, options);
+    this.#database = new DatabaseSync(
+      this.#preparation.mode === "read_only_recovery" ? immutableDatabaseUrl(storagePath) : storagePath,
+      { readOnly: this.#preparation.mode === "read_only_recovery" }
+    );
+    if (this.#preparation.mode === "read_write") {
+      this.#database.exec("PRAGMA journal_mode = WAL");
+      this.#database.exec("PRAGMA foreign_keys = ON");
+      if (this.#preparation.status === "fresh" || options.skipPreparation === true) {
+        try {
+          this.#migrate();
+        } catch (error) {
+          this.#database.close();
+          throw error;
+        }
+      }
+    }
   }
 
   #migrate(): void {
-    this.#database.exec(`
+    this.#database.exec("PRAGMA foreign_keys = OFF");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
@@ -239,16 +262,28 @@ export class HostStateStore {
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, ?)")
       .run(new Date().toISOString());
-    this.#database
+      this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?)")
       .run(new Date().toISOString());
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (8, ?)")
+        .run(new Date().toISOString());
+      const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
+      if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
+      const integrity = this.#database.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+      if (integrity.integrity_check !== "ok") throw new Error("Migrated database failed integrity validation");
+      if (this.#database.prepare("PRAGMA foreign_key_check").all().length > 0) throw new Error("Migrated database failed foreign-key validation");
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.#database.exec("PRAGMA foreign_keys = ON");
+    }
   }
 
   #migrateProjects(): void {
-    this.#database.exec("PRAGMA foreign_keys = OFF");
-    this.#database.exec("BEGIN IMMEDIATE");
-    try {
-      this.#database.exec(`
+    this.#database.exec(`
         CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
           display_name TEXT NOT NULL,
@@ -280,13 +315,6 @@ export class HostStateStore {
           PRIMARY KEY(project_id, profile_id)
         ) STRICT;
       `);
-      this.#database.exec("COMMIT");
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    } finally {
-      this.#database.exec("PRAGMA foreign_keys = ON");
-    }
   }
 
   #columnExists(table: string, column: string): boolean {
@@ -297,8 +325,16 @@ export class HostStateStore {
   getBootstrapState(applicationVersion: string, activity: RuntimeActivitySnapshot): BootstrapState {
     return {
       applicationVersion,
-      stateSchemaVersion: STATE_SCHEMA_VERSION,
+      stateSchemaVersion: this.#preparation.storedVersion,
       storagePath: this.#storagePath,
+      storageMode: this.#preparation.mode,
+      migration: {
+        status: this.#preparation.status,
+        storedVersion: this.#preparation.storedVersion,
+        supportedVersion: this.#preparation.supportedVersion,
+        rollbackAvailable: this.#preparation.rollbackAvailable,
+        ...("diagnosticCode" in this.#preparation ? { diagnosticCode: this.#preparation.diagnosticCode, diagnosticMessage: this.#preparation.diagnosticMessage } : {})
+      },
       accessMode: this.getAccessMode(),
       entityCounts: {
         projects: this.#count("projects"),
@@ -309,6 +345,10 @@ export class HostStateStore {
       runtimeActivity: activity
     };
   }
+
+  get statePreparation(): StatePreparation { return this.#preparation; }
+
+  get isReadOnlyRecovery(): boolean { return this.#preparation.mode === "read_only_recovery"; }
 
   #count(table: "projects" | "threads" | "model_profiles"): number {
     const row = this.#database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };

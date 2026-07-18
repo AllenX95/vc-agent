@@ -9,6 +9,7 @@ import {
   type ActorRef,
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
+  type HostCommand,
   type HostEvent,
   type MaterialInventoryItem,
   type ModelProfile,
@@ -24,7 +25,7 @@ import {
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
 import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, MemoryCandidateStore, ProjectOutputRegistry, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
-import { HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
+import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
@@ -38,6 +39,17 @@ const USER_ACTOR = { actorType: "user", actorId: "local-user" } as const;
 const USER_PROVENANCE = { producerType: "user", producerId: "local-user" } as const;
 const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
+const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
+  "app.bootstrap",
+  "state.recovery.export",
+  "profile.list",
+  "prompt.revision.list",
+  "project.list",
+  "project.material.list",
+  "project.output.list",
+  "thread.list",
+  "thread.trajectory.load"
+]);
 
 interface TurnContext {
   readonly correlationId: string;
@@ -135,7 +147,7 @@ function ipcMetadata(event: TrajectoryEvent) {
 
 function diagnostic(
   correlationId: string,
-  code: "UNSUPPORTED_SCHEMA_VERSION" | "INVALID_COMMAND" | "HOST_FAILURE",
+  code: "UNSUPPORTED_SCHEMA_VERSION" | "INVALID_COMMAND" | "HOST_FAILURE" | "READ_ONLY_RECOVERY_MODE",
   message: string
 ): HostEvent {
   return { ...eventMetadata(correlationId), event: "diagnostic.raised", payload: { code, message, recoverable: true } };
@@ -155,30 +167,55 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
     event.sender.send(EVENT_CHANNEL, result);
     return result;
   }
-  if (stateStore === null || trajectoryStore === null || inflight === null || workerSupervisor === null || capabilityGateway === null) {
+  if (stateStore === null || workerSupervisor === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
   }
 
   try {
     const command = parsed.data;
+    if (stateStore.isReadOnlyRecovery && !READ_ONLY_RECOVERY_COMMANDS.has(command.command)) {
+      return diagnostic(command.correlationId, "READ_ONLY_RECOVERY_MODE", "This action is unavailable while local state is open in Read-only Recovery.");
+    }
+    if (trajectoryStore === null || inflight === null || capabilityGateway === null) {
+      return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
+    }
     switch (command.command) {
-      case "app.bootstrap":
+      case "app.bootstrap": {
         const profileCount = stateStore.listModelProfiles().length;
+        const preparation = stateStore.statePreparation;
+        const recovery = preparation.mode === "read_only_recovery";
         return {
           ...eventMetadata(command.correlationId),
           event: "app.bootstrap.completed",
           payload: {
             ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
             environmentDoctor: {
-              pi: { status: "ready", message: "Bundled Pi SDK is available." },
+              pi: recovery ? { status: "unavailable", message: "Pi execution is disabled in Read-only Recovery." } : { status: "ready", message: "Bundled Pi SDK is available." },
               provider: profileCount > 0 ? { status: "ready", message: `${profileCount} Model Profile reference(s) configured.` } : { status: "attention", message: "No Model Profile is configured." },
               parser: { status: "ready", message: `${BASELINE_PARSER_ADAPTERS.length} baseline parser adapter(s) available.` },
               credentialReference: { status: "ready", message: "Protected local credential references are available." },
-              storage: { status: "ready", message: "Local state storage is available." },
+              storage: recovery ? { status: "attention", message: "Local state is open for inspection only." } : { status: "ready", message: "Local state storage is writable." },
+              migration: {
+                status: recovery ? "attention" : "ready",
+                message: `State ${preparation.storedVersion}; supported ${preparation.supportedVersion}; ${preparation.status}; rollback ${preparation.rollbackAvailable ? "available" : "unavailable"}.`
+              },
               bundledExtensions: { status: "ready", message: "Reviewed bundled Extension inventory loaded." }
             }
           }
         };
+      }
+      case "state.recovery.export": {
+        if (!stateStore.isReadOnlyRecovery) return diagnostic(command.correlationId, "INVALID_COMMAND", "Raw state export is available only in Read-only Recovery.");
+        const selection = await dialog.showOpenDialog({ title: "Export raw recovery state", properties: ["openDirectory", "createDirectory"] });
+        if (selection.canceled || selection.filePaths[0] === undefined) {
+          return { ...eventMetadata(command.correlationId), event: "state.recovery.export.completed", payload: { status: "canceled", fileCount: 0 } };
+        }
+        const preparation = stateStore.statePreparation;
+        const destination = join(selection.filePaths[0], `vc-agent-raw-state-${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`);
+        const source = join(app.getPath("userData"), "state.db");
+        const files = exportRawStateBundle(source, destination, preparation);
+        return { ...eventMetadata(command.correlationId), event: "state.recovery.export.completed", payload: { status: "exported", destination, fileCount: files.length } };
+      }
       case "access.mode.set":
         stateStore.setAccessMode(command.payload.mode);
         return { ...eventMetadata(command.correlationId), event: "access.mode.changed", payload: { mode: command.payload.mode } };
@@ -1380,17 +1417,22 @@ app.whenReady().then(() => {
     if (details.url.startsWith("http://") || details.url.startsWith("https://")) externalNetworkRequests += 1;
     callback({});
   });
-  stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"));
-  projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
-  memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
-  trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"));
+  stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"), {
+    failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
+  });
+  const readOnlyRecovery = stateStore.isReadOnlyRecovery;
+  if (!readOnlyRecovery) {
+    projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
+    memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
+  }
+  trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"), { createRoot: !readOnlyRecovery });
   for (const thread of stateStore.listThreads()) {
-    trajectoryStore.recoverInterruptedTurns(thread.id);
+    if (!readOnlyRecovery) trajectoryStore.recoverInterruptedTurns(thread.id);
     const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
     sequenceByThread.set(thread.id, lastSequence);
   }
   inflight = new InflightTurnCoordinator(trajectoryStore);
-  stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
+  if (!readOnlyRecovery) stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityRegistry.register(createCapabilityBroker((input, context) => {
@@ -1483,9 +1525,11 @@ app.whenReady().then(() => {
   }));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
-  for (const project of stateStore.listProjects()) {
-    startMaterialWatcher(project.id);
-    void refreshProjectInventory(randomUUID(), project.id, false).catch(() => undefined);
+  if (!readOnlyRecovery) {
+    for (const project of stateStore.listProjects()) {
+      startMaterialWatcher(project.id);
+      void refreshProjectInventory(randomUUID(), project.id, false).catch(() => undefined);
+    }
   }
   workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
   ipcMain.handle(COMMAND_CHANNEL, handleCommand);

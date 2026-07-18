@@ -53,7 +53,7 @@ test("launches the empty shell without activating execution resources", async ()
     await expect(window.getByText("Agent workers")).toBeVisible();
     await expect(window.locator("dl").nth(1).getByText("0", { exact: true })).toHaveCount(3);
     await expect(window.getByRole("heading", { name: "Environment Doctor" })).toBeVisible();
-    for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
+    for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Migration", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
     for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "MCP", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
 
     await window.evaluate(async () => {
@@ -69,6 +69,73 @@ test("launches the empty shell without activating execution resources", async ()
     await expect(window.getByRole("alert")).toContainText("UNSUPPORTED_SCHEMA_VERSION");
   } finally {
     await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("opens newer local state in visible read-only recovery without changing it", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-newer-state-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  await initializeState(root, userDataDirectory);
+  const databasePath = join(userDataDirectory, "state.db");
+  const database = new DatabaseSync(databasePath);
+  database.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (99, ?)").run(new Date().toISOString());
+  database.close();
+  const before = sqliteBundle(databasePath);
+  const application = await launchApplication(root, userDataDirectory);
+
+  try {
+    const window = await application.firstWindow();
+    await expect(window.getByText("Read-only Recovery", { exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "New thread" })).toBeDisabled();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByRole("button", { name: "Export raw state" })).toBeVisible();
+    await expect(window.getByText("Raw state may contain encrypted credentials", { exact: false })).toBeVisible();
+    const bootstrap = await invokeBootstrap(window);
+    expect(bootstrap).toMatchObject({
+      payload: {
+        storageMode: "read_only_recovery",
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 8, rollbackAvailable: false },
+        runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
+      }
+    });
+    const rejected = await invokeRaw(window, "thread.create.unscoped", { title: "Blocked" });
+    expect(rejected).toMatchObject({ event: "diagnostic.raised", payload: { code: "READ_ONLY_RECOVERY_MODE" } });
+  } finally {
+    await application.close();
+    expect(sqliteBundle(databasePath)).toEqual(before);
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("keeps old state active when staged migration fails", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-migration-failure-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  await initializeState(root, userDataDirectory);
+  const databasePath = join(userDataDirectory, "state.db");
+  const database = new DatabaseSync(databasePath);
+  database.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+  database.close();
+  const before = sqliteBundle(databasePath);
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
+
+  try {
+    const window = await application.firstWindow();
+    await expect(window.getByText("Read-only Recovery", { exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByText("migration_failed", { exact: true })).toBeVisible();
+    await expect(window.getByText("Available", { exact: true })).toBeVisible();
+    const bootstrap = await invokeBootstrap(window);
+    expect(bootstrap).toMatchObject({
+      payload: {
+        storageMode: "read_only_recovery",
+        migration: { status: "migration_failed", storedVersion: 7, supportedVersion: 8, rollbackAvailable: true },
+        runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
+      }
+    });
+  } finally {
+    await application.close();
+    expect(sqliteBundle(databasePath)).toEqual(before);
     rmSync(userDataDirectory, { recursive: true, force: true });
   }
 });
@@ -755,6 +822,33 @@ async function launchApplication(root: string, userDataDirectory: string, extraE
     cwd: root,
     env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory, ...extraEnvironment }
   });
+}
+
+async function initializeState(root: string, userDataDirectory: string): Promise<void> {
+  const application = await launchApplication(root, userDataDirectory);
+  await application.firstWindow();
+  await application.close();
+}
+
+function sqliteBundle(databasePath: string): Record<string, string> {
+  return Object.fromEntries(["", "-wal", "-shm"].flatMap((suffix) => {
+    const path = `${databasePath}${suffix}`;
+    return existsSync(path) ? [[suffix, readFileSync(path).toString("base64")]] : [];
+  }));
+}
+
+async function invokeRaw(window: import("@playwright/test").Page, command: string, payload?: unknown) {
+  return window.evaluate(async ({ command, payload }) => {
+    return (window as unknown as { vcAgent: { invoke(command: unknown): Promise<unknown> } }).vcAgent.invoke({
+      schemaVersion: 1,
+      command,
+      commandId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      actor: { actorType: "user", actorId: "e2e" },
+      sentAt: new Date().toISOString(),
+      ...(payload === undefined ? {} : { payload })
+    });
+  }, { command, payload });
 }
 
 async function createProfile(window: import("@playwright/test").Page, input: { name: string; provider: string; model: string; apiKey: string }) {

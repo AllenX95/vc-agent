@@ -76,6 +76,11 @@ function DiagnosticBanner({ event }: { event: HostEvent | null }) {
   );
 }
 
+function RecoveryBanner({ bootstrap }: { bootstrap: BootstrapState | null }) {
+  if (bootstrap?.storageMode !== "read_only_recovery") return null;
+  return <div className="recovery-banner" role="status"><strong>Read-only Recovery</strong><span>{bootstrap.migration.diagnosticMessage ?? "Local state is available for inspection, but changes and agent execution are disabled."}</span></div>;
+}
+
 export function App() {
   const [view, setView] = useState<View>("workspace");
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
@@ -105,6 +110,7 @@ export function App() {
   const [memoryCandidates, setMemoryCandidates] = useState<Record<string, MemoryCandidate>>({});
   const [candidateDraft, setCandidateDraft] = useState<{ candidate: MemoryCandidate; title: string; tags: string; body: string } | null>(null);
   const [outputsByProject, setOutputsByProject] = useState<Record<string, ProjectOutputArtifact[]>>({});
+  const [recoveryExport, setRecoveryExport] = useState<string | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
@@ -113,10 +119,12 @@ export function App() {
     (item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming")
   );
   const activeTurn = items.find((item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming"));
+  const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
 
   const applyEvent = useCallback((event: HostEvent) => {
     switch (event.event) {
       case "app.bootstrap.completed": setBootstrap(event.payload); break;
+      case "state.recovery.export.completed": setRecoveryExport(event.payload.status === "exported" ? event.payload.destination ?? "Export completed" : "Export canceled"); break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
       case "prompt.revisions.listed": setPromptRevisions(event.payload.revisions); setActivePromptRevisionId(event.payload.activeRevisionId); break;
@@ -421,7 +429,7 @@ export function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${readOnlyRecovery ? "read-only-recovery" : ""}`}>
       <aside className="left-rail" aria-label="Navigation">
         <div className="brand-row">
           <div className="brand-mark">VC</div><span>vc-agent</span>
@@ -431,7 +439,7 @@ export function App() {
           <section>
             <div className="section-label">
               <MessageSquare size={15} /><span>Unscoped Threads</span>
-              <button className="section-action" type="button" title="New thread" aria-label="New thread" onClick={createThread}><Plus size={15} /></button>
+              <button className="section-action" type="button" title="New thread" aria-label="New thread" onClick={createThread} disabled={readOnlyRecovery}><Plus size={15} /></button>
             </div>
             {threads.filter((thread) => thread.scope === "unscoped").length === 0 ? <p className="empty-list">No threads</p> : threads.filter((thread) => thread.scope === "unscoped").map((thread) => (
               <button key={thread.id} className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}>
@@ -440,9 +448,9 @@ export function App() {
             ))}
           </section>
           <section>
-            <div className="section-label"><Folder size={15} /><span>Projects</span><button className="section-action" type="button" title="Open project" aria-label="Open project" onClick={openProject}><Plus size={15} /></button></div>
+            <div className="section-label"><Folder size={15} /><span>Projects</span><button className="section-action" type="button" title="Open project" aria-label="Open project" onClick={openProject} disabled={readOnlyRecovery}><Plus size={15} /></button></div>
             {projects.length === 0 ? <p className="empty-list">No projects</p> : projects.map((project) => <div className="project-group" key={project.id}>
-              <div className="project-row"><span title={project.path}>{project.displayName}</span><button className="section-action" type="button" title="New project thread" aria-label={`New thread in ${project.displayName}`} onClick={() => createProjectThread(project.id)}><Plus size={14} /></button></div>
+              <div className="project-row"><span title={project.path}>{project.displayName}</span><button className="section-action" type="button" title="New project thread" aria-label={`New thread in ${project.displayName}`} onClick={() => createProjectThread(project.id)} disabled={readOnlyRecovery}><Plus size={14} /></button></div>
               {threads.filter((thread) => thread.scope === "project" && thread.projectId === project.id).map((thread) => <button key={thread.id} className={`thread-row project-thread ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}><MessageSquare size={14} /><span>{thread.title}</span></button>)}
             </div>)}
           </section>
@@ -452,10 +460,11 @@ export function App() {
         </button>
       </aside>
 
-      <main className="center-pane">
+      <main className={`center-pane ${readOnlyRecovery ? "recovery" : ""}`}>
+        <RecoveryBanner bootstrap={bootstrap} />
         <DiagnosticBanner event={diagnostic} />
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -489,22 +498,22 @@ export function App() {
 
         {view === "workspace" && activeThread !== undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-            <textarea aria-label="Message" placeholder="Ask vc-agent" value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={hasActiveTurn} />
+            <textarea aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={hasActiveTurn || readOnlyRecovery} />
             <div className="composer-footer">
-              <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={hasActiveTurn || profiles.length === 0}>
+              <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={hasActiveTurn || profiles.length === 0 || readOnlyRecovery}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
               <span className="output-location" title={activeThread.scope === "unscoped" ? activeThread.outputLocation : projects.find((project) => project.id === activeThread.projectId)?.path}>{activeThread.scope === "unscoped" ? activeThread.outputLocation ?? "No output location" : "Project scoped"}</span>
               {bootstrap?.accessMode === "full" && <span className="full-access-indicator">Full access</span>}
-              <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={hasActiveTurn || activeProfile === undefined || items.length === 0}><Minimize2 size={15} /></button>
-              {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0}><Send size={16} /></button>}
+              <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={hasActiveTurn || activeProfile === undefined || items.length === 0 || readOnlyRecovery}><Minimize2 size={15} /></button>
+              {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0 || readOnlyRecovery}><Send size={16} /></button>}
             </div>
           </form>
         )}
       </main>
 
       <aside className="right-panel" aria-label="Project state">
-        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" className={projectPanelTab === "outputs" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "outputs"} disabled={activeThread?.scope !== "project"} onClick={openProjectOutputs}>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project"} onClick={openProjectContext}>Context</button><button type="button" className={projectPanelTab === "memory" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "memory"} disabled={activeThread?.scope !== "project"} onClick={openProjectMemory}>Memory</button></div>
+        <div className="panel-tabs" role="tablist" aria-label="Project state views"><button type="button" className={projectPanelTab === "overview" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "overview"} onClick={() => setProjectPanelTab("overview")}>Overview</button><button type="button" className={projectPanelTab === "outputs" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "outputs"} disabled={activeThread?.scope !== "project"} onClick={openProjectOutputs}>Outputs</button><button type="button" className={projectPanelTab === "context" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "context"} disabled={activeThread?.scope !== "project" || readOnlyRecovery} onClick={openProjectContext}>Context</button><button type="button" className={projectPanelTab === "memory" ? "active" : ""} role="tab" aria-selected={projectPanelTab === "memory"} disabled={activeThread?.scope !== "project" || readOnlyRecovery} onClick={openProjectMemory}>Memory</button></div>
         {activeThread?.scope === "project" ? projectPanelTab === "outputs" ? <ProjectOutputsPanel outputs={outputsByProject[activeThread.projectId] ?? []} open={(artifactId) => void invoke(createCommand({ command: "project.output.open", payload: { projectId: activeThread.projectId, artifactId } }))} /> : projectPanelTab === "memory" ? <ProjectMemoryPanel document={memoryDocuments[activeThread.projectId]} draft={memoryDrafts[activeThread.projectId]} onChange={(content) => { memoryDirty.current[activeThread.projectId] = true; setMemoryDrafts((current) => ({ ...current, [activeThread.projectId]: content })); }} onReload={reloadProjectMemory} onSave={saveProjectMemory} /> : projectPanelTab === "context" ? <ProjectContextPanel
           document={contextDocuments[activeThread.projectId]}
           draft={contextDrafts[activeThread.projectId]}
@@ -512,7 +521,7 @@ export function App() {
           onReload={reloadProjectContext}
           onSave={saveProjectContext}
         /> : <div className="material-inventory"><div className="inventory-heading"><h2>{projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project"}</h2><button className="section-action" type="button" title="Refresh materials" aria-label="Refresh materials" onClick={() => void invoke(createCommand({ command: "project.material.refresh", payload: { projectId: activeThread.projectId } }))}><RefreshCw size={14} /></button></div><p>Material metadata only. Content loads on demand.</p>{(materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").length === 0 ? <span className="empty-list">No supported materials</span> : (materialsByProject[activeThread.projectId] ?? []).filter((material) => material.availability === "active").map((material) => <div className="material-row" key={material.id}><div><strong title={material.relativePath}>{material.relativePath}</strong><span>{material.extension} · {formatBytes(material.size)} · {material.parseStatus}</span>{materialParseState[material.id] && <span className="parse-result">{materialParseState[material.id]}</span>}</div>{material.parseStatus === "stale" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.need", payload: { materialId: material.id } }))}>Refresh parse</button> : material.parseStatus === "unparsed" ? <button type="button" onClick={() => void invoke(createCommand({ command: "material.parse.request", payload: { materialId: material.id } }))}>Parse</button> : null}</div>)}</div> : <div className="panel-empty"><PanelRight size={20} /><h2>No project selected</h2><p>Unscoped threads have no project state.</p></div>}
-        <div className="status-strip"><span><span className="status-dot" /> Host ready</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
+        <div className="status-strip"><span><span className="status-dot" /> {readOnlyRecovery ? "Recovery" : "Host ready"}</span><span>Schema {bootstrap?.stateSchemaVersion ?? "-"}</span></div>
       </aside>
     </div>
   );
@@ -554,7 +563,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke }: {
+function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   promptRevisions: SystemPromptRevision[];
@@ -562,6 +571,8 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   formOpen: boolean;
   setFormOpen(value: boolean): void;
   invoke(command: HostCommand): Promise<void>;
+  readOnly: boolean;
+  recoveryExport: string | null;
 }) {
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("");
@@ -579,6 +590,8 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
   return (
     <section className="settings-view" aria-labelledby="settings-title">
       <header><div><span className="eyebrow">Application</span><h1 id="settings-title">Settings</h1></div><SlidersHorizontal size={20} /></header>
+      {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
+      <fieldset className="settings-write-controls" disabled={readOnly}>
       <div className="settings-section profile-settings">
         <div className="settings-section-header"><div><h2>Model Profiles</h2><p>Credentials are protected by Windows and stored only by reference.</p></div><button className="compact-button" type="button" onClick={() => setFormOpen(!formOpen)}><Plus size={15} /> New profile</button></div>
         {formOpen && <form className="profile-form" onSubmit={save}>
@@ -593,7 +606,8 @@ function SettingsView({ bootstrap, profiles, promptRevisions, activePromptRevisi
       </div>
       <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
-      <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
+      </fieldset>
+      <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>Storage mode</dt><dd>{bootstrap?.storageMode ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Supported schema</dt><dd>{bootstrap?.migration.supportedVersion ?? "Loading"}</dd></div><div><dt>Migration status</dt><dd>{bootstrap?.migration.status ?? "Loading"}</dd></div><div><dt>Rollback</dt><dd>{bootstrap?.migration.rollbackAvailable ? "Available" : "Unavailable"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Environment Doctor</h2><dl>{bootstrap?.environmentDoctor === undefined ? <div><dt>Status</dt><dd>Loading</dd></div> : Object.entries(bootstrap.environmentDoctor).map(([name, diagnostic]) => <div key={name}><dt>{doctorLabel(name)}</dt><dd><span className={`doctor-status ${diagnostic.status}`}>{diagnostic.status}</span> {diagnostic.message}</dd></div>)}</dl></div>
     </section>
@@ -762,5 +776,5 @@ function formatBytes(bytes: number): string {
 }
 
 function doctorLabel(name: string): string {
-  return ({ pi: "Pi SDK", provider: "Provider", parser: "Parsers", credentialReference: "Credentials", storage: "Storage", bundledExtensions: "Bundled Extensions" } as Record<string, string>)[name] ?? name;
+  return ({ pi: "Pi SDK", provider: "Provider", parser: "Parsers", credentialReference: "Credentials", storage: "Storage", migration: "Migration", bundledExtensions: "Bundled Extensions" } as Record<string, string>)[name] ?? name;
 }

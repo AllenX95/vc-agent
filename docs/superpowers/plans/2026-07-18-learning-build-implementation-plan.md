@@ -96,14 +96,14 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] Opening current schema state remains behaviorally unchanged and does not start Pi.
-- [ ] A supported older fixture migrates through a staged destination and activates only after complete validation.
-- [ ] Injected failure before activation leaves the previous database and files byte-for-byte active and writable after rollback.
-- [ ] Migration never calls a model, rewrites user-authored Memory text, infers provenance, or changes investment meaning.
-- [ ] Derived indexes may be rebuilt without becoming authoritative migration input.
-- [ ] Newer stored state enters visible Read-only Recovery Mode before any ordinary Turn or state mutation can begin.
-- [ ] Read-only Recovery Mode permits inspection and supported export but blocks Threads, Memory edits, workflow commits, settings writes, and Project system writes.
-- [ ] Environment Doctor reports active schema, pending migration, rollback availability, and sanitized failure state.
+- [x] Opening current schema state remains behaviorally unchanged and does not start Pi.
+- [x] A supported older fixture migrates through a staged destination and activates only after complete validation.
+- [x] Injected failure before activation leaves the previous database and files byte-for-byte active and writable after rollback.
+- [x] Migration never calls a model, rewrites user-authored Memory text, infers provenance, or changes investment meaning.
+- [x] Derived indexes may be rebuilt without becoming authoritative migration input.
+- [x] Newer stored state enters visible Read-only Recovery Mode before any ordinary Turn or state mutation can begin.
+- [x] Read-only Recovery Mode permits inspection and supported export but blocks Threads, Memory edits, workflow commits, settings writes, and Project system writes.
+- [x] Environment Doctor reports active schema, pending migration, rollback availability, and sanitized failure state.
 
 ### L1. Make Long-term Memory Authoritative And Recallable
 

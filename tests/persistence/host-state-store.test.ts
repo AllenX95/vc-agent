@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { HostStateStore } from "@vc-agent/persistence";
+import { exportRawStateBundle, HostStateStore, listRollbackFiles } from "@vc-agent/persistence";
 
 const temporaryDirectories: string[] = [];
 const idleActivity = { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0, externalNetworkRequests: 0 };
@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 7,
+      stateSchemaVersion: 8,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -35,6 +35,65 @@ describe("HostStateStore", () => {
     database.close();
     expect(tables).toEqual(["application_settings", "artifacts", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "schema_migrations", "system_prompt_revisions", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
+  });
+
+  it("validates an older schema in staging before atomically activating it", () => {
+    const { store, databasePath } = createStore();
+    store.close();
+    const old = new DatabaseSync(databasePath);
+    old.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    old.close();
+
+    const migrated = new HostStateStore(databasePath);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 8, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(8);
+    migrated.setAccessMode("full");
+    migrated.close();
+    expect(listRollbackFiles(databasePath)).toContain("state.db");
+    const verified = new DatabaseSync(databasePath, { readOnly: true });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 8 });
+    verified.close();
+  });
+
+  it("leaves the prior database bytes active when staging fails before activation", () => {
+    const { store, databasePath } = createStore();
+    store.close();
+    const old = new DatabaseSync(databasePath);
+    old.prepare("DELETE FROM schema_migrations WHERE version = 8").run();
+    old.close();
+    const before = sqliteBundle(databasePath);
+
+    const recovery = new HostStateStore(databasePath, { failAfterStageValidation: true });
+    expect(recovery.statePreparation).toMatchObject({ status: "migration_failed", mode: "read_only_recovery", storedVersion: 7, rollbackAvailable: true });
+    expect(recovery.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(7);
+    expect(() => recovery.setAccessMode("full")).toThrow();
+    recovery.close();
+    expect(sqliteBundle(databasePath)).toEqual(before);
+    const writable = new DatabaseSync(databasePath);
+    expect(() => writable.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
+    writable.close();
+  });
+
+  it("opens newer state read-only without changing its database bundle", () => {
+    const { store, databasePath } = createStore();
+    store.close();
+    const newer = new DatabaseSync(databasePath);
+    newer.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (99, ?)").run(new Date().toISOString());
+    newer.close();
+    const before = sqliteBundle(databasePath);
+
+    const recovery = new HostStateStore(databasePath);
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 8 });
+    expect(recovery.listThreads()).toEqual([]);
+    expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
+    recovery.close();
+    expect(sqliteBundle(databasePath)).toEqual(before);
+    const destination = join(databasePath, "..", "raw-export");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 8 })).toContain("manifest.json");
+    expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
+    const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
+    expect(manifest).toContain('"storedSchemaVersion": 99');
+    expect(manifest).not.toContain(databasePath);
   });
 
   it("stores only credential references in Profiles and keeps Unscoped Thread metadata separate", () => {
@@ -167,6 +226,12 @@ describe("HostStateStore", () => {
     store.close();
   });
 });
+
+function sqliteBundle(databasePath: string): Record<string, string> {
+  return Object.fromEntries([databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
+    .filter((path) => existsSync(path))
+    .map((path) => [path.slice(databasePath.length), readFileSync(path).toString("base64")]));
+}
 
 function databasePathFor(store: HostStateStore): string {
   return store.getBootstrapState("0.1.0", idleActivity).storagePath;
