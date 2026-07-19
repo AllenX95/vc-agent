@@ -31,7 +31,8 @@ export interface MemoryLearningDraft {
 export interface LocalMemoryProvenanceRecord {
   readonly schemaVersion: 1;
   readonly sourceReferenceId: string;
-  readonly projectId: string;
+  readonly scope?: "project" | "unscoped" | undefined;
+  readonly projectId?: string | undefined;
   readonly workflowType: "reflection" | "dream";
   readonly workflowRunId: string;
   readonly judgmentRecordId?: string | undefined;
@@ -99,7 +100,7 @@ export interface MemoryMaintenanceState {
 export interface LocalMemoryProvenanceInspection {
   readonly sourceReferenceId: string;
   readonly status: "available" | "source_unavailable";
-  readonly record?: LocalMemoryProvenanceRecord | undefined;
+  readonly record?: LocalMemoryProvenanceRecord & { readonly scope: "project" | "unscoped" } | undefined;
 }
 
 interface StoredMemoryPatch extends PreparedMemoryPatch {
@@ -261,7 +262,7 @@ export class MemoryEvolutionStore {
     if (!opaqueId(sourceReferenceId)) throw new Error("INVALID_LOCAL_MEMORY_SOURCE_REFERENCE");
     const record = readProvenance(this.#provenancePath).find((item) => item.sourceReferenceId === sourceReferenceId && item.projectId === sourceProjectId);
     if (record === undefined || record.availability === "source_unavailable") return { sourceReferenceId, status: "source_unavailable" };
-    return { sourceReferenceId, status: "available", record };
+    return { sourceReferenceId, status: "available", record: { ...record, scope: record.scope ?? "project" } };
   }
 
   preferredMemoryEntryIds(projectId: string): Set<string> {
@@ -549,7 +550,8 @@ function validateResultState(state: StoredMemoryPatch["resultContents"]): void {
 }
 
 function validateProvenance(record: LocalMemoryProvenanceRecord): void {
-  if (record.schemaVersion !== 1 || !opaqueId(record.sourceReferenceId) || !record.projectId || !record.workflowRunId || !record.createdAt || Number.isNaN(Date.parse(record.createdAt))) throw new Error("INVALID_LOCAL_MEMORY_PROVENANCE");
+  const scope = record.scope ?? (record.projectId === undefined ? "unscoped" : "project");
+  if (record.schemaVersion !== 1 || !opaqueId(record.sourceReferenceId) || !record.workflowRunId || !record.createdAt || Number.isNaN(Date.parse(record.createdAt)) || (scope === "project" && !record.projectId) || (scope === "unscoped" && record.projectId !== undefined)) throw new Error("INVALID_LOCAL_MEMORY_PROVENANCE");
 }
 
 interface ArchiveSection {

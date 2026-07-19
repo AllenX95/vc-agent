@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, parseIndependentAssessment, reflectionFraming } from "@vc-agent/host-services";
+import { MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, parseIndependentAssessment, reflectionFraming } from "@vc-agent/host-services";
 
 describe("Reflection Project Brief", () => {
   it("contains bounded navigation metadata without paths, Memory, material bodies, or prior conclusions", () => {
@@ -36,9 +36,28 @@ describe("Reflection Project Brief", () => {
     expect(reflectionFraming("Did the original thesis hold up after later evidence?")).toBe("retrospective");
   });
 
+  it("builds an Unscoped brief from bounded User inputs without Project identity", () => {
+    const brief = buildReflectionUnscopedBrief({
+      sourceThreadId: "source-thread",
+      now: () => new Date("2026-07-19T08:00:00.000Z"),
+      userInputs: Array.from({ length: 14 }, (_, index) => ({ turnId: `turn-${index}`, text: `Investment claim ${index}` }))
+    });
+    expect(brief).toMatchObject({ scope: "unscoped", sourceThreadId: "source-thread" });
+    expect(brief.userInputs[0]).toEqual({ turnId: "turn-2", text: "Investment claim 2" });
+    expect(brief.userInputs).toHaveLength(12);
+    expect(JSON.stringify(brief)).not.toMatch(/projectId|Project Context|Project Memory|path/iu);
+    const prompt = buildMemoryAwareReflectionPrompt({
+      objective: "Review this question",
+      brief,
+      assessment: { schemaVersion: 1, conclusion: "Unresolved", rationale: [], uncertainties: [], counterarguments: [], evidenceReferences: [], decisionChangingQuestions: [], createdAt: "2026-07-19T09:00:00.000Z" }
+    });
+    expect(prompt).toContain("Project Memory and Project State are forbidden");
+    expect(prompt).not.toContain("projectId");
+  });
+
   it("builds a bounded stage prompt and accepts only the structured assessment contract", () => {
     const projectId = "11111111-1111-4111-8111-111111111111";
-    const brief = { schemaVersion: 1 as const, projectId, sourceVersion: "a".repeat(64), createdAt: "2026-07-19T08:00:00.000Z", contextFields: [], materialCards: [], recordReferences: [] };
+    const brief = { schemaVersion: 1 as const, scope: "project" as const, projectId, sourceVersion: "a".repeat(64), createdAt: "2026-07-19T08:00:00.000Z", contextFields: [], materialCards: [], recordReferences: [] };
     const prompt = buildIndependentEvidencePrompt({ objective: "Review this Project", brief, createdAt: "2026-07-19T09:00:00.000Z" });
     expect(prompt).toContain("Frozen Reflection Project Brief");
     expect(prompt).not.toMatch(/Project Memory|Long-term Memory|local-memory-provenance/iu);
@@ -51,7 +70,7 @@ describe("Reflection Project Brief", () => {
     const projectId = "11111111-1111-4111-8111-111111111111";
     const prompt = buildMemoryAwareReflectionPrompt({
       objective: "Review this Project",
-      brief: { schemaVersion: 1, projectId, sourceVersion: "d".repeat(64), createdAt: new Date().toISOString(), contextFields: [{ id: "stage", label: "Financing stage", value: "Series A" }], materialCards: [], recordReferences: [] },
+      brief: { schemaVersion: 1, scope: "project", projectId, sourceVersion: "d".repeat(64), createdAt: new Date().toISOString(), contextFields: [{ id: "stage", label: "Financing stage", value: "Series A" }], materialCards: [], recordReferences: [] },
       assessment: { schemaVersion: 1, conclusion: "Retention is uncertain.", rationale: ["Cohorts are immature."], uncertainties: ["Selection bias"], counterarguments: ["Expansion may offset churn."], evidenceReferences: [], decisionChangingQuestions: ["Does month-six retention hold?"], createdAt: new Date().toISOString() }
     });
     expect(prompt).toContain("Independent Assessment handoff");

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { independentAssessmentSchema, type IndependentAssessment, type MaterialInventoryItem, type ProjectOutputArtifact, type ReflectionProjectBrief } from "@vc-agent/contracts";
+import { independentAssessmentSchema, type IndependentAssessment, type MaterialInventoryItem, type ProjectOutputArtifact, type ReflectionBrief, type ReflectionProjectBrief, type ReflectionUnscopedBrief } from "@vc-agent/contracts";
 import type { ProjectContextDocument } from "./project-context.js";
 
 export const DEFAULT_PROJECT_REFLECTION_OBJECTIVE = "Review this Project: re-examine the current investment view, core assumptions, principal risks, credible counterarguments, and prior investment learning that may or may not apply.";
+export const DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE = "Review this investment question: re-examine the current view, core assumptions, principal risks, credible counterarguments, and prior investment learning that may or may not apply.";
 
 export const INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS = `# Independent Evidence Pass
 
@@ -12,6 +13,14 @@ Analyze only evidence authorized for this Project scope. Do not request, infer, 
 Start from the bounded Reflection Project Brief. Inspect Material cards progressively and retrieve only evidence needed for the objective. Treat filenames and summaries as navigation metadata, not evidence. Distinguish source evidence from your inference.
 
 Return one bounded Independent Assessment with: current conclusion; concise rationale; uncertainty; credible counterarguments and disconfirming evidence; stable evidence references; and the unresolved questions most likely to change the view. Do not include hidden reasoning, raw material dumps, or a final Memory proposal.`;
+
+export const INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS = `# Independent Evidence Pass
+
+Analyze only the frozen User inputs, direct Thread attachments, and public-web evidence authorized for this Unscoped scope. Do not request, infer, or use any Project Context, Project Memory, Project Material, Project Output, Local Memory Provenance, Long-term Memory, prior investment conclusion, or another workflow context.
+
+Treat User statements as claims or current views rather than verified source facts. Inspect available evidence progressively and retrieve only what the objective needs. Keep source evidence distinct from User claims and your inference.
+
+Return one bounded Independent Assessment with: current conclusion; concise rationale; uncertainty; credible counterarguments and disconfirming evidence; stable evidence references; and the unresolved questions most likely to change the view. Mark claims unsupported when no authorized source evidence verifies them. Do not include hidden reasoning, raw source dumps, or a final Memory proposal.`;
 
 export const MEMORY_AWARE_REFLECTION_INSTRUCTIONS = `# Memory-Aware Investment Reflection
 
@@ -23,12 +32,16 @@ The Independent Assessment is a bounded handoff, not authoritative. Use material
 
 Conduct a user-facing discussion focused on the User's actual view, hidden assumptions, credible counterarguments, contradictions, uncertainty, and decision-changing questions. Do not write Memory or a Judgment Record automatically.`;
 
-export function buildIndependentEvidencePrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionProjectBrief; createdAt: string }): string {
-  return `Conduct the Independent Evidence Pass for this frozen Reflection run.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen Reflection Project Brief:\n${JSON.stringify(input.brief)}\n\nReturn only one JSON object matching this shape:\n${JSON.stringify({ schemaVersion: 1, conclusion: "string", rationale: ["string"], uncertainties: ["string"], counterarguments: ["string"], evidenceReferences: [{ referenceId: "stable material source reference", claim: "string", support: "supporting | disconfirming | mixed" }], decisionChangingQuestions: ["string"], createdAt: input.createdAt })}`;
+export function buildIndependentEvidencePrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionBrief; createdAt: string }): string {
+  return `Conduct the Independent Evidence Pass for this frozen Reflection run.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen Reflection ${input.brief.scope === "project" ? "Project" : "Unscoped"} Brief:\n${JSON.stringify(input.brief)}\n\nReturn only one JSON object matching this shape:\n${JSON.stringify({ schemaVersion: 1, conclusion: "string", rationale: ["string"], uncertainties: ["string"], counterarguments: ["string"], evidenceReferences: [{ referenceId: "stable authorized source reference", claim: "string", support: "supporting | disconfirming | mixed" }], decisionChangingQuestions: ["string"], createdAt: input.createdAt })}`;
 }
 
-export function buildMemoryAwareReflectionPrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionProjectBrief; assessment: IndependentAssessment }): string {
-  return `Begin the Memory-Aware Investment Reflection. Autonomously query relevant Project Memory and Long-term Memory from cards before responding. Expand only selected cards.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen basic Project context:\n${JSON.stringify({ contextFields: input.brief.contextFields, materialCards: input.brief.materialCards, recordReferences: input.brief.recordReferences, sourceVersion: input.brief.sourceVersion })}\n\nIndependent Assessment handoff:\n${JSON.stringify(input.assessment)}\n\nOpen the critical discussion with the strongest current view, the most important tension with recalled prior judgment, and the question most likely to change the decision.`;
+export function buildMemoryAwareReflectionPrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionBrief; assessment: IndependentAssessment }): string {
+  const frozen = input.brief.scope === "project"
+    ? { contextFields: input.brief.contextFields, materialCards: input.brief.materialCards, recordReferences: input.brief.recordReferences, sourceVersion: input.brief.sourceVersion }
+    : { userInputs: input.brief.userInputs, attachmentCards: input.brief.attachmentCards, recordReferences: input.brief.recordReferences, sourceVersion: input.brief.sourceVersion };
+  const recall = input.brief.scope === "project" ? "Project Memory and Long-term Memory" : "Long-term Memory only; Project Memory and Project State are forbidden";
+  return `Begin the Memory-Aware Investment Reflection. Autonomously query relevant ${recall} from cards before responding. Expand only selected cards.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen basic ${input.brief.scope === "project" ? "Project" : "Unscoped"} context:\n${JSON.stringify(frozen)}\n\nIndependent Assessment handoff:\n${JSON.stringify(input.assessment)}\n\nOpen the critical discussion with the strongest current view, the most important tension with recalled prior judgment, and the question most likely to change the decision.`;
 }
 
 export function parseIndependentAssessment(message: string): IndependentAssessment {
@@ -72,12 +85,27 @@ export function buildReflectionProjectBrief(input: BuildReflectionProjectBriefIn
   }));
   return {
     schemaVersion: 1,
+    scope: "project",
     projectId: input.projectId,
     sourceVersion,
     createdAt: (input.now ?? (() => new Date()))().toISOString(),
     contextFields,
     materialCards,
     recordReferences
+  };
+}
+
+export function buildReflectionUnscopedBrief(input: { sourceThreadId: string; userInputs: readonly { turnId: string; text: string }[]; now?: (() => Date) | undefined }): ReflectionUnscopedBrief {
+  const userInputs = input.userInputs.slice(-12).map((item) => ({ turnId: item.turnId, text: item.text.trim().slice(0, 2_000) })).filter((item) => item.text.length > 0);
+  return {
+    schemaVersion: 1,
+    scope: "unscoped",
+    sourceThreadId: input.sourceThreadId,
+    sourceVersion: hash(JSON.stringify({ sourceThreadId: input.sourceThreadId, userInputs })),
+    createdAt: (input.now ?? (() => new Date()))().toISOString(),
+    userInputs,
+    attachmentCards: [],
+    recordReferences: []
   };
 }
 

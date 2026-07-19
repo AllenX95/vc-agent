@@ -384,6 +384,10 @@ _Avoid_: Ordinary Thread, automatic review, form-filling workflow, Session
 A bounded, non-memory description of the current Project supplied to a broadly launched Project Reflection, containing only the scope, basic Project Context fields, Material inventory, and available record or Output references needed for the Independent Evidence Pass to choose evidence progressively.
 _Avoid_: Project Memory, Long-term Memory, full Project Context dump, eager material load, prior investment conclusion
 
+**Reflection Unscoped Brief**:
+A bounded, non-memory snapshot of explicit User inputs and direct-attachment cards from one source Unscoped Thread, supplied to a dedicated Unscoped Reflection without creating a Project association. It may include stable local input references but no Project State, Project Memory, Project identity, or filesystem path.
+_Avoid_: Empty Project, shared Unscoped context, Project capability, full source Thread transcript, attachment body
+
 **Critical Reflection Stance**:
 The agent's intellectually independent stance inside an Investment Reflection Thread: it treats memory as historical evidence about the User, tests claims against available evidence, and surfaces reasoned disagreement or contradiction when warranted.
 _Avoid_: Sycophancy, memory obedience, reflexive opposition, debate for its own sake
@@ -401,7 +405,7 @@ The second stage of an Investment Reflection Thread, in which the agent discusse
 _Avoid_: Re-running the evidence pass, full-context continuation, memory obedience
 
 **Local Memory Provenance**:
-A User-inspectable local mapping from an opaque Long-term Memory source reference to the source Project, Reflection or Dream run, Judgment Record, Thread, Turn, and eligible evidence references. It supports explicit source verification without exposing Project identity or content in ordinary Long-term Memory recall.
+A User-inspectable local mapping from an opaque Long-term Memory source reference to its Project or Unscoped scope and the source Reflection or Dream run, Judgment Record, Thread, Turn, and eligible evidence references. Project provenance may identify its source Project locally; Unscoped provenance has no Project association. It supports explicit source verification without exposing Project identity or content in ordinary Long-term Memory recall.
 _Avoid_: Model-facing memory content, cross-Project authorization, source evidence, backup Project metadata
 
 **Evidence Drilldown**:

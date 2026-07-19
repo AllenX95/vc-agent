@@ -59,12 +59,21 @@ export const projectSchema = z.object({
 export type Project = z.infer<typeof projectSchema>;
 
 export const reflectionProjectBriefSchema = z.object({
-  schemaVersion: z.literal(1), projectId: z.string().uuid(), sourceVersion: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime(),
+  schemaVersion: z.literal(1), scope: z.literal("project").default("project"), projectId: z.string().uuid(), sourceVersion: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime(),
   contextFields: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), value: z.string().max(2_000) })).max(20),
   materialCards: z.array(z.object({ materialId: z.string().uuid(), displayName: z.string().min(1), mediaType: z.string().min(1), size: z.number().int().nonnegative(), modifiedAt: z.string().datetime(), parseStatus: z.enum(["unparsed", "available", "stale"]) })).max(500),
   recordReferences: z.array(z.object({ kind: z.enum(["output", "judgment_record"]), id: z.string().min(1), label: z.string().min(1), mediaType: z.string().min(1).optional(), createdAt: z.string().datetime().optional() })).max(200)
 });
 export type ReflectionProjectBrief = z.infer<typeof reflectionProjectBriefSchema>;
+export const reflectionUnscopedBriefSchema = z.object({
+  schemaVersion: z.literal(1), scope: z.literal("unscoped"), sourceThreadId: z.string().min(1), sourceVersion: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime(),
+  userInputs: z.array(z.object({ turnId: z.string().min(1), text: z.string().min(1).max(2_000) })).max(12),
+  attachmentCards: z.array(z.object({ attachmentId: z.string().min(1), displayName: z.string().min(1), mediaType: z.string().min(1), size: z.number().int().nonnegative() })).max(100),
+  recordReferences: z.array(z.object({ kind: z.literal("judgment_record"), id: z.string().min(1), label: z.string().min(1), createdAt: z.string().datetime().optional() })).max(100)
+});
+export type ReflectionUnscopedBrief = z.infer<typeof reflectionUnscopedBriefSchema>;
+export const reflectionBriefSchema = z.union([reflectionProjectBriefSchema, reflectionUnscopedBriefSchema]);
+export type ReflectionBrief = z.infer<typeof reflectionBriefSchema>;
 
 export const independentAssessmentSchema = z.object({
   schemaVersion: z.literal(1), conclusion: z.string().min(1).max(30_000), rationale: z.array(z.string().min(1).max(5_000)).max(20),
@@ -181,10 +190,17 @@ export const memoryLearningDraftSchema = z.object({
   limitations: z.string().trim().max(2_000), content: z.string().trim().min(1).max(50_000), sourceReferenceIds: z.array(z.string().min(6).max(80)).max(40)
 });
 export const localMemoryProvenanceRecordSchema = z.object({
-  schemaVersion: z.literal(1), sourceReferenceId: z.string().min(6).max(80), projectId: z.string().uuid(), workflowType: z.enum(["reflection", "dream"]),
+  schemaVersion: z.literal(1), sourceReferenceId: z.string().min(6).max(80), scope: z.enum(["project", "unscoped"]).optional(), projectId: z.string().uuid().optional(), workflowType: z.enum(["reflection", "dream"]),
   workflowRunId: z.string().min(1), judgmentRecordId: z.string().min(1).optional(), threadId: z.string().min(1).optional(), turnId: z.string().min(1).optional(),
   outputId: z.string().min(1).optional(), evidenceReferences: z.array(z.string().min(1)).max(40), availability: z.enum(["active", "source_unavailable"]), createdAt: z.string().datetime()
-});
+}).transform((record) => ({ ...record, scope: record.scope ?? (record.projectId === undefined ? "unscoped" as const : "project" as const) })).pipe(z.object({
+  schemaVersion: z.literal(1), sourceReferenceId: z.string().min(6).max(80), scope: z.enum(["project", "unscoped"]), projectId: z.string().uuid().optional(), workflowType: z.enum(["reflection", "dream"]),
+  workflowRunId: z.string().min(1), judgmentRecordId: z.string().min(1).optional(), threadId: z.string().min(1).optional(), turnId: z.string().min(1).optional(), outputId: z.string().min(1).optional(),
+  evidenceReferences: z.array(z.string().min(1)).max(40), availability: z.enum(["active", "source_unavailable"]), createdAt: z.string().datetime()
+}).superRefine((record, context) => {
+  if (record.scope === "project" && record.projectId === undefined) context.addIssue({ code: "custom", message: "Project provenance requires projectId" });
+  if (record.scope === "unscoped" && record.projectId !== undefined) context.addIssue({ code: "custom", message: "Unscoped provenance cannot include projectId" });
+}));
 export const memoryPatchRequestSchema = z.object({
   action: memoryEvolutionActionSchema, targetEntryIds: z.array(z.string().min(6).max(80)).max(20), proposed: memoryLearningDraftSchema.optional(),
   rationale: z.string().trim().min(1).max(5_000), resolutionSignal: z.object({ type: z.enum(["user_correction", "approved_reflection", "approved_retrospective"]), referenceId: z.string().min(1).max(200) }).optional(),
@@ -238,13 +254,17 @@ export const providerFailureSchema = z.object({
 });
 export type ProviderFailure = z.infer<typeof providerFailureSchema>;
 
-export const reflectionRunSchema = z.object({
-  schemaVersion: z.literal(1), id: z.string().uuid(), threadId: z.string().min(1), projectId: z.string().uuid(), framing: z.enum(["reflection", "retrospective"]),
+const reflectionRunBaseSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().uuid(), threadId: z.string().min(1), framing: z.enum(["reflection", "retrospective"]),
   objective: z.string().min(1).max(5_000), focus: z.string().max(5_000).optional(), status: z.enum(["awaiting_profile", "ready", "independent_running", "independent_completed", "independent_failed", "independent_interrupted", "memory_aware_running", "dialogue_active", "memory_aware_failed", "memory_aware_interrupted", "discarded"]),
-  brief: reflectionProjectBriefSchema, promptSnapshot: z.object({ revisionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }),
+  promptSnapshot: z.object({ revisionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }),
   independentProfileId: z.string().min(1).optional(), launchOverrideProfileId: z.string().min(1).optional(), memoryAwareProfileId: z.string().min(1).optional(), memoryInitialTurnId: z.string().min(1).optional(), assessment: independentAssessmentSchema.optional(), failure: providerFailureSchema.optional(),
   sessionFile: z.string().min(1).optional(), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 });
+export const reflectionRunSchema = z.discriminatedUnion("scope", [
+  reflectionRunBaseSchema.extend({ scope: z.literal("project"), projectId: z.string().uuid(), brief: reflectionProjectBriefSchema }),
+  reflectionRunBaseSchema.extend({ scope: z.literal("unscoped"), sourceThreadId: z.string().min(1), brief: reflectionUnscopedBriefSchema })
+]);
 export type ReflectionRun = z.infer<typeof reflectionRunSchema>;
 
 export const judgmentRecordDraftSchema = z.object({
@@ -343,6 +363,7 @@ const setTaskModelAssignmentCommandSchema = commandMetadataSchema.extend({ comma
 const clearTaskModelAssignmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("task_model_assignment.clear"), payload: z.object({ taskType: taskModelTypeSchema }) });
 const listReflectionRunsCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.list"), payload: z.object({ projectId: z.string().uuid().optional() }) });
 const startProjectReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.start.project"), payload: z.object({ projectId: z.string().uuid(), focus: z.string().trim().max(5_000).optional(), profileId: z.string().min(1).optional() }) });
+const startUnscopedReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.start.unscoped"), payload: z.object({ threadId: z.string().min(1), focus: z.string().trim().max(5_000).optional(), profileId: z.string().min(1).optional() }) });
 const startIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
 const stopIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.stop"), payload: z.object({ runId: z.string().uuid() }) });
 const startMemoryAwareReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.memory_aware.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
@@ -466,6 +487,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   clearTaskModelAssignmentCommandSchema,
   listReflectionRunsCommandSchema,
   startProjectReflectionCommandSchema,
+  startUnscopedReflectionCommandSchema,
   startIndependentAssessmentCommandSchema,
   stopIndependentAssessmentCommandSchema,
   startMemoryAwareReflectionCommandSchema,
@@ -603,7 +625,7 @@ const systemPromptUpdatedEventSchema = eventMetadataSchema.extend({
 const taskModelAssignmentsListedEventSchema = eventMetadataSchema.extend({ event: z.literal("task_model_assignments.listed"), payload: z.object({ assignments: z.array(taskModelAssignmentSchema) }) });
 const taskModelAssignmentUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("task_model_assignment.updated"), payload: z.object({ taskType: taskModelTypeSchema, assignment: taskModelAssignmentSchema.optional() }) });
 const reflectionRunsListedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.runs.listed"), payload: z.object({ runs: z.array(reflectionRunSchema) }) });
-const reflectionRunCreatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.created"), payload: z.object({ run: reflectionRunSchema, thread: projectThreadSchema }) });
+const reflectionRunCreatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.created"), payload: z.object({ run: reflectionRunSchema, thread: threadSchema }) });
 const reflectionRunUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.updated"), payload: z.object({ run: reflectionRunSchema }) });
 const reflectionOutcomesUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.outcomes.updated"), payload: z.object({ runId: z.string().uuid(), judgments: z.array(judgmentRecordDraftSchema), learningProposals: z.array(longTermLearningProposalSchema) }) });
 const threadsListedEventSchema = eventMetadataSchema.extend({

@@ -88,17 +88,17 @@ export class ReflectionOutcomeStore {
     return [...this.#load().learningProposals.values()].find((proposal) => proposal.preparedPatchId === patchId);
   }
 
-  confirmJudgment(id: string, projectPath: string, context: { projectId: string; threadId: string }): JudgmentRecordDraft {
+  confirmJudgment(id: string, destinationRoot: string, context: { scope: "project"; projectId: string; threadId: string } | { scope: "unscoped"; threadId: string }): JudgmentRecordDraft {
     const draft = this.getJudgment(id);
     if (draft === undefined || draft.status !== "draft") throw new Error("Judgment Record draft is no longer confirmable.");
     const confirmedAt = this.#now().toISOString();
     const confirmed = judgmentRecordDraftSchema.parse({ ...draft, status: "confirmed", confirmedAt });
-    const root = join(projectPath, "outputs", "system", "judgment-records");
+    const root = context.scope === "project" ? join(destinationRoot, "outputs", "system", "judgment-records") : join(destinationRoot, "judgment-records");
     const jsonPath = join(root, `${id}.json`);
     const markdownPath = join(root, `${id}.md`);
     if (existsSync(jsonPath) || existsSync(markdownPath)) throw new Error("Judgment Record output already exists.");
     mkdirSync(root, { recursive: true });
-    const record = { ...confirmed, projectId: context.projectId, threadId: context.threadId };
+    const record = { ...confirmed, ...context };
     atomicWrite(jsonPath, `${JSON.stringify(record, null, 2)}\n`);
     try {
       atomicWrite(markdownPath, renderJudgmentRecord(confirmed));

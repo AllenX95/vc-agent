@@ -70,12 +70,25 @@ describe("ReflectionOutcomeStore", () => {
     const { root, store } = fixture();
     const runId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const created = store.propose(runId, proposal);
-    const judgment = store.confirmJudgment(created.judgments[0]!.id, join(root, "project"), { projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "reflection-thread" });
+    const judgment = store.confirmJudgment(created.judgments[0]!.id, join(root, "project"), { scope: "project", projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "reflection-thread" });
 
     expect(judgment.status).toBe("confirmed");
     expect(readFileSync(join(root, "project", "outputs", "system", "judgment-records", `${judgment.id}.md`), "utf8")).toContain("Retention evidence is promising");
     expect(JSON.parse(readFileSync(join(root, "project", "outputs", "system", "judgment-records", `${judgment.id}.json`), "utf8"))).toMatchObject({ projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "reflection-thread" });
     expect(store.list(runId).learningProposals[0]!.status).toBe("draft");
+  });
+
+  it("writes an Unscoped Judgment Record only under the selected Output Location", () => {
+    const { root, store } = fixture();
+    const runId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const created = store.propose(runId, proposal);
+    const output = join(root, "selected-output");
+    const judgment = store.confirmJudgment(created.judgments[0]!.id, output, { scope: "unscoped", threadId: "unscoped-reflection" });
+
+    const record = JSON.parse(readFileSync(join(output, "judgment-records", `${judgment.id}.json`), "utf8"));
+    expect(record).toMatchObject({ scope: "unscoped", threadId: "unscoped-reflection" });
+    expect(record).not.toHaveProperty("projectId");
+    expect(existsSync(join(root, "outputs"))).toBe(false);
   });
 
   it("records independent discard, patch retry, and adoption transitions", () => {

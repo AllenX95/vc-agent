@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 10,
+      stateSchemaVersion: 11,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -41,17 +41,17 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 11").run();
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 10, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(10);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 11, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(11);
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 10 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 11 });
     verified.close();
   });
 
@@ -59,7 +59,7 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11)").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
@@ -83,13 +83,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 10 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 11 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 10 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 11 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -166,6 +166,7 @@ describe("HostStateStore", () => {
     const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
     const brief = {
       schemaVersion: 1 as const,
+      scope: "project" as const,
       projectId: project.id,
       sourceVersion: "a".repeat(64),
       createdAt: "2026-07-19T08:00:00.000Z",
@@ -174,7 +175,7 @@ describe("HostStateStore", () => {
       recordReferences: []
     };
     expect(store.listTaskModelAssignments()).toEqual([]);
-    const waiting = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", brief, promptRevision: prompt });
+    const waiting = store.createReflectionRun({ scope: "project", projectId: project.id, framing: "reflection", objective: "Review this Project", brief, promptRevision: prompt });
     expect(waiting).toMatchObject({ status: "awaiting_profile", promptSnapshot: { revisionId: prompt.id, hash: prompt.hash }, brief: { sourceVersion: "a".repeat(64) } });
     expect(store.getThread(waiting.threadId)).toMatchObject({ title: "Investment Reflection", scope: "project", projectId: project.id });
 
@@ -208,14 +209,40 @@ describe("HostStateStore", () => {
     reopened.close();
   });
 
+  it("persists an Unscoped Reflection without a Project association", () => {
+    const { store, databasePath } = createStore();
+    const source = store.createUnscopedThread("Market question");
+    store.setThreadOutputLocation(source.id, "C:\\exports");
+    const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
+    const run = store.createReflectionRun({
+      scope: "unscoped",
+      sourceThreadId: source.id,
+      framing: "reflection",
+      objective: "Review this investment question",
+      promptRevision: prompt,
+      brief: { schemaVersion: 1, scope: "unscoped", sourceThreadId: source.id, sourceVersion: "f".repeat(64), createdAt: new Date().toISOString(), userInputs: [{ turnId: "turn-1", text: "Assess retention risk." }], attachmentCards: [], recordReferences: [] }
+    });
+
+    expect(run).toMatchObject({ scope: "unscoped", sourceThreadId: source.id, brief: { scope: "unscoped", userInputs: [{ turnId: "turn-1" }] } });
+    expect(store.getThread(run.threadId)).toMatchObject({ scope: "unscoped", outputLocation: "C:\\exports" });
+    expect(store.listReflectionRuns()).toHaveLength(1);
+    expect(store.listReflectionRuns(crypto.randomUUID())).toEqual([]);
+    store.close();
+
+    const reopened = new HostStateStore(databasePath);
+    expect(reopened.getReflectionRun(run.id)).toMatchObject({ scope: "unscoped", sourceThreadId: source.id });
+    reopened.close();
+  });
+
   it("persists a sanitized Independent Evidence failure for explicit retry", () => {
     const { store } = createStore();
     const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Failed Reflection", path: "C:\\deals\\failed", createdAt: new Date().toISOString() });
     const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
     const profile = store.createModelProfile({ name: "Failed evidence", provider: "fixture", model: "failed-model", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
     const run = store.createReflectionRun({
+      scope: "project",
       projectId: project.id, framing: "retrospective", objective: "Review whether the earlier judgment held", focus: "Later customer outcomes", promptRevision: prompt, independentProfileId: profile.id,
-      brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "b".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] }
+      brief: { schemaVersion: 1, scope: "project", projectId: project.id, sourceVersion: "b".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] }
     });
     store.markReflectionRunning(run.id);
     expect(store.failIndependentAssessment(run.id, { kind: "provider", code: "PROVIDER_REJECTED", message: "Sanitized provider failure", provider: "fixture", model: "failed-model" })).toMatchObject({
@@ -230,7 +257,7 @@ describe("HostStateStore", () => {
     const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Interrupted Reflection", path: "C:\\deals\\interrupted", createdAt: new Date().toISOString() });
     const prompt = store.ensureDefaultSystemPrompt("Minimal VC prompt");
     const profile = store.createModelProfile({ name: "Evidence", provider: "fixture", model: "evidence-model", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
-    const run = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: profile.id, brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "c".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
+    const run = store.createReflectionRun({ scope: "project", projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: profile.id, brief: { schemaVersion: 1, scope: "project", projectId: project.id, sourceVersion: "c".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
     store.markReflectionRunning(run.id);
     expect(store.recoverInterruptedReflections()).toMatchObject([{ id: run.id, status: "independent_interrupted" }]);
     expect(store.recoverInterruptedReflections()).toEqual([]);
@@ -244,7 +271,7 @@ describe("HostStateStore", () => {
     const prompt = store.ensureDefaultSystemPrompt("Frozen VC prompt");
     const evidenceProfile = store.createModelProfile({ name: "Evidence", provider: "fixture-a", model: "evidence", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
     const dialogueProfile = store.createModelProfile({ name: "Dialogue", provider: "fixture-b", model: "dialogue", thinkingLevel: "medium", encryptedCredential: new Uint8Array([2]) });
-    let run = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: evidenceProfile.id, brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "e".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
+    let run = store.createReflectionRun({ scope: "project", projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: evidenceProfile.id, brief: { schemaVersion: 1, scope: "project", projectId: project.id, sourceVersion: "e".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
     store.markReflectionRunning(run.id);
     run = store.completeIndependentAssessment(run.id, { schemaVersion: 1, conclusion: "Uncertain", rationale: [], uncertainties: ["Retention"], counterarguments: [], evidenceReferences: [], decisionChangingQuestions: ["Month six?"], createdAt: new Date().toISOString() });
     run = store.startMemoryAwareReflection(run.id, dialogueProfile.id, "memory-turn-1");

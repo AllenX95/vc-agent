@@ -95,7 +95,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 10, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 11, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -114,7 +114,7 @@ test("keeps old state active when staged migration fails", async () => {
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11)").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -129,7 +129,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 10, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 11, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -1072,6 +1072,89 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
     rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
+test("runs an isolated Unscoped Reflection without Project State and writes only to the selected Output Location", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-unscoped-reflection-e2e-"));
+  const outputDirectory = mkdtempSync(join(tmpdir(), "vc-agent-unscoped-reflection-output-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_OUTPUT_LOCATION: outputDirectory, VC_AGENT_TEST_WEB_FIXTURE: "1" });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Message").fill("Use representative month-six retention above 80% as a decision-changing threshold, but verify cohort construction.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Model Profile not configured")).toBeVisible();
+    await window.getByLabel("Message").fill("Create a memo file for this investment view.");
+    await window.getByRole("button", { name: "Send" }).click();
+    const outputFailure = window.locator(".provider-failure").filter({ hasText: "OUTPUT_LOCATION_NOT_CONFIGURED" });
+    await expect(outputFailure).toBeVisible();
+    await outputFailure.getByRole("button", { name: "Choose output location" }).click();
+    await expect(window.getByTitle(outputDirectory)).toBeVisible();
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByLabel("Long-term Memory").fill(reflectionLongTermMemoryFixture());
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
+    await createProfile(window, { name: "Unscoped evidence fixture", provider: "vc-agent-unscoped-evidence-faux", model: "unscoped-evidence", apiKey: "fixture-key" });
+    await createProfile(window, { name: "Unscoped dialogue fixture", provider: "vc-agent-unscoped-memory-faux", model: "unscoped-dialogue", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+
+    await window.getByRole("button", { name: "Reflection", exact: true }).click();
+    const launch = window.getByRole("dialog", { name: "Start Investment Reflection" });
+    await expect(launch).toContainText("cannot access Project State or Memory");
+    await launch.getByLabel("Reflection Model Profile").selectOption({ label: "Unscoped evidence fixture" });
+    await launch.getByRole("button", { name: "Start Reflection" }).click();
+    const workspace = window.getByTestId("reflection-workspace");
+    await expect(workspace).toContainText("Evidence pass complete", { timeout: 30_000 });
+    await expect(workspace).toContainText("current Unscoped evidence does not establish a representative cohort");
+    await expect(workspace).toContainText("2 inputs");
+
+    const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const run = database.prepare("SELECT scope, project_id, source_thread_id, thread_id FROM reflection_runs").get() as { scope: string; project_id: string | null; source_thread_id: string; thread_id: string };
+    expect(run).toMatchObject({ scope: "unscoped", project_id: null });
+    expect(run.source_thread_id).not.toBe(run.thread_id);
+    expect(Number((database.prepare("SELECT COUNT(*) AS count FROM projects").get() as { count: number }).count)).toBe(0);
+    database.close();
+
+    await workspace.getByLabel("Memory-Aware Reflection Profile").selectOption({ label: "Unscoped dialogue fixture" });
+    await workspace.getByRole("button", { name: "Start critical dialogue" }).click();
+    await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
+    await expect(window.getByText("Project evidence", { exact: false })).toBeVisible();
+    await expect(window.locator(".tool-activity").filter({ hasText: "memory_recall" })).toHaveCount(2);
+    await expect(window.locator(".tool-activity").filter({ hasText: /project_state_recall|material_recall/u })).toHaveCount(0);
+
+    await workspace.getByRole("button", { name: "Prepare outcomes" }).click();
+    await expect(window.getByText("I prepared Unscoped Reflection outcome drafts", { exact: false })).toBeVisible({ timeout: 30_000 });
+    await workspace.getByRole("button", { name: "Confirm Judgment Record" }).click();
+    await expect(workspace.getByTestId("judgment-record-draft")).toContainText("confirmed");
+    const judgmentFiles = readdirSync(join(outputDirectory, "judgment-records"));
+    const judgmentJson = JSON.parse(readFileSync(join(outputDirectory, "judgment-records", judgmentFiles.find((name) => name.endsWith(".json"))!), "utf8"));
+    expect(judgmentJson).toMatchObject({ scope: "unscoped", threadId: run.thread_id });
+    expect(judgmentJson).not.toHaveProperty("projectId");
+
+    await workspace.getByRole("button", { name: "Preview Memory Patch" }).click();
+    const patchPreview = window.getByRole("dialog", { name: "Reflection Memory patch preview" });
+    await patchPreview.getByRole("button", { name: "Confirm Memory change" }).click();
+    await expect(workspace.getByTestId("learning-proposal-draft")).toContainText("adopted");
+    const provenance = readFileSync(join(userDataDirectory, "memory", "local-memory-provenance.jsonl"), "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    expect(provenance.at(-1)).toMatchObject({ scope: "unscoped", workflowType: "reflection", threadId: run.thread_id });
+    expect(provenance.at(-1)).not.toHaveProperty("projectId");
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_OUTPUT_LOCATION: outputDirectory, VC_AGENT_TEST_WEB_FIXTURE: "1" });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
+    await expect(window.getByTestId("reflection-workspace")).toContainText("adopted");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(outputDirectory, { recursive: true, force: true });
   }
 });
 

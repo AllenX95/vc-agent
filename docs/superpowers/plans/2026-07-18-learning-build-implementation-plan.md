@@ -191,7 +191,7 @@ Rules:
 - [x] A confirmed Judgment Record preserves view, reasoning, uncertainty, counterarguments, evidence references, decision state, and source availability.
 - [x] A Long-term Learning Proposal states de-identified applicability, limitations or counterexamples, maturity, and source references, then compares against relevant active Memory.
 - [x] Applying the proposal uses the L2 preview and confirmation path; Reflection cannot bypass Dream by bypassing Memory Evolution rules.
-- [ ] Project Reflection stores its Judgment Record with the Project; Unscoped Reflection uses the selected Unscoped Output Location and never accesses Project State.
+- [x] Project Reflection stores its Judgment Record with the Project; Unscoped Reflection uses the selected Unscoped Output Location and never accesses Project State.
 - [ ] Reflection dialogue is Dream-eligible only where the User meaningfully adopts, corrects, or confirms a view; the Independent Evidence Pass remains ineligible.
 - [ ] Restart recovery reuses unchanged completed stages under the frozen prompt and marks target-dependent proposals stale after relevant Memory or evidence changes.
 

@@ -25,7 +25,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -82,7 +82,10 @@ interface ReflectionExecutionContext {
   readonly runId: string;
   readonly threadId: string;
   readonly turnId: string;
-  readonly projectId: string;
+  readonly scope: "project" | "unscoped";
+  readonly projectId?: string;
+  readonly activeCapabilities: readonly string[];
+  readonly outputLocation?: string;
   readonly profile: ModelProfile;
   readonly expectedStateVersion: number;
   readonly promptRevision: SystemPromptRevision;
@@ -293,6 +296,10 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Investment Reflection requires explicit User initiation.");
         return startProjectReflection(command.correlationId, command.payload);
       }
+      case "reflection.start.unscoped": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Investment Reflection requires explicit User initiation.");
+        return startUnscopedReflection(command.correlationId, command.payload);
+      }
       case "reflection.independent.start": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Independent Evidence requires explicit User initiation.");
         return startIndependentAssessment(command.correlationId, command.payload.runId, command.payload.profileId);
@@ -323,9 +330,16 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
         const draft = reflectionOutcomes.getJudgment(command.payload.draftId);
         const run = draft === undefined ? undefined : stateStore.getReflectionRun(draft.runId);
-        const project = run === undefined ? undefined : stateStore.getProject(run.projectId);
-        if (draft === undefined || run === undefined || project === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Judgment Record confirmation requires an active Reflection dialogue.");
-        reflectionOutcomes.confirmJudgment(draft.id, project.path, { projectId: project.id, threadId: run.threadId });
+        if (draft === undefined || run === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Judgment Record confirmation requires an active Reflection dialogue.");
+        if (run.scope === "project") {
+          const project = stateStore.getProject(run.projectId);
+          if (project === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "The Reflection Project is unavailable.");
+          reflectionOutcomes.confirmJudgment(draft.id, project.path, { scope: "project", projectId: project.id, threadId: run.threadId });
+        } else {
+          const thread = stateStore.getThread(run.threadId);
+          if (thread?.scope !== "unscoped" || thread.outputLocation === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Choose an Unscoped Output Location before confirming the Judgment Record.");
+          reflectionOutcomes.confirmJudgment(draft.id, thread.outputLocation, { scope: "unscoped", threadId: run.threadId });
+        }
         return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
       }
       case "reflection.outcome.discard": {
@@ -358,7 +372,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           provenanceRecords: [{
             schemaVersion: 1,
             sourceReferenceId: judgment.sourceReferenceId,
-            projectId: run.projectId,
+            scope: run.scope,
+            ...(run.scope === "project" ? { projectId: run.projectId } : {}),
             workflowType: "reflection",
             workflowRunId: run.id,
             judgmentRecordId: judgment.id,
@@ -732,6 +747,7 @@ async function startProjectReflection(correlationId: string, input: { projectId:
   if (effectiveProfileId !== undefined && profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence Profile is unavailable.");
   const framing = reflectionFraming(input.focus ?? "");
   const run = stateStore!.createReflectionRun({
+    scope: "project",
     projectId: project.id,
     framing,
     objective: framing === "retrospective" ? "Review this Project retrospectively against later evidence, subsequent developments, or observed outcomes." : DEFAULT_PROJECT_REFLECTION_OBJECTIVE,
@@ -747,6 +763,35 @@ async function startProjectReflection(correlationId: string, input: { projectId:
   return { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
 }
 
+async function startUnscopedReflection(correlationId: string, input: { threadId: string; focus?: string | undefined; profileId?: string | undefined }): Promise<HostEvent> {
+  const sourceThread = stateStore!.getThread(input.threadId);
+  const promptRevision = stateStore!.getActiveSystemPromptRevision();
+  if (sourceThread?.scope !== "unscoped" || promptRevision === undefined || stateStore!.getReflectionRunByThread(sourceThread.id) !== undefined) {
+    return diagnostic(correlationId, "HOST_FAILURE", "An ordinary Unscoped task and System Prompt are required.");
+  }
+  const userInputs = trajectoryStore!.loadEvents(sourceThread.id).flatMap((event) => event.event === "turn.submitted" ? [{ turnId: event.turnId, text: event.payload.text }] : []);
+  const brief = buildReflectionUnscopedBrief({ sourceThreadId: sourceThread.id, userInputs });
+  const assignment = stateStore!.getTaskModelAssignment("independent_evidence");
+  const effectiveProfileId = input.profileId ?? assignment?.profileId;
+  const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
+  if (effectiveProfileId !== undefined && profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence Profile is unavailable.");
+  const framing = reflectionFraming(`${input.focus ?? ""} ${userInputs.map((item) => item.text).join(" ")}`);
+  const run = stateStore!.createReflectionRun({
+    scope: "unscoped",
+    sourceThreadId: sourceThread.id,
+    framing,
+    objective: framing === "retrospective" ? "Review this investment question retrospectively against later evidence, subsequent developments, or observed outcomes." : DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE,
+    ...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
+    brief,
+    promptRevision,
+    ...(profile === undefined ? {} : { independentProfileId: profile.id }),
+    ...(input.profileId === undefined ? {} : { launchOverrideProfileId: input.profileId })
+  });
+  const thread = stateStore!.getThread(run.threadId);
+  if (thread?.scope !== "unscoped") throw new Error("Unscoped Reflection task was not created");
+  return { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+}
+
 async function startIndependentAssessment(correlationId: string, runId: string, profileId?: string): Promise<HostEvent> {
   let run = stateStore!.getReflectionRun(runId);
   if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
@@ -758,23 +803,26 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
   if (profile === undefined) {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   }
-  const project = stateStore!.getProject(run.projectId);
   const thread = stateStore!.getThread(run.threadId);
   const promptRevision = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
-  if (project === undefined || thread?.scope !== "project" || promptRevision?.hash !== run.promptSnapshot.hash) {
+  const project = run.scope === "project" ? stateStore!.getProject(run.projectId) : undefined;
+  if (thread === undefined || thread.scope !== run.scope || (run.scope === "project" && project === undefined) || promptRevision?.hash !== run.promptSnapshot.hash) {
     return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
   }
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence credential is unavailable.");
-  stateStore!.authorizeProjectProfile(project.id, profile.id, profile.provider);
+  if (run.scope === "project") stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
   run = stateStore!.markReflectionRunning(run.id);
   const turnId = randomUUID();
+  const activeCapabilities = run.scope === "project" ? ["material_recall"] : ["web_search", "web_fetch"];
   const context: ReflectionExecutionContext = {
     correlationId,
     runId: run.id,
     threadId: run.threadId,
     turnId,
-    projectId: run.projectId,
+    scope: run.scope,
+    ...(run.scope === "project" ? { projectId: run.projectId, outputLocation: join(project!.path, "outputs") } : thread.scope !== "unscoped" || thread.outputLocation === undefined ? {} : { outputLocation: thread.outputLocation }),
+    activeCapabilities,
     profile,
     expectedStateVersion: thread.stateVersion,
     promptRevision
@@ -782,6 +830,7 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
   reflectionContexts.set(turnId, context);
   const createdAt = new Date().toISOString();
   const prompt = buildIndependentEvidencePrompt({ objective: run.objective, ...(run.focus === undefined ? {} : { focus: run.focus }), brief: run.brief, createdAt });
+  const stageInstructions = run.scope === "project" ? INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS : INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS;
   const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
     schemaVersion: 1,
     command: "turn.execute",
@@ -789,17 +838,17 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
     correlationId,
     threadId: run.threadId,
     turnId,
-    cwd: project.path,
+    cwd: run.scope === "project" ? project!.path : app.getPath("userData"),
     threadDirectory: trajectoryStore!.threadDirectory(run.threadId),
     contextHistory: [],
-    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
-    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
-    activeCapabilities: ["material_recall"],
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(stageInstructions) + estimateTokens(prompt),
+    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(stageInstructions) + estimateTokens(prompt),
+    activeCapabilities,
     expectedStateVersion: thread.stateVersion,
-    executionScope: { kind: "project", projectId: run.projectId },
+    executionScope: run.scope === "project" ? { kind: "project", projectId: run.projectId } : { kind: "unscoped", threadId: run.threadId },
     prompt,
     profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
-    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS] },
+    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [stageInstructions] },
     extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
   };
   void workerSupervisor!.execute(workerCommand).catch(() => failReflectionExecution(context, {
@@ -830,10 +879,10 @@ function startMemoryAwareReflection(correlationId: string, runId: string, profil
   if (profile === undefined) return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   const thread = stateStore!.getThread(run.threadId);
   const promptRevision = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
-  if (thread?.scope !== "project" || promptRevision?.hash !== run.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
+  if (thread === undefined || thread.scope !== run.scope || promptRevision?.hash !== run.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
   const turnId = randomUUID();
   run = stateStore!.startMemoryAwareReflection(run.id, profile.id, turnId);
-  stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
+  if (run.scope === "project") stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
   loadedPromptByThread.set(run.threadId, promptRevision);
   emitReflectionRun(correlationId, run);
   const workerPrompt = buildMemoryAwareReflectionPrompt({ objective: run.objective, ...(run.focus === undefined ? {} : { focus: run.focus }), brief: run.brief, assessment });
@@ -1123,7 +1172,9 @@ function submitTurn(
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
-  const activeCapabilities = reflectionRun === undefined ? [...coreCapabilitiesForScope(thread.scope)] : ["memory_recall", "material_recall", "project_state_recall"];
+  const activeCapabilities = reflectionRun === undefined
+    ? [...coreCapabilitiesForScope(thread.scope)]
+    : thread.scope === "project" ? ["memory_recall", "material_recall", "project_state_recall"] : ["memory_recall"];
   if (reflectionOutcomeIntent) activeCapabilities.push("reflection_outcome_propose");
   if (reflectionRun === undefined && detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
   if (reflectionRun === undefined && outputIntent) activeCapabilities.push("output.write_text");
@@ -1505,25 +1556,27 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
 async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, workerEvent: WorkerEvent): Promise<void> {
   if (workerEvent.event === "capability.execution.requested") {
     const request = workerEvent.request;
+    const scopeMatches = context.scope === "project"
+      ? request.scope.kind === "project" && request.scope.projectId === context.projectId
+      : request.scope.kind === "unscoped" && request.scope.threadId === context.threadId;
     if (
       request.threadId !== context.threadId || request.turnId !== context.turnId || request.correlationId !== context.correlationId ||
-      request.capabilityId !== "material_recall" || request.scope.kind !== "project" || request.scope.projectId !== context.projectId
+      !context.activeCapabilities.includes(request.capabilityId) || !scopeMatches
     ) {
-      resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "rejected", code: "REFLECTION_CAPABILITY_NOT_ALLOWED", content: "Independent Evidence Pass permits only scoped progressive Material recall." });
+      resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "rejected", code: "REFLECTION_CAPABILITY_NOT_ALLOWED", content: "Independent Evidence Pass permits only capabilities authorized for its frozen scope." });
       return;
     }
-    const project = stateStore!.getProject(context.projectId);
-    if (project === undefined) {
+    if (context.scope === "project" && (context.projectId === undefined || stateStore!.getProject(context.projectId) === undefined)) {
       resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "failed", code: "PROJECT_UNAVAILABLE", content: "The frozen Project scope is unavailable." });
       return;
     }
     const decision = await capabilityGateway!.request(request, {
       accessMode: stateStore!.getAccessMode(),
-      scope: "project",
+      scope: context.scope,
       stateVersion: context.expectedStateVersion,
-      activeCapabilityIds: ["material_recall"],
+      activeCapabilityIds: context.activeCapabilities,
       outputIntent: false,
-      outputLocation: join(project.path, "outputs")
+      ...(context.outputLocation === undefined ? {} : { outputLocation: context.outputLocation })
     });
     if (decision.type === "confirmation_required") {
       resolveReflectionCapability(context, { schemaVersion: 1, requestId: request.requestId, status: "rejected", code: "REFLECTION_CONFIRMATION_UNSUPPORTED", content: "Independent Evidence recall cannot pause for a broader capability grant." });

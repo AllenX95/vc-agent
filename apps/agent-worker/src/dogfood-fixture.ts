@@ -49,6 +49,22 @@ export function reflectionFixtureResponses() {
   ];
 }
 
+export function unscopedReflectionFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("web_search", { query: "representative retention cohort venture diligence", maxResults: 2, maxChars: 2_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(JSON.stringify({
+      schemaVersion: 1,
+      conclusion: "The user-defined retention threshold is decision-useful, but the current Unscoped evidence does not establish a representative cohort.",
+      rationale: ["The current view is falsifiable and can guide diligence."],
+      uncertainties: ["No authorized source establishes cohort composition."],
+      counterarguments: ["Category-specific usage frequency may require a different threshold."],
+      evidenceReferences: [{ referenceId: "unscoped-user-input", claim: "The user supplied a retention threshold as a decision rule.", support: "supporting" }],
+      decisionChangingQuestions: ["What cohort definition would prevent selection bias?"],
+      createdAt: "2026-07-19T00:00:00.000Z"
+    }))
+  ];
+}
+
 export function memoryAwareReflectionFixtureResponses() {
   return [
     fauxAssistantMessage(fauxToolCall("memory_recall", { source: "project_memory", disclosureLevel: "cards", query: "retention execution risk", maxItems: 4, maxChars: 3_000 }), { stopReason: "toolUse" }),
@@ -90,5 +106,47 @@ export function memoryAwareReflectionContinuationFixtureResponses() {
       }]
     }), { stopReason: "toolUse" }),
     fauxAssistantMessage("I prepared a non-authoritative Judgment Record draft and a de-identified Long-term Learning Proposal. Confirm them separately in the Reflection workspace.")
+  ];
+}
+
+export function unscopedMemoryAwareReflectionFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "cards", query: "representative retention cohort", maxItems: 4, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "full", entryIds: ["ltm-reflection-pattern"], maxItems: 2, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("The Unscoped evidence supports a falsifiable retention rule but does not verify cohort representativeness. Prior Memory reinforces that concern, but it remains historical judgment rather than Project evidence. Which cohort exclusions would invalidate the threshold?")
+  ];
+}
+
+export function unscopedMemoryAwareReflectionContinuationFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("reflection_outcome_propose", {
+      judgmentRecord: {
+        view: "Treat representative month-six retention as a decision-changing threshold, while keeping the current view unresolved until cohort construction is verified.",
+        reasoning: ["The threshold is falsifiable and directly tied to repeatability risk."],
+        uncertainties: ["No authorized source evidence verifies cohort representativeness."],
+        counterarguments: ["Episodic products may require a category-specific retention window."],
+        evidenceReferences: ["unscoped-user-input"],
+        decisionState: "watch",
+        sourceAvailability: "partial"
+      },
+      learningProposals: [{
+        action: "add",
+        targetEntryIds: [],
+        proposed: {
+          id: "ltm-unscoped-retention-threshold",
+          title: "Verify cohort construction before applying retention thresholds",
+          date: "2026-07-19",
+          tags: ["retention", "diligence"],
+          applicability: ["early-stage software"],
+          maturity: "evidence-backed",
+          recallPolicy: "automatic",
+          limitations: "Category usage frequency may require a different measurement window.",
+          content: "Pair a falsifiable retention threshold with an explicit test of cohort representativeness before increasing conviction."
+        },
+        rationale: "The Unscoped Reflection confirmed a reusable diligence rule without attaching it to a Project.",
+        comparisonSummary: "This narrows the active representative-cohort heuristic by requiring explicit cohort-construction verification."
+      }]
+    }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("I prepared Unscoped Reflection outcome drafts. Neither the Judgment Record nor Long-term Memory has been confirmed yet.")
   ];
 }
