@@ -11,7 +11,7 @@ export interface ReflectionEvidenceDrilldownQuery {
   readonly claim: string;
 }
 
-interface MaterialBlockReference {
+export interface MaterialBlockReference {
   readonly materialId: string;
   readonly blockId: string;
   readonly contentVersion: string;

@@ -267,18 +267,32 @@ export const reflectionRunSchema = z.discriminatedUnion("scope", [
 ]);
 export type ReflectionRun = z.infer<typeof reflectionRunSchema>;
 
+export const reflectionOutcomeDependencySchema = z.object({
+  kind: z.enum(["material", "project_memory", "long_term_memory"]),
+  referenceId: z.string().min(1).max(500),
+  targetId: z.string().min(1).max(100),
+  contentVersion: z.string().regex(/^[a-f0-9]{64}$/)
+});
+export type ReflectionOutcomeDependency = z.infer<typeof reflectionOutcomeDependencySchema>;
+export const reflectionOutcomeStaleReasonSchema = z.object({
+  dependency: reflectionOutcomeDependencySchema,
+  reason: z.enum(["changed", "deleted", "source_unavailable"])
+});
+export type ReflectionOutcomeStaleReason = z.infer<typeof reflectionOutcomeStaleReasonSchema>;
 export const judgmentRecordDraftSchema = z.object({
   schemaVersion: z.literal(1), id: z.string().uuid(), runId: z.string().uuid(), sourceReferenceId: z.string().min(6).max(80),
   view: z.string().trim().min(1).max(30_000), reasoning: z.array(z.string().trim().min(1).max(5_000)).max(20), uncertainties: z.array(z.string().trim().min(1).max(5_000)).max(20),
   counterarguments: z.array(z.string().trim().min(1).max(5_000)).max(20), evidenceReferences: z.array(z.string().min(1).max(500)).max(100),
   decisionState: z.enum(["invest", "pass", "watch", "unresolved"]), sourceAvailability: z.enum(["complete", "partial", "source_unavailable"]),
-  status: z.enum(["draft", "confirmed", "discarded"]), createdAt: z.string().datetime(), confirmedAt: z.string().datetime().optional()
+  dependencies: z.array(reflectionOutcomeDependencySchema).max(300).default([]), staleReasons: z.array(reflectionOutcomeStaleReasonSchema).max(300).default([]),
+  status: z.enum(["draft", "stale", "confirmed", "discarded"]), createdAt: z.string().datetime(), staleAt: z.string().datetime().optional(), confirmedAt: z.string().datetime().optional()
 });
 export type JudgmentRecordDraft = z.infer<typeof judgmentRecordDraftSchema>;
 export const longTermLearningProposalSchema = z.object({
   schemaVersion: z.literal(1), id: z.string().uuid(), runId: z.string().uuid(), action: memoryEvolutionActionSchema, targetEntryIds: z.array(z.string().min(6).max(80)).max(20),
   proposed: memoryLearningDraftSchema.omit({ sourceReferenceIds: true }), rationale: z.string().trim().min(1).max(5_000), comparisonSummary: z.string().trim().min(1).max(10_000),
-  status: z.enum(["draft", "patch_prepared", "adopted", "discarded"]), preparedPatchId: z.string().min(8).max(80).optional(), createdAt: z.string().datetime()
+  dependencies: z.array(reflectionOutcomeDependencySchema).max(300).default([]), staleReasons: z.array(reflectionOutcomeStaleReasonSchema).max(300).default([]),
+  status: z.enum(["draft", "stale", "patch_prepared", "adopted", "discarded"]), preparedPatchId: z.string().min(8).max(80).optional(), createdAt: z.string().datetime(), staleAt: z.string().datetime().optional()
 });
 export type LongTermLearningProposal = z.infer<typeof longTermLearningProposalSchema>;
 export const reflectionOutcomeProposalInputSchema = z.object({

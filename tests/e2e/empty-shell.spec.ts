@@ -1161,6 +1161,74 @@ test("runs an isolated Unscoped Reflection without Project State and writes only
   }
 });
 
+test("marks only unconfirmed Reflection outcomes stale after a recalled Memory target changes", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-project-"));
+  const root = resolve(import.meta.dirname, "../..");
+  writeFileSync(join(projectDirectory, "market-notes.md"), "# Market notes\n\nRetention remains unverified.");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Open project" }).click();
+    writeFileSync(join(projectDirectory, "outputs", "system", "project-memory.md"), projectReflectionMemoryFixture(), "utf8");
+    const projectName = projectDirectory.split(/[\\/]/u).at(-1)!;
+    await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByLabel("Long-term Memory").fill(reflectionLongTermMemoryFixture());
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
+    await createProfile(window, { name: "Stale evidence fixture", provider: "vc-agent-reflection-faux", model: "stale-evidence", apiKey: "fixture-key" });
+    await createProfile(window, { name: "Stale dialogue fixture", provider: "vc-agent-reflection-memory-faux", model: "stale-dialogue", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+
+    await window.getByRole("button", { name: "Reflection", exact: true }).click();
+    const launch = window.getByRole("dialog", { name: "Start Investment Reflection" });
+    await launch.getByLabel("Reflection Model Profile").selectOption({ label: "Stale evidence fixture" });
+    await launch.getByRole("button", { name: "Start Reflection" }).click();
+    const workspace = window.getByTestId("reflection-workspace");
+    await expect(workspace).toContainText("Evidence pass complete", { timeout: 30_000 });
+    await workspace.getByLabel("Memory-Aware Reflection Profile").selectOption({ label: "Stale dialogue fixture" });
+    await workspace.getByRole("button", { name: "Start critical dialogue" }).click();
+    await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
+    await window.getByLabel("Message").fill("Prepare a Judgment Record and reusable Long-term Learning Proposal from this Reflection.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(workspace.getByTestId("judgment-record-draft")).toContainText("Draft · not authoritative", { timeout: 30_000 });
+
+    const outcomePath = join(userDataDirectory, "memory", "reflection", "outcomes.jsonl");
+    const proposedEvents = readFileSync(outcomePath, "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    const proposed = proposedEvents.find((event) => event.event === "judgment.proposed");
+    expect(proposed.draft.dependencies).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "long_term_memory", targetId: "ltm-reflection-pattern" })]));
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    const changedMemory = reflectionLongTermMemoryFixture().replace("Version: 1", "Version: 2").replace("Use representative cohort retention", "Require verified representative cohort retention");
+    await window.getByLabel("Long-term Memory").fill(changedMemory);
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await application.close();
+
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
+    const restored = window.getByTestId("reflection-workspace");
+    await expect(restored.getByText("Stale · review again")).toHaveCount(2);
+    await expect(restored.getByText("Relevant long term memory changed", { exact: false })).toHaveCount(2);
+    await expect(restored.getByRole("button", { name: "Confirm Judgment Record" })).toHaveCount(0);
+    await expect(restored.getByRole("button", { name: "Preview Memory Patch" })).toHaveCount(0);
+    expect(existsSync(join(projectDirectory, "outputs", "system", "judgment-records"))).toBe(false);
+    const staleEvents = readFileSync(outcomePath, "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line)).filter((event) => event.event === "outcome.stale");
+    expect(staleEvents).toHaveLength(2);
+    expect(staleEvents.every((event) => event.reasons.some((reason: { dependency: { kind: string }; reason: string }) => reason.dependency.kind === "long_term_memory" && reason.reason === "changed"))).toBe(true);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+  }
+});
+
 function projectReflectionMemoryFixture(): string {
   return `# Project Memory\n\n## 2026-07-19 - Retention is the core execution risk\nTags: retention, execution, diligence\nSource: user-confirmed\nScope: project\n\nRetention quality matters more than top-line pilot count.\n\nRelated:\n- Thread:\n- Output:\n`;
 }

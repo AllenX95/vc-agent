@@ -420,6 +420,10 @@ _Avoid_: Fact list, transcript summary, Long-term Memory entry
 A higher-level Investment Learning drafted by an Investment Reflection Thread for possible direct promotion to Long-term Memory, including its applicability boundary, sources, limitations or counterexamples, and maturity.
 _Avoid_: Project conclusion, generic principle, automatic memory write, ordinary Memory Candidate
 
+**Reflection Outcome Staleness**:
+A deterministic state of an unconfirmed Judgment Record draft or unadopted Long-term Learning Proposal after an exact local evidence version, recalled Memory entry, or target Memory entry on which it depends changes or disappears. The draft remains inspectable but cannot cross an authority boundary; the User continues the Reflection and prepares a replacement. Confirmed Judgment Records and adopted learning remain immutable history.
+_Avoid_: Whole-Project invalidation, unrelated Memory edit, hidden web refresh, confirmed-record rewrite, automatic regeneration
+
 **Memory Evolution Action**:
 The user-approved relationship between a proposed Investment Learning and existing Long-term Memory: Add, Reinforce, Narrow, Revise, or Contradict.
 _Avoid_: Append-only memory, silent overwrite, automatic conflict resolution

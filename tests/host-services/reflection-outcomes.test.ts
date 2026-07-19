@@ -74,7 +74,10 @@ describe("ReflectionOutcomeStore", () => {
 
     expect(judgment.status).toBe("confirmed");
     expect(readFileSync(join(root, "project", "outputs", "system", "judgment-records", `${judgment.id}.md`), "utf8")).toContain("Retention evidence is promising");
-    expect(JSON.parse(readFileSync(join(root, "project", "outputs", "system", "judgment-records", `${judgment.id}.json`), "utf8"))).toMatchObject({ projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "reflection-thread" });
+    const persisted = JSON.parse(readFileSync(join(root, "project", "outputs", "system", "judgment-records", `${judgment.id}.json`), "utf8"));
+    expect(persisted).toMatchObject({ projectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", threadId: "reflection-thread" });
+    expect(persisted).not.toHaveProperty("dependencies");
+    expect(persisted).not.toHaveProperty("staleReasons");
     expect(store.list(runId).learningProposals[0]!.status).toBe("draft");
   });
 
@@ -115,5 +118,27 @@ describe("ReflectionOutcomeStore", () => {
     const discarded = store.discardRunDrafts(runId);
     expect(discarded.judgments[0]!.status).toBe("discarded");
     expect(discarded.learningProposals[0]!.status).toBe("discarded");
+  });
+
+  it("persists stale drafts and never makes confirmed history stale", () => {
+    const { root, store } = fixture();
+    const runId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const dependency = { kind: "long_term_memory" as const, referenceId: "long-term-memory:ltm-retention", targetId: "ltm-retention", contentVersion: "a".repeat(64) };
+    const created = store.propose(runId, proposal, [dependency]);
+    const reason = { dependency, reason: "changed" as const };
+    expect(store.markStale(created.judgments[0]!.id, [reason])).toMatchObject({ status: "stale", staleReasons: [reason] });
+    store.markPatchPrepared(created.learningProposals[0]!.id, "patch-stale-0");
+    expect(store.markStale(created.learningProposals[0]!.id, [reason])).toMatchObject({ status: "stale", staleReasons: [reason], preparedPatchId: undefined });
+    expect(() => store.confirmJudgment(created.judgments[0]!.id, join(root, "stale"), { scope: "unscoped", threadId: "reflection-thread" })).toThrow("no longer confirmable");
+    expect(() => store.markPatchPrepared(created.learningProposals[0]!.id, "patch-stale-1")).toThrow("no longer available");
+
+    const restored = new ReflectionOutcomeStore(join(root, "app-data", "outcomes.jsonl"));
+    expect(restored.list(runId).judgments.at(-1)).toMatchObject({ status: "stale", staleAt: expect.any(String) });
+    expect(restored.list(runId).learningProposals.at(-1)).toMatchObject({ status: "stale", preparedPatchId: undefined });
+
+    const confirmed = store.propose("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", { judgmentRecord: proposal.judgmentRecord, learningProposals: [] }, [dependency]);
+    store.confirmJudgment(confirmed.judgments[0]!.id, join(root, "confirmed"), { scope: "unscoped", threadId: "reflection-thread" });
+    expect(() => store.markStale(confirmed.judgments[0]!.id, [reason])).toThrow("no longer eligible");
+    expect(store.getJudgment(confirmed.judgments[0]!.id)?.status).toBe("confirmed");
   });
 });

@@ -189,7 +189,7 @@
 - [ ] Proposal 必须使用 L2 preview 和 confirmation path，不能绕过 Memory Evolution rule。
 - [x] Project Reflection 的 Judgment Record 属于 Project；Unscoped Reflection 写入选定 Output Location，且不访问 Project State。
 - [ ] 只有用户明确采纳、修正或确认的 Reflection dialogue 才具备 Dream eligibility；Independent Evidence Pass 永远不具备。
-- [ ] Restart recovery 复用未变化的 stage；相关 Memory 或 evidence 改变后 proposal 变 stale。
+- [x] Restart recovery 复用未变化的 stage；相关 Memory 或 evidence 改变后 proposal 变 stale。
 
 ### L5. 在没有隐藏模型工作的情况下创建 Dream Batch
 

@@ -7,7 +7,9 @@ import {
   reflectionOutcomeProposalInputSchema,
   type JudgmentRecordDraft,
   type LongTermLearningProposal,
-  type ReflectionOutcomeProposalInput
+  type ReflectionOutcomeDependency,
+  type ReflectionOutcomeProposalInput,
+  type ReflectionOutcomeStaleReason
 } from "@vc-agent/contracts";
 
 type OutcomeEvent =
@@ -17,7 +19,8 @@ type OutcomeEvent =
   | { schemaVersion: 1; event: "outcome.discarded"; draftId: string }
   | { schemaVersion: 1; event: "learning.patch_prepared"; draftId: string; patchId: string }
   | { schemaVersion: 1; event: "learning.patch_discarded"; draftId: string; patchId: string }
-  | { schemaVersion: 1; event: "learning.adopted"; draftId: string; patchId: string };
+  | { schemaVersion: 1; event: "learning.adopted"; draftId: string; patchId: string }
+  | { schemaVersion: 1; event: "outcome.stale"; draftId: string; staleAt: string; reasons: ReflectionOutcomeStaleReason[] };
 
 export interface ReflectionOutcomeStoreOptions {
   readonly now?: () => Date;
@@ -40,7 +43,7 @@ export class ReflectionOutcomeStore {
     this.#createId = options.createId ?? randomUUID;
   }
 
-  propose(runId: string, input: ReflectionOutcomeProposalInput): ReflectionOutcomeList {
+  propose(runId: string, input: ReflectionOutcomeProposalInput, dependencies: readonly ReflectionOutcomeDependency[] = []): ReflectionOutcomeList {
     const parsed = reflectionOutcomeProposalInputSchema.parse(input);
     const createdAt = this.#now().toISOString();
     const judgments: JudgmentRecordDraft[] = [];
@@ -53,6 +56,7 @@ export class ReflectionOutcomeStore {
         runId,
         sourceReferenceId: `src_ref_${id.replaceAll("-", "")}`,
         ...parsed.judgmentRecord,
+        dependencies,
         status: "draft",
         createdAt
       });
@@ -65,6 +69,7 @@ export class ReflectionOutcomeStore {
         id: this.#createId(),
         runId,
         ...proposal,
+        dependencies,
         status: "draft",
         createdAt
       });
@@ -98,7 +103,8 @@ export class ReflectionOutcomeStore {
     const markdownPath = join(root, `${id}.md`);
     if (existsSync(jsonPath) || existsSync(markdownPath)) throw new Error("Judgment Record output already exists.");
     mkdirSync(root, { recursive: true });
-    const record = { ...confirmed, ...context };
+    const { dependencies: _dependencies, staleReasons: _staleReasons, staleAt: _staleAt, ...publicRecord } = confirmed;
+    const record = { ...publicRecord, ...context };
     atomicWrite(jsonPath, `${JSON.stringify(record, null, 2)}\n`);
     try {
       atomicWrite(markdownPath, renderJudgmentRecord(confirmed));
@@ -114,7 +120,7 @@ export class ReflectionOutcomeStore {
     const state = this.#load();
     const judgment = state.judgments.get(id);
     const proposal = state.learningProposals.get(id);
-    if ((judgment === undefined || judgment.status !== "draft") && (proposal === undefined || proposal.status !== "draft")) {
+    if ((judgment === undefined || !["draft", "stale"].includes(judgment.status)) && (proposal === undefined || !["draft", "stale"].includes(proposal.status))) {
       throw new Error("Reflection outcome draft is no longer discardable.");
     }
     this.#append({ schemaVersion: 1, event: "outcome.discarded", draftId: id });
@@ -123,7 +129,7 @@ export class ReflectionOutcomeStore {
   discardRunDrafts(runId: string): ReflectionOutcomeList {
     const outcomes = this.list(runId);
     for (const draft of [...outcomes.judgments, ...outcomes.learningProposals]) {
-      if (draft.status === "draft") this.#append({ schemaVersion: 1, event: "outcome.discarded", draftId: draft.id });
+      if (["draft", "stale"].includes(draft.status)) this.#append({ schemaVersion: 1, event: "outcome.discarded", draftId: draft.id });
     }
     return this.list(runId);
   }
@@ -147,6 +153,17 @@ export class ReflectionOutcomeStore {
     if (proposal === undefined || proposal.status !== "patch_prepared") return undefined;
     this.#append({ schemaVersion: 1, event: "learning.adopted", draftId: proposal.id, patchId });
     return longTermLearningProposalSchema.parse({ ...proposal, status: "adopted" });
+  }
+
+  markStale(id: string, reasons: readonly ReflectionOutcomeStaleReason[]): JudgmentRecordDraft | LongTermLearningProposal {
+    if (reasons.length === 0) throw new Error("Stale Reflection outcome requires at least one changed dependency.");
+    const state = this.#load();
+    const outcome = state.judgments.get(id) ?? state.learningProposals.get(id);
+    if (outcome === undefined || !["draft", "patch_prepared"].includes(outcome.status)) throw new Error("Reflection outcome is no longer eligible for staleness transition.");
+    const staleAt = this.#now().toISOString();
+    this.#append({ schemaVersion: 1, event: "outcome.stale", draftId: id, staleAt, reasons: [...reasons] });
+    if (state.judgments.has(id)) return judgmentRecordDraftSchema.parse({ ...outcome, status: "stale", staleAt, staleReasons: reasons });
+    return longTermLearningProposalSchema.parse({ ...outcome, status: "stale", staleAt, staleReasons: reasons, preparedPatchId: undefined });
   }
 
   #append(event: OutcomeEvent): void {
@@ -177,9 +194,14 @@ export class ReflectionOutcomeStore {
       } else if (event.event === "learning.patch_discarded") {
         const proposal = learningProposals.get(event.draftId);
         if (proposal !== undefined && proposal.preparedPatchId === event.patchId) learningProposals.set(event.draftId, longTermLearningProposalSchema.parse({ ...proposal, status: "draft", preparedPatchId: undefined }));
-      } else {
+      } else if (event.event === "learning.adopted") {
         const proposal = learningProposals.get(event.draftId);
         if (proposal !== undefined && proposal.preparedPatchId === event.patchId) learningProposals.set(event.draftId, longTermLearningProposalSchema.parse({ ...proposal, status: "adopted" }));
+      } else {
+        const judgment = judgments.get(event.draftId);
+        if (judgment !== undefined && judgment.status === "draft") judgments.set(event.draftId, judgmentRecordDraftSchema.parse({ ...judgment, status: "stale", staleAt: event.staleAt, staleReasons: event.reasons }));
+        const proposal = learningProposals.get(event.draftId);
+        if (proposal !== undefined && ["draft", "patch_prepared"].includes(proposal.status)) learningProposals.set(event.draftId, longTermLearningProposalSchema.parse({ ...proposal, status: "stale", staleAt: event.staleAt, staleReasons: event.reasons, preparedPatchId: undefined }));
       }
     }
     return { judgments, learningProposals };
