@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CanonicalParse, MaterialInventoryItem } from "@vc-agent/contracts";
 import { MaterialRecallSource } from "@vc-agent/host-services";
-import { coreCapabilitiesForScope } from "@vc-agent/capabilities";
+import { coreCapabilitiesForScope, createReflectionEvidenceDrilldownCapability } from "@vc-agent/capabilities";
 
 const material: MaterialInventoryItem = {
   id: "64a14515-99f5-43d4-9b3a-cf2c13afd4a6",
@@ -74,5 +74,12 @@ describe("bounded material recall", () => {
     expect(result.items).toEqual([]);
     expect(result.warnings).toEqual(["PARSE_REFRESH_CHOICE_REQUIRED"]);
     expect(result.contextReference.status).toBe("stale");
+  });
+
+  it("keeps Reflection drilldown inputs narrower than general Material recall", () => {
+    const capability = createReflectionEvidenceDrilldownCapability(async () => { throw new Error("not executed"); });
+    expect(capability.inputSchema.parse({ referenceId: "material:stable", maxChars: 6_000, materialId: material.id, query: "broaden" })).toEqual({ referenceId: "material:stable", maxChars: 6_000 });
+    expect(capability.inputSchema.safeParse({ referenceId: "material:stable", maxChars: 6_001 }).success).toBe(false);
+    expect(capability.metadata.allowedScopes).toEqual(["project"]);
   });
 });

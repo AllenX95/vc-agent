@@ -24,8 +24,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -1174,7 +1174,7 @@ function submitTurn(
   const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
   const activeCapabilities = reflectionRun === undefined
     ? [...coreCapabilitiesForScope(thread.scope)]
-    : thread.scope === "project" ? ["memory_recall", "material_recall", "project_state_recall"] : ["memory_recall"];
+    : thread.scope === "project" ? ["memory_recall", "reflection_evidence_drilldown", "project_state_recall"] : ["memory_recall"];
   if (reflectionOutcomeIntent) activeCapabilities.push("reflection_outcome_propose");
   if (reflectionRun === undefined && detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
   if (reflectionRun === undefined && outputIntent) activeCapabilities.push("output.write_text");
@@ -2063,6 +2063,36 @@ app.whenReady().then(() => {
       ...(input.query === undefined ? {} : { query: input.query })
     };
     const envelope = await source.recall(query, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
+    const body = JSON.stringify(envelope);
+    return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
+  capabilityRegistry.register(createReflectionEvidenceDrilldownCapability(async (input, context) => {
+    const turn = turnContexts.get(context.request.turnId);
+    const run = turn?.reflectionRunId === undefined ? undefined : stateStore!.getReflectionRun(turn.reflectionRunId);
+    if (run?.scope !== "project" || !["memory_aware_running", "dialogue_active"].includes(run.status) || run.assessment === undefined) {
+      throw new Error("Evidence Drilldown requires an active Project Reflection with a completed Independent Assessment.");
+    }
+    const assessmentReference = run.assessment.evidenceReferences.find((reference) => reference.referenceId === input.referenceId);
+    if (assessmentReference === undefined) throw new Error("Evidence Drilldown can resolve only references present in the frozen Independent Assessment.");
+    const source = new ReflectionEvidenceDrilldownSource({
+      listMaterials: () => stateStore!.listMaterials(run.projectId),
+      loadParse: async (materialId) => {
+        let parsed = stateStore!.getCurrentParsedMaterial(materialId);
+        if (parsed === undefined) {
+          const parsedEvent = await parseMaterial(context.request.correlationId, materialId);
+          if (parsedEvent.event !== "material.parse.completed") return undefined;
+          parsed = stateStore!.getCurrentParsedMaterial(materialId);
+        }
+        const project = stateStore!.getProject(run.projectId);
+        if (parsed === undefined || project === undefined) return undefined;
+        try { return canonicalParseSchema.parse(JSON.parse(readFileSync(join(project.path, parsed.artifact_path), "utf8"))); }
+        catch { return undefined; }
+      }
+    });
+    const envelope = await source.recall(
+      { referenceId: input.referenceId, claim: assessmentReference.claim },
+      { turnId: context.request.turnId, maxItems: 1, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
+    );
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));

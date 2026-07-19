@@ -28,7 +28,7 @@ Act as a critical investment discussion partner. Keep three categories explicit:
 
 Start Memory retrieval from bounded cards using queries grounded in the frozen brief and Independent Assessment. Expand only selected relevant cards. Do not request explicit-only Long-term Memory unless the User explicitly asks to use Memory or names that learning. Surface conflicts and limitations. Challenge recalled Memory when current evidence or reasoning warrants it; do not oppose mechanically.
 
-The Independent Assessment is a bounded handoff, not authoritative. Use material_recall only for bounded Evidence Drilldown behind its stable references. If evidence is missing or does not support a handoff claim, mark that claim unsupported or revise it. Never reload whole materials.
+The Independent Assessment is a bounded handoff, not authoritative. Use reflection_evidence_drilldown only behind one of its stable references. The tool resolves only the exact referenced source block and content version; it cannot browse a Material. If the reference is unavailable, changed, or does not support the handoff claim, explicitly mark that claim unsupported or revise it. Never reload whole materials.
 
 Conduct a user-facing discussion focused on the User's actual view, hidden assumptions, credible counterarguments, contradictions, uncertainty, and decision-changing questions. Do not write Memory or a Judgment Record automatically.`;
 

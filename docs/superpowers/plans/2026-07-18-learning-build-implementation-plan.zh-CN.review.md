@@ -182,7 +182,7 @@
 - [ ] 推断相关性使用 applicability、industry、financing stage、risk、diligence question、counterargument 和 uncertainty。
 - [ ] 所有 recall 可见且有 budget；没有显式 intent 时继续排除 `explicit-only`。
 - [ ] Critical Reflection Stance 区分 evidence、historical User judgment 和 new inference，并在有理由时挑战 Memory。
-- [ ] Evidence Drilldown 只读取 stable reference 后的 bounded excerpt；不受支持的 handoff claim 必须被标记。
+- [x] Evidence Drilldown 只读取 stable reference 后的 bounded excerpt；不受支持的 handoff claim 必须被标记。
 - [ ] 对话可以保持 unresolved 或 discard，不强制生成 Judgment Record 或 Memory patch。
 - [ ] Confirmed Judgment Record 保存 view、reasoning、uncertainty、counterargument、evidence reference、decision state 和 source availability。
 - [ ] Long-term Learning Proposal 陈述去标识化 applicability、limitation/counterexample、maturity 和 source reference，并与 active Memory 比较。

@@ -409,8 +409,8 @@ A User-inspectable local mapping from an opaque Long-term Memory source referenc
 _Avoid_: Model-facing memory content, cross-Project authorization, source evidence, backup Project metadata
 
 **Evidence Drilldown**:
-An on-demand retrieval of a bounded original-source excerpt during the Memory-Aware Reflection Pass, using an Independent Assessment evidence reference to verify or challenge a claim.
-_Avoid_: Full material reload, Memory Recall, unsupported quotation
+An on-demand retrieval of one bounded original-source excerpt during the Memory-Aware Reflection Pass. It accepts only a stable evidence reference already present in the frozen Independent Assessment and resolves the exact source block and content version; it cannot browse a Material or choose a different range. Resolution makes the excerpt inspectable but does not decide whether it supports the handoff claim.
+_Avoid_: Full material reload, general Material Recall, range selection, Memory Recall, support verdict
 
 **Judgment Record**:
 A user-confirmed result of an Investment Reflection Thread that preserves the current investment view, reasoning, uncertainty, counterarguments, evidence references, and decision state.

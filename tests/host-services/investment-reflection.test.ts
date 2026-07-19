@@ -77,6 +77,8 @@ describe("Reflection Project Brief", () => {
     expect(prompt).toContain("Series A");
     expect(prompt).not.toMatch(/material body|first-stage transcript|hidden reasoning/iu);
     expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("Memory is challengeable historical judgment");
-    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("bounded Evidence Drilldown");
+    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("reflection_evidence_drilldown");
+    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("exact referenced source block and content version");
+    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("cannot browse a Material");
   });
 });

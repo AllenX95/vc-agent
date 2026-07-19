@@ -229,6 +229,14 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "material_recall", params, signal))
   });
+  const reflectionEvidenceDrilldown = defineTool({
+    name: "reflection_evidence_drilldown",
+    label: "Verify Reflection evidence",
+    description: "Resolve one exact evidence reference from the Independent Assessment. This cannot browse Materials or select another source range.",
+    parameters: Type.Object({ referenceId: Type.String(), maxChars: Type.Optional(Type.Number()) }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "reflection_evidence_drilldown", params, signal))
+  });
   const projectStateRecall = defineTool({
     name: "project_state_recall",
     label: "Recall project state",
@@ -302,7 +310,7 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
-  return [capabilityRequest, materialRecall, projectStateRecall, memoryRecall, reflectionOutcomePropose, webSearch, webFetch, createTextOutputProxy(proxy)];
+  return [capabilityRequest, materialRecall, reflectionEvidenceDrilldown, projectStateRecall, memoryRecall, reflectionOutcomePropose, webSearch, webFetch, createTextOutputProxy(proxy)];
 }
 
 function toolResult(result: CapabilityExecutionResult) {

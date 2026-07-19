@@ -186,7 +186,7 @@ Rules:
 - [x] Inferred relevance uses applicability, industry, financing stage, risk, diligence questions, counterarguments, and uncertainty.
 - [x] Every recall is visible and budgeted; `explicit-only` remains excluded without explicit User intent.
 - [x] The Critical Reflection Stance distinguishes evidence, historical User judgment, and new inference; it challenges Memory when reasoning or evidence warrants.
-- [ ] Evidence Drilldown retrieves only bounded excerpts behind stable references and marks unsupported handoff claims rather than trusting the Assessment.
+- [x] Evidence Drilldown retrieves only bounded excerpts behind stable references and marks unsupported handoff claims rather than trusting the Assessment.
 - [x] The conversation may remain unresolved or be discarded without creating a Judgment Record or Memory patch.
 - [x] A confirmed Judgment Record preserves view, reasoning, uncertainty, counterarguments, evidence references, decision state, and source availability.
 - [x] A Long-term Learning Proposal states de-identified applicability, limitations or counterexamples, maturity, and source references, then compares against relevant active Memory.

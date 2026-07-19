@@ -1029,6 +1029,9 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
     await expect(window.getByText("Which retention result would change your current view?", { exact: false })).toBeVisible();
     await expect(window.locator(".tool-activity").filter({ hasText: "memory_recall" })).toHaveCount(3);
+    await expect(window.locator(".tool-activity.completed").filter({ hasText: "reflection_evidence_drilldown" })).toBeVisible();
+    await expect(window.getByText("handoff claim is unsupported", { exact: false })).toBeVisible();
+    await expect(window.locator(".tool-activity").filter({ hasText: "material_recall" })).toHaveCount(0);
     await expect(window.locator(".conversation")).not.toContainText("src_ref_reflection");
     await expect(window.locator(".conversation")).not.toContainText("projectId");
 

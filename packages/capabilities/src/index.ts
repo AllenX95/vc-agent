@@ -292,6 +292,31 @@ export function createMaterialRecallCapability(
   };
 }
 
+const reflectionEvidenceDrilldownInputSchema = z.object({
+  referenceId: z.string().min(1).max(500),
+  maxChars: z.number().int().min(500).max(6_000).default(4_000)
+});
+
+export function createReflectionEvidenceDrilldownCapability(
+  recall: (input: z.infer<typeof reflectionEvidenceDrilldownInputSchema>, context: CapabilityExecutionContext) => Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>
+): CapabilityDefinition<z.infer<typeof reflectionEvidenceDrilldownInputSchema>> {
+  return {
+    metadata: {
+      id: "reflection_evidence_drilldown", version: "1.0.0", label: "Verify Reflection evidence",
+      description: "Resolve one exact stable evidence reference from the Independent Assessment under a bounded excerpt budget. This cannot browse Materials or choose a different source range.",
+      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["project"], executor: "host", modelCallable: true,
+      inputSchema: { type: "object", properties: { referenceId: { type: "string" }, maxChars: { type: "integer", minimum: 500, maximum: 6_000 } }, required: ["referenceId"] },
+      outputSchema: { type: "object", properties: { sourceClass: { const: "material" }, disclosureLevel: { const: "evidence_drilldown" }, items: { type: "array", maxItems: 1 }, complete: { type: "boolean" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "disclosureLevel", "items", "complete", "warnings", "contextReference"] }
+    },
+    inputSchema: reflectionEvidenceDrilldownInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const recalled = await recall(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
+    }
+  };
+}
+
 const projectStateRecallInputSchema = z.object({
   source: z.enum(["project_context", "project_memory"]).default("project_context"),
   sectionIds: z.array(z.string().trim().min(1).max(100)).max(6).optional(),
