@@ -1032,9 +1032,27 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(window.locator(".conversation")).not.toContainText("src_ref_reflection");
     await expect(window.locator(".conversation")).not.toContainText("projectId");
 
-    await window.getByLabel("Message").fill("I would require month-six retention above 80% in a representative cohort.");
+    const judgmentRoot = join(projectDirectory, "outputs", "system", "judgment-records");
+    expect(existsSync(judgmentRoot)).toBe(false);
+    await window.getByLabel("Message").fill("I adopt month-six retention above 80% in a representative cohort. Prepare a Judgment Record and reusable learning proposal.");
     await window.getByRole("button", { name: "Send" }).click();
-    await expect(window.getByText("That threshold clarifies the decision rule.", { exact: false })).toBeVisible({ timeout: 30_000 });
+    await expect(window.getByText("I prepared a non-authoritative Judgment Record draft", { exact: false })).toBeVisible({ timeout: 30_000 });
+    await expect(window.locator(".tool-activity.completed").filter({ hasText: "reflection_outcome_propose" })).toBeVisible();
+    await expect(workspace.getByTestId("judgment-record-draft")).toContainText("Draft · not authoritative");
+    await expect(workspace.getByTestId("learning-proposal-draft")).toContainText("Draft · not in Memory");
+    expect(existsSync(judgmentRoot)).toBe(false);
+    expect(readFileSync(join(userDataDirectory, "memory", "long-term", "long-term-memory.md"), "utf8")).not.toContain("ltm-representative-retention-threshold");
+    await workspace.getByRole("button", { name: "Confirm Judgment Record" }).click();
+    await expect(workspace.getByTestId("judgment-record-draft")).toContainText("confirmed");
+    expect(existsSync(judgmentRoot)).toBe(true);
+    expect(readdirSync(judgmentRoot).filter((name) => name.endsWith(".json"))).toHaveLength(1);
+    await workspace.getByRole("button", { name: "Preview Memory Patch" }).click();
+    const memoryPatch = window.getByRole("dialog", { name: "Reflection Memory patch preview" });
+    await expect(memoryPatch).toContainText("Confirm Long-term Memory change");
+    expect(readFileSync(join(userDataDirectory, "memory", "long-term", "long-term-memory.md"), "utf8")).not.toContain("ltm-representative-retention-threshold");
+    await memoryPatch.getByRole("button", { name: "Confirm Memory change" }).click();
+    await expect(memoryPatch).not.toBeVisible();
+    expect(readFileSync(join(userDataDirectory, "memory", "long-term", "long-term-memory.md"), "utf8")).toContain("ltm-representative-retention-threshold");
     const activeDatabase = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
     expect(activeDatabase.prepare("SELECT status FROM reflection_runs").get()).toMatchObject({ status: "dialogue_active" });
     expect(Number((activeDatabase.prepare("SELECT COUNT(*) AS count FROM physical_contexts WHERE thread_id = ?").get(run.thread_id) as { count: number }).count)).toBe(1);
@@ -1046,7 +1064,9 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
     await expect(window.getByTestId("reflection-workspace")).toContainText("Reflection dialogue");
     await expect(window.getByTestId("reflection-workspace")).toContainText("continued diligence");
-    await expect(window.getByText("That threshold clarifies the decision rule.", { exact: false })).toBeVisible();
+    await expect(window.getByText("I prepared a non-authoritative Judgment Record draft", { exact: false })).toBeVisible();
+    await expect(window.getByTestId("judgment-record-draft")).toContainText("confirmed");
+    await expect(window.getByTestId("learning-proposal-draft")).toContainText("adopted");
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
   } finally {
     await application.close();

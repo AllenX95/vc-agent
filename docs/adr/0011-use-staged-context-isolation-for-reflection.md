@@ -25,3 +25,13 @@ The model autonomously queries `project_memory` and `long_term_memory` through v
 Memory-Aware turns expose only `memory_recall`, `project_state_recall`, and `material_recall`. The last is a bounded Evidence Drilldown surface rather than permission to preload Materials. Total recalled bodies are capped at 32,000 bytes per turn and every call remains a visible trajectory activity. Memory is labelled as historical User judgment rather than source evidence. The dialogue can remain active or be explicitly discarded without creating a Judgment Record or Memory patch.
 
 On restart, an unfinished initial Memory-Aware turn becomes interrupted and waits for explicit retry. A completed dialogue and its physical context are loaded without starting Pi. Subsequent dialogue turns retain the frozen Prompt Snapshot and Memory-Aware Profile; they do not inherit an ordinary Thread override.
+
+## L4 Confirmed Outcome Boundary
+
+Reflection outcomes use two distinct authority transitions. The model may call `reflection_outcome_propose` only on an active Reflection dialogue Turn where the User explicitly asks to prepare a Judgment Record or Long-term Learning Proposal. The call writes recoverable, non-authoritative drafts to an append-only local outcome log. It does not write a Project record, prepare a Memory patch, or change active Memory. Ordinary dialogue and unresolved or discarded Reflections therefore produce no durable investment conclusion by default.
+
+The User confirms a Judgment Record separately. For Project Reflection, confirmation writes a paired Markdown and JSON record under `outputs/system/judgment-records/`, preserving the view, reasoning, uncertainty, counterarguments, evidence references, decision state, source availability, and an opaque local source reference. Learning Proposals remain drafts after that confirmation.
+
+A Learning Proposal can enter Memory Evolution only when paired with a confirmed Judgment Record from the same Reflection run. The Host, rather than the model, adds the opaque source reference and Local Memory Provenance, then calls the shared L2 patch preparation path. Active Memory remains unchanged until the User reviews the lineage and five-file diff and confirms the patch. Discarding the preview returns the proposal to draft so it can be prepared again; committing it marks the proposal `adopted`. This status is the authoritative boundary for later Dream eligibility work.
+
+The current implementation completes this boundary for Project Reflection. Unscoped Reflection output placement, stronger Evidence Drilldown acceptance coverage, outcome staleness after source changes, and Dream eligibility filtering remain later L4/L5 work and are not implied by the Project path.

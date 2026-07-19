@@ -18,6 +18,10 @@ import type {
   CapabilityMetadata,
   CapabilityExecutionResult
 } from "@vc-agent/contracts";
+import {
+  reflectionOutcomeProposalInputSchema,
+  type ReflectionOutcomeProposalInput
+} from "@vc-agent/contracts";
 
 export interface CapabilityExecutionContext {
   readonly request: CapabilityExecutionRequest;
@@ -345,6 +349,36 @@ export function createMemoryRecallCapability(
       if (input.source === "project_memory" && context.request.scope.kind !== "project") return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "Project Memory is unavailable outside its Project scope; no Project state was loaded." };
       const recalled = await recall(input, context);
       return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
+    }
+  };
+}
+
+export function createReflectionOutcomeProposalCapability(
+  propose: (input: ReflectionOutcomeProposalInput, context: CapabilityExecutionContext) => Promise<string>
+): CapabilityDefinition<ReflectionOutcomeProposalInput> {
+  return {
+    metadata: {
+      id: "reflection_outcome_propose", version: "1.0.0", label: "Propose Reflection outcomes",
+      description: "Create non-authoritative Judgment Record and de-identified Long-term Learning drafts only after the User explicitly requests outcome preparation. Drafts require separate User confirmation before any Project or Memory write.",
+      activationClass: "protected_workflow", sideEffectClass: "local_write", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          judgmentRecord: { type: "object" },
+          learningProposals: { type: "array", maxItems: 3, items: { type: "object" } }
+        }
+      },
+      outputSchema: {
+        type: "object",
+        properties: { status: { const: "drafted" }, judgmentCount: { type: "integer" }, learningProposalCount: { type: "integer" } },
+        required: ["status", "judgmentCount", "learningProposalCount"]
+      }
+    },
+    inputSchema: reflectionOutcomeProposalInputSchema,
+    inspect: () => undefined,
+    async execute(input, context) {
+      const content = await propose(input, context);
+      return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content };
     }
   };
 }

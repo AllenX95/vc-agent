@@ -251,6 +251,41 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "memory_recall", params, signal))
   });
+  const reflectionOutcomePropose = defineTool({
+    name: "reflection_outcome_propose",
+    label: "Propose Reflection outcomes",
+    description: "Create non-authoritative Judgment Record and de-identified Long-term Learning drafts after an explicit User request. This does not confirm or write either outcome into authoritative Project or Memory state.",
+    parameters: Type.Object({
+      judgmentRecord: Type.Optional(Type.Object({
+        view: Type.String(),
+        reasoning: Type.Array(Type.String(), { maxItems: 20 }),
+        uncertainties: Type.Array(Type.String(), { maxItems: 20 }),
+        counterarguments: Type.Array(Type.String(), { maxItems: 20 }),
+        evidenceReferences: Type.Array(Type.String(), { maxItems: 100 }),
+        decisionState: Type.Union([Type.Literal("invest"), Type.Literal("pass"), Type.Literal("watch"), Type.Literal("unresolved")]),
+        sourceAvailability: Type.Union([Type.Literal("complete"), Type.Literal("partial"), Type.Literal("source_unavailable")])
+      })),
+      learningProposals: Type.Optional(Type.Array(Type.Object({
+        action: Type.Union([Type.Literal("add"), Type.Literal("reinforce"), Type.Literal("narrow"), Type.Literal("revise"), Type.Literal("contradict"), Type.Literal("merge_condense")]),
+        targetEntryIds: Type.Array(Type.String(), { maxItems: 20 }),
+        proposed: Type.Object({
+          id: Type.Optional(Type.String()),
+          title: Type.String(),
+          date: Type.String(),
+          tags: Type.Array(Type.String(), { maxItems: 20 }),
+          applicability: Type.Array(Type.String(), { maxItems: 20 }),
+          maturity: Type.Union([Type.Literal("user-confirmed"), Type.Literal("evidence-backed"), Type.Literal("retrospectively-supported")]),
+          recallPolicy: Type.Union([Type.Literal("automatic"), Type.Literal("explicit-only")]),
+          limitations: Type.String(),
+          content: Type.String()
+        }),
+        rationale: Type.String(),
+        comparisonSummary: Type.String()
+      }), { maxItems: 3 }))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "reflection_outcome_propose", params, signal))
+  });
   const webSearch = defineTool({
     name: "web_search",
     label: "Search public web",
@@ -267,7 +302,7 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
-  return [capabilityRequest, materialRecall, projectStateRecall, memoryRecall, webSearch, webFetch, createTextOutputProxy(proxy)];
+  return [capabilityRequest, materialRecall, projectStateRecall, memoryRecall, reflectionOutcomePropose, webSearch, webFetch, createTextOutputProxy(proxy)];
 }
 
 function toolResult(result: CapabilityExecutionResult) {

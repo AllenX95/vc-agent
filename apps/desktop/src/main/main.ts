@@ -24,8 +24,8 @@ import {
   type WorkerCommand,
   type WorkerEvent
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -47,6 +47,7 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "prompt.revision.list",
   "task_model_assignment.list",
   "reflection.list",
+  "reflection.outcome.list",
   "project.list",
   "project.material.list",
   "project.output.list",
@@ -69,6 +70,7 @@ interface TurnContext {
   readonly retryOfTurnId?: string;
   readonly compactionOnly?: true;
   readonly reflectionRunId?: string;
+  readonly reflectionOutcomeIntent: boolean;
   readonly appendSystemPrompt?: readonly string[];
   readonly submittedAtMs: number;
   recalledStateEstimatedTokens: number;
@@ -98,6 +100,7 @@ let projectMemories: ProjectMemoryStore | null = null;
 let longTermMemories: LongTermMemoryStore | null = null;
 let memoryEvolution: MemoryEvolutionStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
+let reflectionOutcomes: ReflectionOutcomeStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -303,7 +306,71 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "reflection.discard": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Reflection requires explicit User initiation.");
         const run = stateStore.discardReflection(command.payload.runId);
+        if (reflectionOutcomes !== null) {
+          reflectionOutcomes.discardRunDrafts(run.id);
+          emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
+        }
         return { ...eventMetadata(command.correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+      }
+      case "reflection.outcome.list": {
+        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
+        const run = stateStore.getReflectionRun(command.payload.runId);
+        if (run === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection run not found.");
+        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
+      }
+      case "reflection.judgment.confirm": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Confirming a Judgment Record requires explicit User action.");
+        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
+        const draft = reflectionOutcomes.getJudgment(command.payload.draftId);
+        const run = draft === undefined ? undefined : stateStore.getReflectionRun(draft.runId);
+        const project = run === undefined ? undefined : stateStore.getProject(run.projectId);
+        if (draft === undefined || run === undefined || project === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Judgment Record confirmation requires an active Reflection dialogue.");
+        reflectionOutcomes.confirmJudgment(draft.id, project.path, { projectId: project.id, threadId: run.threadId });
+        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
+      }
+      case "reflection.outcome.discard": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding a Reflection outcome requires explicit User action.");
+        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
+        const judgment = reflectionOutcomes.getJudgment(command.payload.draftId);
+        const learning = reflectionOutcomes.getLearningProposal(command.payload.draftId);
+        const runId = judgment?.runId ?? learning?.runId;
+        const run = runId === undefined ? undefined : stateStore.getReflectionRun(runId);
+        if (run === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcome context is unavailable.");
+        reflectionOutcomes.discard(command.payload.draftId);
+        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
+      }
+      case "reflection.learning.prepare_patch": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Preparing a Memory patch requires explicit User action.");
+        if (reflectionOutcomes === null || memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection learning is unavailable.");
+        const proposal = reflectionOutcomes.getLearningProposal(command.payload.proposalId);
+        const judgment = reflectionOutcomes.getJudgment(command.payload.judgmentDraftId);
+        if (proposal === undefined || judgment === undefined || proposal.runId !== judgment.runId || proposal.status !== "draft" || judgment.status !== "confirmed") {
+          return diagnostic(command.correlationId, "HOST_FAILURE", "A draft Learning Proposal and confirmed Judgment Record from the same Reflection are required.");
+        }
+        const run = stateStore.getReflectionRun(proposal.runId);
+        if (run === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory patch preparation requires an active Reflection dialogue.");
+        const patch = memoryEvolution.prepare({
+          action: proposal.action,
+          targetEntryIds: proposal.targetEntryIds,
+          proposed: { ...proposal.proposed, sourceReferenceIds: [judgment.sourceReferenceId] },
+          rationale: proposal.rationale,
+          resolutionSignal: { type: run.framing === "retrospective" ? "approved_retrospective" : "approved_reflection", referenceId: judgment.id },
+          provenanceRecords: [{
+            schemaVersion: 1,
+            sourceReferenceId: judgment.sourceReferenceId,
+            projectId: run.projectId,
+            workflowType: "reflection",
+            workflowRunId: run.id,
+            judgmentRecordId: judgment.id,
+            threadId: run.threadId,
+            evidenceReferences: judgment.evidenceReferences,
+            availability: judgment.sourceAvailability === "source_unavailable" ? "source_unavailable" : "active",
+            createdAt: judgment.confirmedAt ?? judgment.createdAt
+          }]
+        });
+        reflectionOutcomes.markPatchPrepared(proposal.id, patch.id);
+        emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
+        return { ...eventMetadata(command.correlationId, run.threadId), event: "long_term_memory.patch.prepared", payload: { patch } };
       }
       case "project.list":
         return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
@@ -397,6 +464,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const document = memoryEvolution.commit(command.payload.patchId);
           ownLongTermMemoryWriteHash = document.sourceHash;
+          const proposal = reflectionOutcomes?.markPatchCommitted(command.payload.patchId);
+          if (proposal !== undefined) {
+            const run = stateStore.getReflectionRun(proposal.runId);
+            if (run !== undefined) emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
+          }
           return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.committed", payload: { patchId: command.payload.patchId, document } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be committed."));
@@ -404,6 +476,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "long_term_memory.patch.discard": {
         if (memoryEvolution === null || !memoryEvolution.discard(command.payload.patchId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory patch is no longer available.");
+        const proposal = reflectionOutcomes?.markPatchDiscarded(command.payload.patchId);
+        if (proposal !== undefined) {
+          const run = stateStore.getReflectionRun(proposal.runId);
+          if (run !== undefined) emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
+        }
         return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.discarded", payload: { patchId: command.payload.patchId } };
       }
       case "long_term_memory.maintenance.load": {
@@ -1045,7 +1122,9 @@ function submitTurn(
   const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
+  const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
   const activeCapabilities = reflectionRun === undefined ? [...coreCapabilitiesForScope(thread.scope)] : ["memory_recall", "material_recall", "project_state_recall"];
+  if (reflectionOutcomeIntent) activeCapabilities.push("reflection_outcome_propose");
   if (reflectionRun === undefined && detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
   if (reflectionRun === undefined && outputIntent) activeCapabilities.push("output.write_text");
   const physical = stateStore!.getPhysicalContext(input.threadId);
@@ -1151,6 +1230,7 @@ function submitTurn(
     profile,
     outputIntent,
     memoryRecallMode,
+    reflectionOutcomeIntent,
     longTermMemoryCardIds: new Set(),
     activeCapabilities,
     expectedStateVersion: thread.stateVersion,
@@ -1245,6 +1325,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     profile,
     outputIntent: false,
     memoryRecallMode: "none",
+    reflectionOutcomeIntent: false,
     longTermMemoryCardIds: new Set(),
     activeCapabilities: [],
     expectedStateVersion: thread.stateVersion,
@@ -1832,6 +1913,18 @@ function memoryEvolutionFailure(error: unknown, fallback: string): string {
   }
 }
 
+function detectReflectionOutcomeIntent(text: string): boolean {
+  const requestsPreparation = /\b(prepare|propose|draft|create|record|capture)\b/iu.test(text) || /(准备|提出|起草|生成|创建|记录|沉淀)/u.test(text);
+  const namesOutcome = /\b(judg(?:e)?ment record|learning proposal|memory proposal|reflection outcome)\b/iu.test(text) || /(判断记录|判断结论|学习提案|记忆提案|复盘产出|长期记忆)/u.test(text);
+  return requestsPreparation && namesOutcome;
+}
+
+function reflectionOutcomesEvent(correlationId: string, runId: string, threadId: string): HostEvent {
+  if (reflectionOutcomes === null) throw new Error("Reflection outcomes are unavailable.");
+  const outcomes = reflectionOutcomes.list(runId);
+  return { ...eventMetadata(correlationId, threadId), event: "reflection.outcomes.updated", payload: { runId, ...outcomes } };
+}
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -1866,6 +1959,7 @@ app.whenReady().then(() => {
     projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
     memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
   }
+  reflectionOutcomes = new ReflectionOutcomeStore(join(app.getPath("userData"), "memory", "reflection", "outcomes.jsonl"));
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"), { createRoot: !readOnlyRecovery });
   for (const thread of stateStore.listThreads()) {
     if (!readOnlyRecovery) trajectoryStore.recoverInterruptedTurns(thread.id);
@@ -1957,6 +2051,17 @@ app.whenReady().then(() => {
     }
     const body = JSON.stringify(envelope);
     return { body, retrieval: retrievalMetadata(envelope, body) };
+  }));
+  capabilityRegistry.register(createReflectionOutcomeProposalCapability(async (input, context) => {
+    const turn = turnContexts.get(context.request.turnId);
+    if (turn?.reflectionRunId === undefined || !turn.reflectionOutcomeIntent || reflectionOutcomes === null) {
+      throw new Error("Reflection outcomes require an explicit User request in an active Reflection dialogue.");
+    }
+    const run = stateStore!.getReflectionRun(turn.reflectionRunId);
+    if (run === undefined || run.status !== "dialogue_active") throw new Error("Reflection dialogue is not active.");
+    const created = reflectionOutcomes.propose(run.id, input);
+    emit(reflectionOutcomesEvent(context.request.correlationId, run.id, run.threadId));
+    return JSON.stringify({ status: "drafted", judgmentCount: created.judgments.length, learningProposalCount: created.learningProposals.length });
   }));
   const publicWeb = process.env.VC_AGENT_TEST_WEB_FIXTURE === "1"
     ? new PublicWebRecallSource({

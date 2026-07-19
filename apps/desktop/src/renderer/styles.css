@@ -302,6 +302,22 @@ button { font: inherit; letter-spacing: 0; }
 .reflection-controls .primary-button { border-color: #294a37; background: #294a37; color: #fff; }
 .reflection-dialogue-boundary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid #dfe3de; color: #697169; font-size: 10px; }
 .reflection-dialogue-boundary button { min-height: 29px; padding: 0 9px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #58463e; font-size: 10px; }
+.reflection-dialogue-boundary > div { display: flex; gap: 7px; }
+.reflection-outcome { display: grid; gap: 9px; padding: 12px; border: 1px solid #cdd3cc; border-radius: 6px; background: #fff; }
+.reflection-outcome > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.reflection-outcome h3, .reflection-outcome p { margin: 0; }
+.reflection-outcome h3 { font-size: 13px; }
+.reflection-outcome span { color: #707870; font-size: 9px; text-transform: capitalize; }
+.reflection-outcome p { color: #465048; font-size: 11px; line-height: 1.55; }
+.reflection-outcome dl { display: flex; gap: 24px; margin: 0; }
+.reflection-outcome dl div { display: flex; gap: 6px; font-size: 10px; }
+.reflection-outcome dt { color: #737b74; }
+.reflection-outcome dd { margin: 0; color: #364139; text-transform: capitalize; }
+.reflection-outcome .form-actions { margin: 0; }
+.reflection-memory-patch { max-height: calc(100% - 110px); overflow: auto; }
+.reflection-memory-patch details { margin-top: 8px; border-top: 1px solid #dfe3de; padding-top: 8px; }
+.reflection-memory-patch summary { cursor: pointer; color: #36423a; font-size: 10px; font-weight: 650; text-transform: capitalize; }
+.reflection-memory-patch pre { max-height: 220px; overflow: auto; padding: 8px; background: #e9ede8; color: #263129; font: 9px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .material-inventory > p { margin: 5px 0 12px; color: #747c75; font-size: 10px; }
 .material-row { align-items: center; display: flex; gap: 8px; justify-content: space-between; min-height: 48px; padding: 7px 2px; border-top: 1px solid #dfe3de; }
 .material-row > div { display: grid; gap: 3px; min-width: 0; }

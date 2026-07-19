@@ -60,5 +60,35 @@ export function memoryAwareReflectionFixtureResponses() {
 }
 
 export function memoryAwareReflectionContinuationFixtureResponses() {
-  return [fauxAssistantMessage("That threshold clarifies the decision rule. The remaining tension is whether the current evidence can measure it without selection bias.")];
+  return [
+    fauxAssistantMessage(fauxToolCall("reflection_outcome_propose", {
+      judgmentRecord: {
+        view: "Require month-six retention above 80% in a representative cohort before increasing conviction.",
+        reasoning: ["The threshold turns the retention concern into a falsifiable decision rule."],
+        uncertainties: ["The current evidence does not establish that the measured cohort is representative."],
+        counterarguments: ["A strict month-six threshold may understate value for products with naturally episodic use."],
+        evidenceReferences: ["material-inventory", "project-memory-retention"],
+        decisionState: "watch",
+        sourceAvailability: "partial"
+      },
+      learningProposals: [{
+        action: "add",
+        targetEntryIds: [],
+        proposed: {
+          id: "ltm-representative-retention-threshold",
+          title: "Require representative retention thresholds",
+          date: "2026-07-19",
+          tags: ["retention", "diligence"],
+          applicability: ["early-stage software", "Series A diligence"],
+          maturity: "evidence-backed",
+          recallPolicy: "automatic",
+          limitations: "The threshold should be adapted for naturally episodic products.",
+          content: "Define a falsifiable retention threshold and require a representative cohort before increasing investment conviction."
+        },
+        rationale: "The Reflection converted a recurring retention concern into a confirmed decision rule.",
+        comparisonSummary: "Compared with active Memory, this adds an explicit falsifiable threshold requirement rather than repeating the general need for representative cohorts."
+      }]
+    }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("I prepared a non-authoritative Judgment Record draft and a de-identified Long-term Learning Proposal. Confirm them separately in the Reflection workspace.")
+  ];
 }

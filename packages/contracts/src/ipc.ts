@@ -247,6 +247,26 @@ export const reflectionRunSchema = z.object({
 });
 export type ReflectionRun = z.infer<typeof reflectionRunSchema>;
 
+export const judgmentRecordDraftSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().uuid(), runId: z.string().uuid(), sourceReferenceId: z.string().min(6).max(80),
+  view: z.string().trim().min(1).max(30_000), reasoning: z.array(z.string().trim().min(1).max(5_000)).max(20), uncertainties: z.array(z.string().trim().min(1).max(5_000)).max(20),
+  counterarguments: z.array(z.string().trim().min(1).max(5_000)).max(20), evidenceReferences: z.array(z.string().min(1).max(500)).max(100),
+  decisionState: z.enum(["invest", "pass", "watch", "unresolved"]), sourceAvailability: z.enum(["complete", "partial", "source_unavailable"]),
+  status: z.enum(["draft", "confirmed", "discarded"]), createdAt: z.string().datetime(), confirmedAt: z.string().datetime().optional()
+});
+export type JudgmentRecordDraft = z.infer<typeof judgmentRecordDraftSchema>;
+export const longTermLearningProposalSchema = z.object({
+  schemaVersion: z.literal(1), id: z.string().uuid(), runId: z.string().uuid(), action: memoryEvolutionActionSchema, targetEntryIds: z.array(z.string().min(6).max(80)).max(20),
+  proposed: memoryLearningDraftSchema.omit({ sourceReferenceIds: true }), rationale: z.string().trim().min(1).max(5_000), comparisonSummary: z.string().trim().min(1).max(10_000),
+  status: z.enum(["draft", "patch_prepared", "adopted", "discarded"]), preparedPatchId: z.string().min(8).max(80).optional(), createdAt: z.string().datetime()
+});
+export type LongTermLearningProposal = z.infer<typeof longTermLearningProposalSchema>;
+export const reflectionOutcomeProposalInputSchema = z.object({
+  judgmentRecord: judgmentRecordDraftSchema.pick({ view: true, reasoning: true, uncertainties: true, counterarguments: true, evidenceReferences: true, decisionState: true, sourceAvailability: true }).optional(),
+  learningProposals: z.array(longTermLearningProposalSchema.pick({ action: true, targetEntryIds: true, proposed: true, rationale: true, comparisonSummary: true })).max(3).default([])
+}).refine((value) => value.judgmentRecord !== undefined || value.learningProposals.length > 0, "At least one Reflection outcome is required");
+export type ReflectionOutcomeProposalInput = z.infer<typeof reflectionOutcomeProposalInputSchema>;
+
 const ipcTrajectoryProfileSchema = modelProfileSchema.pick({
   id: true,
   name: true,
@@ -327,6 +347,10 @@ const startIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ c
 const stopIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.stop"), payload: z.object({ runId: z.string().uuid() }) });
 const startMemoryAwareReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.memory_aware.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
 const discardReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.discard"), payload: z.object({ runId: z.string().uuid() }) });
+const listReflectionOutcomesCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.outcome.list"), payload: z.object({ runId: z.string().uuid() }) });
+const confirmJudgmentRecordCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.judgment.confirm"), payload: z.object({ draftId: z.string().uuid() }) });
+const discardReflectionOutcomeCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.outcome.discard"), payload: z.object({ draftId: z.string().uuid() }) });
+const prepareReflectionLearningPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.learning.prepare_patch"), payload: z.object({ proposalId: z.string().uuid(), judgmentDraftId: z.string().uuid() }) });
 const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
 const listProjectsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.list") });
 const openProjectCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.open") });
@@ -446,6 +470,10 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   stopIndependentAssessmentCommandSchema,
   startMemoryAwareReflectionCommandSchema,
   discardReflectionCommandSchema,
+  listReflectionOutcomesCommandSchema,
+  confirmJudgmentRecordCommandSchema,
+  discardReflectionOutcomeCommandSchema,
+  prepareReflectionLearningPatchCommandSchema,
   listProjectsCommandSchema,
   openProjectCommandSchema,
   resolveProjectCollisionCommandSchema,
@@ -577,6 +605,7 @@ const taskModelAssignmentUpdatedEventSchema = eventMetadataSchema.extend({ event
 const reflectionRunsListedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.runs.listed"), payload: z.object({ runs: z.array(reflectionRunSchema) }) });
 const reflectionRunCreatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.created"), payload: z.object({ run: reflectionRunSchema, thread: projectThreadSchema }) });
 const reflectionRunUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.run.updated"), payload: z.object({ run: reflectionRunSchema }) });
+const reflectionOutcomesUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("reflection.outcomes.updated"), payload: z.object({ runId: z.string().uuid(), judgments: z.array(judgmentRecordDraftSchema), learningProposals: z.array(longTermLearningProposalSchema) }) });
 const threadsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("threads.listed"),
   payload: z.object({ threads: z.array(threadSchema) })
@@ -813,6 +842,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   reflectionRunsListedEventSchema,
   reflectionRunCreatedEventSchema,
   reflectionRunUpdatedEventSchema,
+  reflectionOutcomesUpdatedEventSchema,
   projectsListedEventSchema,
   projectOpenedEventSchema,
   projectCollisionDetectedEventSchema,

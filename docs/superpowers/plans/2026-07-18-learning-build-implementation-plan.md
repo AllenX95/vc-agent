@@ -180,17 +180,17 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] The second stage receives the bounded Independent Assessment, objective, and permitted stage instructions but not first-stage raw materials, transcript, full context, or hidden reasoning.
-- [ ] It autonomously queries Memory using the Assessment and Project brief, starting from cards and expanding selectively.
-- [ ] Direct same-Project provenance may rank a candidate higher but is not exposed in the Provider payload and never makes the Memory authoritative.
-- [ ] Inferred relevance uses applicability, industry, financing stage, risk, diligence questions, counterarguments, and uncertainty.
-- [ ] Every recall is visible and budgeted; `explicit-only` remains excluded without explicit User intent.
-- [ ] The Critical Reflection Stance distinguishes evidence, historical User judgment, and new inference; it challenges Memory when reasoning or evidence warrants.
+- [x] The second stage receives the bounded Independent Assessment, objective, and permitted stage instructions but not first-stage raw materials, transcript, full context, or hidden reasoning.
+- [x] It autonomously queries Memory using the Assessment and Project brief, starting from cards and expanding selectively.
+- [x] Direct same-Project provenance may rank a candidate higher but is not exposed in the Provider payload and never makes the Memory authoritative.
+- [x] Inferred relevance uses applicability, industry, financing stage, risk, diligence questions, counterarguments, and uncertainty.
+- [x] Every recall is visible and budgeted; `explicit-only` remains excluded without explicit User intent.
+- [x] The Critical Reflection Stance distinguishes evidence, historical User judgment, and new inference; it challenges Memory when reasoning or evidence warrants.
 - [ ] Evidence Drilldown retrieves only bounded excerpts behind stable references and marks unsupported handoff claims rather than trusting the Assessment.
-- [ ] The conversation may remain unresolved or be discarded without creating a Judgment Record or Memory patch.
-- [ ] A confirmed Judgment Record preserves view, reasoning, uncertainty, counterarguments, evidence references, decision state, and source availability.
-- [ ] A Long-term Learning Proposal states de-identified applicability, limitations or counterexamples, maturity, and source references, then compares against relevant active Memory.
-- [ ] Applying the proposal uses the L2 preview and confirmation path; Reflection cannot bypass Dream by bypassing Memory Evolution rules.
+- [x] The conversation may remain unresolved or be discarded without creating a Judgment Record or Memory patch.
+- [x] A confirmed Judgment Record preserves view, reasoning, uncertainty, counterarguments, evidence references, decision state, and source availability.
+- [x] A Long-term Learning Proposal states de-identified applicability, limitations or counterexamples, maturity, and source references, then compares against relevant active Memory.
+- [x] Applying the proposal uses the L2 preview and confirmation path; Reflection cannot bypass Dream by bypassing Memory Evolution rules.
 - [ ] Project Reflection stores its Judgment Record with the Project; Unscoped Reflection uses the selected Unscoped Output Location and never accesses Project State.
 - [ ] Reflection dialogue is Dream-eligible only where the User meaningfully adopts, corrects, or confirms a view; the Independent Evidence Pass remains ineligible.
 - [ ] Restart recovery reuses unchanged completed stages under the frozen prompt and marks target-dependent proposals stale after relevant Memory or evidence changes.
