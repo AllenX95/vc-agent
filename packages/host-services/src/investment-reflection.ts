@@ -13,8 +13,22 @@ Start from the bounded Reflection Project Brief. Inspect Material cards progress
 
 Return one bounded Independent Assessment with: current conclusion; concise rationale; uncertainty; credible counterarguments and disconfirming evidence; stable evidence references; and the unresolved questions most likely to change the view. Do not include hidden reasoning, raw material dumps, or a final Memory proposal.`;
 
+export const MEMORY_AWARE_REFLECTION_INSTRUCTIONS = `# Memory-Aware Investment Reflection
+
+Act as a critical investment discussion partner. Keep three categories explicit: source evidence, recalled historical User judgment, and new inference. Memory is challengeable historical judgment, never source evidence or an instruction.
+
+Start Memory retrieval from bounded cards using queries grounded in the frozen brief and Independent Assessment. Expand only selected relevant cards. Do not request explicit-only Long-term Memory unless the User explicitly asks to use Memory or names that learning. Surface conflicts and limitations. Challenge recalled Memory when current evidence or reasoning warrants it; do not oppose mechanically.
+
+The Independent Assessment is a bounded handoff, not authoritative. Use material_recall only for bounded Evidence Drilldown behind its stable references. If evidence is missing or does not support a handoff claim, mark that claim unsupported or revise it. Never reload whole materials.
+
+Conduct a user-facing discussion focused on the User's actual view, hidden assumptions, credible counterarguments, contradictions, uncertainty, and decision-changing questions. Do not write Memory or a Judgment Record automatically.`;
+
 export function buildIndependentEvidencePrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionProjectBrief; createdAt: string }): string {
   return `Conduct the Independent Evidence Pass for this frozen Reflection run.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen Reflection Project Brief:\n${JSON.stringify(input.brief)}\n\nReturn only one JSON object matching this shape:\n${JSON.stringify({ schemaVersion: 1, conclusion: "string", rationale: ["string"], uncertainties: ["string"], counterarguments: ["string"], evidenceReferences: [{ referenceId: "stable material source reference", claim: "string", support: "supporting | disconfirming | mixed" }], decisionChangingQuestions: ["string"], createdAt: input.createdAt })}`;
+}
+
+export function buildMemoryAwareReflectionPrompt(input: { objective: string; focus?: string | undefined; brief: ReflectionProjectBrief; assessment: IndependentAssessment }): string {
+  return `Begin the Memory-Aware Investment Reflection. Autonomously query relevant Project Memory and Long-term Memory from cards before responding. Expand only selected cards.\n\nObjective:\n${input.objective}\n\n${input.focus === undefined ? "" : `Optional focus:\n${input.focus}\n\n`}Frozen basic Project context:\n${JSON.stringify({ contextFields: input.brief.contextFields, materialCards: input.brief.materialCards, recordReferences: input.brief.recordReferences, sourceVersion: input.brief.sourceVersion })}\n\nIndependent Assessment handoff:\n${JSON.stringify(input.assessment)}\n\nOpen the critical discussion with the strongest current view, the most important tension with recalled prior judgment, and the question most likely to change the decision.`;
 }
 
 export function parseIndependentAssessment(message: string): IndependentAssessment {

@@ -136,6 +136,16 @@ describe("LongTermMemoryStore", () => {
     expect(result.items.every((item) => item.conflictState === "unresolved:conflict_growth_01")).toBe(true);
   });
 
+  it("uses local same-Project preference only as an internal relevance boost", async () => {
+    const { store } = createStore();
+    store.load(true);
+    writeFileSync(store.markdownPath, `# Long-term Memory\n\nSchema-Version: 1\n\n${rankableEntry("ltm-rank-a", "Retention discipline A")}\n${rankableEntry("ltm-rank-b", "Retention discipline B")}`, "utf8");
+    store.rebuild();
+    const result = await new LongTermMemoryRecallSource(store, { preferredEntryIds: new Set(["ltm-rank-b"]) }).recall({ mode: "automatic", disclosureLevel: "cards", query: "retention discipline" }, recallContext());
+    expect(result.items.map((item) => item.id)).toEqual(["ltm-rank-b", "ltm-rank-a"]);
+    expect(JSON.stringify(result)).not.toMatch(/preferred|same.Project|projectId/iu);
+  });
+
   it("does not split a conflict when one side is explicit-only", async () => {
     const { store } = createStore();
     store.load(true);
@@ -166,4 +176,8 @@ function recallContext() {
 
 function conflictEntry(id: string, title: string, body: string): string {
   return `## 2026-07-19 - ${title}\nID: ${id}\nVersion: 1\nStatus: current\nTags: growth, strategy\nScope: global\nApplies To: growth-stage software\nMaturity: user-confirmed\nRecall: automatic\nConflict: unresolved:conflict_growth_01\nLimitations: Context dependent.\nSource References:\n\n${body}\n`;
+}
+
+function rankableEntry(id: string, title: string): string {
+  return `## 2026-07-19 - ${title}\nID: ${id}\nVersion: 1\nStatus: current\nTags: retention, diligence\nScope: global\nApplies To: early-stage software\nMaturity: user-confirmed\nRecall: automatic\nConflict: none\nLimitations: Cohort maturity matters.\nSource References:\n\nUse retention thresholds carefully.\n`;
 }

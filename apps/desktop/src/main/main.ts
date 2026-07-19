@@ -25,7 +25,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, buildIndependentEvidencePrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, type CapabilityAuthorizationSnapshot } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -68,8 +68,11 @@ interface TurnContext {
   readonly promptRevision: SystemPromptRevision;
   readonly retryOfTurnId?: string;
   readonly compactionOnly?: true;
+  readonly reflectionRunId?: string;
+  readonly appendSystemPrompt?: readonly string[];
   readonly submittedAtMs: number;
   recalledStateEstimatedTokens: number;
+  recallBodyBytes: number;
 }
 
 interface ReflectionExecutionContext {
@@ -293,6 +296,15 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "reflection.independent.stop":
         return stopIndependentAssessment(command.correlationId, command.payload.runId);
+      case "reflection.memory_aware.start": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory-Aware Reflection requires explicit User initiation.");
+        return startMemoryAwareReflection(command.correlationId, command.payload.runId, command.payload.profileId);
+      }
+      case "reflection.discard": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Reflection requires explicit User initiation.");
+        const run = stateStore.discardReflection(command.payload.runId);
+        return { ...eventMetadata(command.correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+      }
       case "project.list":
         return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
       case "project.open":
@@ -729,6 +741,35 @@ function stopIndependentAssessment(correlationId: string, runId: string): HostEv
   return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
 }
 
+function startMemoryAwareReflection(correlationId: string, runId: string, profileId?: string): HostEvent {
+  let run = stateStore!.getReflectionRun(runId);
+  if (run === undefined || run.assessment === undefined) return diagnostic(correlationId, "HOST_FAILURE", "A completed Independent Assessment is required.");
+  const assessment = run.assessment;
+  if (run.status === "dialogue_active" || run.status === "memory_aware_running") {
+    return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+  }
+  const effectiveProfileId = profileId ?? stateStore!.getTaskModelAssignment("memory_aware_reflection")?.profileId ?? run.memoryAwareProfileId;
+  const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
+  if (profile === undefined) return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
+  const thread = stateStore!.getThread(run.threadId);
+  const promptRevision = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
+  if (thread?.scope !== "project" || promptRevision?.hash !== run.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
+  const turnId = randomUUID();
+  run = stateStore!.startMemoryAwareReflection(run.id, profile.id, turnId);
+  stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
+  loadedPromptByThread.set(run.threadId, promptRevision);
+  emitReflectionRun(correlationId, run);
+  const workerPrompt = buildMemoryAwareReflectionPrompt({ objective: run.objective, ...(run.focus === undefined ? {} : { focus: run.focus }), brief: run.brief, assessment });
+  return submitTurn(correlationId, { threadId: run.threadId, text: "Begin Memory-Aware Investment Reflection." }, {
+    turnId,
+    reflectionRun: run,
+    workerPrompt,
+    contextHistory: [],
+    appendSystemPrompt: [MEMORY_AWARE_REFLECTION_INSTRUCTIONS],
+    skipMemoryCandidate: true
+  });
+}
+
 function startMaterialWatcher(projectId: string): void {
   const project = stateStore!.getProject(projectId);
   if (project === undefined) return;
@@ -989,33 +1030,38 @@ function authorizeProjectProfile(thread: Thread, profile: ModelProfile): void {
 
 function submitTurn(
   correlationId: string,
-  input: { threadId: string; text: string; retryOfTurnId?: string | undefined }
+  input: { threadId: string; text: string; retryOfTurnId?: string | undefined },
+  options: { turnId?: string; reflectionRun?: ReflectionRun; workerPrompt?: string; contextHistory?: ReturnType<ThreadTrajectoryStore["contextHistory"]>; appendSystemPrompt?: readonly string[]; skipMemoryCandidate?: boolean } = {}
 ): HostEvent {
-  const turnId = randomUUID();
+  const turnId = options.turnId ?? randomUUID();
   const thread = stateStore!.getThread(input.threadId);
   if (thread === undefined) throw new Error("Thread not found");
   if (activeTurnByThread.has(input.threadId)) {
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
-  const outputIntent = detectOutputIntent(input.text);
-  const memoryRecallMode = detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
-  const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
-  const activeCapabilities = [...coreCapabilitiesForScope(thread.scope)];
-  if (detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
-  if (outputIntent) activeCapabilities.push("output.write_text");
+  const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
+  if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
+  const outputIntent = reflectionRun === undefined && detectOutputIntent(input.text);
+  const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
+  const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
+  const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
+  const activeCapabilities = reflectionRun === undefined ? [...coreCapabilitiesForScope(thread.scope)] : ["memory_recall", "material_recall", "project_state_recall"];
+  if (reflectionRun === undefined && detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
+  if (reflectionRun === undefined && outputIntent) activeCapabilities.push("output.write_text");
   const physical = stateStore!.getPhysicalContext(input.threadId);
   if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
-  const promptRevision = loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision();
+  const promptRevision = reflectionRun === undefined ? loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision() : stateStore!.getSystemPromptRevision(reflectionRun.promptSnapshot.revisionId);
   if (promptRevision === undefined) throw new Error("System Prompt is not initialized");
   const crossesPromptBoundary = !loadedPromptByThread.has(input.threadId);
-  const contextHistory = trajectoryStore!.contextHistory(input.threadId);
+  const contextHistory = options.contextHistory ?? trajectoryStore!.contextHistory(input.threadId);
+  const workerPrompt = options.workerPrompt ?? input.text;
   const promptTelemetry = {
     revisionId: promptRevision.id,
     hash: promptRevision.hash,
     contributions: {
       promptEstimatedTokens: estimateTokens(promptRevision.content),
       toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityRegistry!.inventory().filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
-      taskEstimatedTokens: estimateTokens(input.text),
+      taskEstimatedTokens: estimateTokens(workerPrompt) + estimateTokens((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).join("\n")),
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
@@ -1036,7 +1082,7 @@ function submitTurn(
   };
   trajectoryStore!.append(submitted);
   const memorySignal = detectMemoryCandidateSignal(input.text);
-  if (memorySignal !== undefined && input.retryOfTurnId === undefined && memoryCandidates !== null) {
+  if (memorySignal !== undefined && input.retryOfTurnId === undefined && memoryCandidates !== null && options.skipMemoryCandidate !== true) {
     const candidate = memoryCandidates.capture({ scope: thread.scope, ...(thread.scope === "project" ? { projectId: thread.projectId } : {}), threadId: thread.id, turnId, sourceSnippet: input.text.slice(0, 2_000), signal: memorySignal });
     emit({ ...eventMetadata(correlationId, thread.id), event: "memory.candidate.captured", payload: { candidate } });
   }
@@ -1111,6 +1157,9 @@ function submitTurn(
     promptRevision,
     submittedAtMs: Date.now(),
     recalledStateEstimatedTokens: 0,
+    recallBodyBytes: 0,
+    ...(reflectionRun === undefined ? {} : { reflectionRunId: reflectionRun.id }),
+    ...((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).length === 0 ? {} : { appendSystemPrompt: options.appendSystemPrompt ?? [MEMORY_AWARE_REFLECTION_INSTRUCTIONS] }),
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   turnContexts.set(turnId, context);
@@ -1149,7 +1198,7 @@ function submitTurn(
     executionScope: thread.scope === "project"
       ? { kind: "project", projectId: thread.projectId }
       : { kind: "unscoped", threadId: thread.id },
-    prompt: input.text,
+    prompt: workerPrompt,
     profile: {
       provider: profile.provider,
       model: profile.model,
@@ -1160,7 +1209,7 @@ function submitTurn(
       schemaVersion: 1,
       revisionId: promptRevision.id,
       systemPrompt: promptRevision.content,
-      appendSystemPrompt: []
+      appendSystemPrompt: [...(context.appendSystemPrompt ?? [])]
     },
     extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
   };
@@ -1202,6 +1251,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     promptRevision,
     submittedAtMs: Date.now(),
     recalledStateEstimatedTokens: 0,
+    recallBodyBytes: 0,
     compactionOnly: true
   };
   turnContexts.set(turnId, context);
@@ -1337,6 +1387,10 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
       }
     };
     trajectoryStore!.append(record);
+    if (context.reflectionRunId !== undefined) {
+      const run = stateStore!.getReflectionRun(context.reflectionRunId);
+      if (run?.status === "memory_aware_running" && run.memoryInitialTurnId === context.turnId) emitReflectionRun(context.correlationId, stateStore!.activateReflectionDialogue(run.id));
+    }
     finishTurn(context);
     acknowledgeTrajectory(context, record);
     emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
@@ -1358,6 +1412,10 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     payload: { profile: toTrajectoryProfile(context.profile), failure: workerEvent.failure }
   };
   trajectoryStore!.append(record);
+  if (context.reflectionRunId !== undefined) {
+    const run = stateStore!.getReflectionRun(context.reflectionRunId);
+    if (run?.status === "memory_aware_running") emitReflectionRun(context.correlationId, stateStore!.failMemoryAwareReflection(run.id, workerEvent.failure));
+  }
   finishTurn(context);
   acknowledgeTrajectory(context, record);
   emit({ ...ipcMetadata(record), event: "turn.failed", payload: { threadId: context.threadId, turnId: context.turnId, text: context.text, ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }), profile: context.profile, failure: workerEvent.failure } });
@@ -1525,7 +1583,13 @@ function finalizeCapability(
   emitToRenderer: boolean
 ): HostEvent {
   let result = initialResult;
-  if (result.retrieval !== undefined) context.recalledStateEstimatedTokens += Math.ceil(result.retrieval.bodyBytes / 4);
+  if (result.retrieval !== undefined && context.reflectionRunId !== undefined && context.recallBodyBytes + result.retrieval.bodyBytes > 32_000) {
+    result = { schemaVersion: 1, requestId: result.requestId, status: "failed", code: "REFLECTION_RECALL_BUDGET_EXCEEDED", content: "The bounded Reflection recall budget is exhausted. Continue the discussion from already recalled evidence and Memory." };
+  }
+  if (result.retrieval !== undefined) {
+    context.recallBodyBytes += result.retrieval.bodyBytes;
+    context.recalledStateEstimatedTokens += Math.ceil(result.retrieval.bodyBytes / 4);
+  }
   let projectOutput: ProjectOutputArtifact | undefined;
   if (result.activatedCapabilities !== undefined) {
     for (const capabilityId of result.activatedCapabilities) {
@@ -1715,6 +1779,10 @@ function interruptTurn(
     }
   };
   trajectoryStore!.append(record);
+  if (context.reflectionRunId !== undefined) {
+    const run = stateStore!.getReflectionRun(context.reflectionRunId);
+    if (run?.status === "memory_aware_running") emitReflectionRun(context.correlationId, stateStore!.interruptMemoryAwareReflection(run.id));
+  }
   finishTurn(context);
   if (reason === "worker_exit") loadedPromptByThread.delete(context.threadId);
   emit({ ...ipcMetadata(record), event: "turn.interrupted", payload: { threadId: context.threadId, turnId: context.turnId, partialMessage: record.payload.partialMessage, reason, profile: context.profile } });
@@ -1882,7 +1950,8 @@ app.whenReady().then(() => {
           throw new Error("Expand only Long-term Memory cards returned earlier in this Turn.");
         }
       }
-      const source = new LongTermMemoryRecallSource(longTermMemories);
+      const preferredEntryIds = turn.reflectionRunId === undefined || memoryEvolution === null ? undefined : memoryEvolution.preferredMemoryEntryIds(scope.kind === "project" ? scope.projectId : "");
+      const source = new LongTermMemoryRecallSource(longTermMemories, preferredEntryIds === undefined ? {} : { preferredEntryIds });
       envelope = await source.recall({ mode: turn.memoryRecallMode, disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
       if (input.disclosureLevel === "cards") for (const item of envelope.items) turn.longTermMemoryCardIds.add(item.id);
     }

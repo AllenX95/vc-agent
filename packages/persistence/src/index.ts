@@ -67,7 +67,7 @@ interface ParsedMaterialRow {
 interface ReflectionRunRow {
   id: string; thread_id: string; project_id: string; framing: "reflection" | "retrospective"; objective: string; focus: string | null;
   status: ReflectionRun["status"]; brief_json: string; prompt_revision_id: string; prompt_hash: string; independent_profile_id: string | null;
-  launch_override_profile_id: string | null; assessment_json: string | null; failure_json: string | null; session_file: string | null; created_at: string; updated_at: string;
+  launch_override_profile_id: string | null; memory_aware_profile_id: string | null; memory_initial_turn_id: string | null; assessment_json: string | null; failure_json: string | null; session_file: string | null; created_at: string; updated_at: string;
 }
 
 export interface CreateReflectionRunInput {
@@ -286,12 +286,14 @@ export class HostStateStore {
         framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
         objective TEXT NOT NULL,
         focus TEXT,
-        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted')),
+        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted', 'memory_aware_running', 'dialogue_active', 'memory_aware_failed', 'memory_aware_interrupted', 'discarded')),
         brief_json TEXT NOT NULL,
         prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
         prompt_hash TEXT NOT NULL,
         independent_profile_id TEXT REFERENCES model_profiles(id),
         launch_override_profile_id TEXT REFERENCES model_profiles(id),
+        memory_aware_profile_id TEXT REFERENCES model_profiles(id),
+        memory_initial_turn_id TEXT,
         assessment_json TEXT,
         failure_json TEXT,
         session_file TEXT,
@@ -299,6 +301,7 @@ export class HostStateStore {
         updated_at TEXT NOT NULL
       ) STRICT;
     `);
+    if (!this.#columnExists("reflection_runs", "memory_aware_profile_id")) this.#migrateReflectionRunsV10();
     if (!this.#columnExists("physical_contexts", "prompt_revision_id")) this.#database.exec("ALTER TABLE physical_contexts ADD COLUMN prompt_revision_id TEXT");
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)")
@@ -314,6 +317,9 @@ export class HostStateStore {
         .run(new Date().toISOString());
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (9, ?)")
+        .run(new Date().toISOString());
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (10, ?)")
         .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
@@ -362,6 +368,36 @@ export class HostStateStore {
           PRIMARY KEY(project_id, profile_id)
         ) STRICT;
       `);
+  }
+
+  #migrateReflectionRunsV10(): void {
+    this.#database.exec(`
+      ALTER TABLE reflection_runs RENAME TO reflection_runs_v9;
+      CREATE TABLE reflection_runs (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL UNIQUE REFERENCES threads(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
+        objective TEXT NOT NULL,
+        focus TEXT,
+        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted', 'memory_aware_running', 'dialogue_active', 'memory_aware_failed', 'memory_aware_interrupted', 'discarded')),
+        brief_json TEXT NOT NULL,
+        prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
+        prompt_hash TEXT NOT NULL,
+        independent_profile_id TEXT REFERENCES model_profiles(id),
+        launch_override_profile_id TEXT REFERENCES model_profiles(id),
+        memory_aware_profile_id TEXT REFERENCES model_profiles(id),
+        memory_initial_turn_id TEXT,
+        assessment_json TEXT,
+        failure_json TEXT,
+        session_file TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO reflection_runs(id, thread_id, project_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, assessment_json, failure_json, session_file, created_at, updated_at)
+        SELECT id, thread_id, project_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, assessment_json, failure_json, session_file, created_at, updated_at FROM reflection_runs_v9;
+      DROP TABLE reflection_runs_v9;
+    `);
   }
 
   #columnExists(table: string, column: string): boolean {
@@ -563,6 +599,11 @@ export class HostStateStore {
     return row === undefined ? undefined : mapReflectionRun(row);
   }
 
+  getReflectionRunByThread(threadId: string): ReflectionRun | undefined {
+    const row = this.#database.prepare("SELECT * FROM reflection_runs WHERE thread_id = ?").get(threadId) as ReflectionRunRow | undefined;
+    return row === undefined ? undefined : mapReflectionRun(row);
+  }
+
   selectReflectionProfile(id: string, profileId: string, launchOverride: boolean): ReflectionRun {
     if (this.getModelProfile(profileId) === undefined) throw new Error("Reflection Model Profile not found");
     const result = this.#database.prepare(`
@@ -610,10 +651,54 @@ export class HostStateStore {
   }
 
   recoverInterruptedReflections(): ReflectionRun[] {
-    const ids = (this.#database.prepare("SELECT id FROM reflection_runs WHERE status = 'independent_running'").all() as Array<{ id: string }>).map((row) => row.id);
+    const ids = (this.#database.prepare("SELECT id FROM reflection_runs WHERE status IN ('independent_running', 'memory_aware_running')").all() as Array<{ id: string }>).map((row) => row.id);
     if (ids.length === 0) return [];
     this.#database.prepare("UPDATE reflection_runs SET status = 'independent_interrupted', updated_at = ? WHERE status = 'independent_running'").run(new Date().toISOString());
+    this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_interrupted', updated_at = ? WHERE status = 'memory_aware_running'").run(new Date().toISOString());
     return ids.map((id) => this.getReflectionRun(id)!);
+  }
+
+  startMemoryAwareReflection(id: string, profileId: string, initialTurnId: string): ReflectionRun {
+    if (this.getModelProfile(profileId) === undefined) throw new Error("Reflection Model Profile not found");
+    const run = this.getReflectionRun(id);
+    if (run === undefined) throw new Error("Reflection run not found");
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.#database.prepare(`UPDATE reflection_runs SET memory_aware_profile_id = ?, memory_initial_turn_id = ?, status = 'memory_aware_running', failure_json = NULL, updated_at = ? WHERE id = ? AND status IN ('independent_completed', 'memory_aware_failed', 'memory_aware_interrupted') AND assessment_json IS NOT NULL`)
+        .run(profileId, initialTurnId, new Date().toISOString(), id);
+      if (result.changes !== 1) throw new Error("Reflection is not ready for Memory-Aware dialogue");
+      this.#database.prepare("UPDATE threads SET active_profile_id = ?, state_version = state_version + 1 WHERE id = ?").run(profileId, run.threadId);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getReflectionRun(id)!;
+  }
+
+  activateReflectionDialogue(id: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'dialogue_active', failure_json = NULL, updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  failMemoryAwareReflection(id: string, failure: ProviderFailure): ReflectionRun {
+    const parsed = providerFailureSchema.parse(failure);
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_failed', failure_json = ?, updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(JSON.stringify(parsed), new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  interruptMemoryAwareReflection(id: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_interrupted', updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
+    return this.getReflectionRun(id)!;
+  }
+
+  discardReflection(id: string): ReflectionRun {
+    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'discarded', updated_at = ? WHERE id = ? AND status NOT IN ('independent_running', 'memory_aware_running')").run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Active Reflection cannot be discarded");
+    return this.getReflectionRun(id)!;
   }
 
   refreshMaterialInventory(projectId: string, records: readonly RefreshInventoryRecord[]): { materials: MaterialInventoryItem[]; changedMaterialIds: string[] } {
@@ -1024,6 +1109,8 @@ function mapReflectionRun(row: ReflectionRunRow): ReflectionRun {
     promptSnapshot: { revisionId: row.prompt_revision_id, hash: row.prompt_hash },
     ...(row.independent_profile_id === null ? {} : { independentProfileId: row.independent_profile_id }),
     ...(row.launch_override_profile_id === null ? {} : { launchOverrideProfileId: row.launch_override_profile_id }),
+    ...(row.memory_aware_profile_id === null ? {} : { memoryAwareProfileId: row.memory_aware_profile_id }),
+    ...(row.memory_initial_turn_id === null ? {} : { memoryInitialTurnId: row.memory_initial_turn_id }),
     ...(row.assessment_json === null ? {} : { assessment: independentAssessmentSchema.parse(JSON.parse(row.assessment_json)) }),
     ...(row.failure_json === null ? {} : { failure: providerFailureSchema.parse(JSON.parse(row.failure_json)) }),
     ...(row.session_file === null ? {} : { sessionFile: row.session_file }),

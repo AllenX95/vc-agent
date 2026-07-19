@@ -272,7 +272,8 @@ export interface LongTermMemoryRecallItem {
 export class LongTermMemoryRecallSource implements RecallSource<LongTermMemoryRecallQuery, LongTermMemoryRecallItem> {
   readonly sourceClass = "memory" as const;
   readonly #store: LongTermMemoryStore;
-  constructor(store: LongTermMemoryStore) { this.#store = store; }
+  readonly #preferredEntryIds: ReadonlySet<string>;
+  constructor(store: LongTermMemoryStore, options: { preferredEntryIds?: ReadonlySet<string> } = {}) { this.#store = store; this.#preferredEntryIds = options.preferredEntryIds ?? new Set(); }
 
   async recall(query: LongTermMemoryRecallQuery, context: RecallContext): Promise<BoundedRecallEnvelope<LongTermMemoryRecallItem>> {
     const index = this.#store.loadIndex();
@@ -286,7 +287,8 @@ export class LongTermMemoryRecallSource implements RecallSource<LongTermMemoryRe
     });
     const scored = eligible.flatMap((entry) => {
       if (ids.size > 0) return ids.has(entry.id) ? [{ entry, score: 10_000, reason: "selected card id" }] : [];
-      const score = relevanceScore(entry, terms);
+      const baseScore = relevanceScore(entry, terms);
+      const score = baseScore > 0 ? baseScore + (this.#preferredEntryIds.has(entry.id) ? 4 : 0) : 0;
       return score > 0 ? [{ entry, score, reason: matchedReason(entry, terms) }] : [];
     }).sort((left, right) => right.score - left.score || left.entry.id.localeCompare(right.entry.id));
     const selected = includeConflictPeers(scored, eligible);

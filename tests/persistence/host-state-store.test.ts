@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 9,
+      stateSchemaVersion: 10,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -41,17 +41,17 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 9, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(9);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 10, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(10);
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 9 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 10 });
     verified.close();
   });
 
@@ -59,13 +59,13 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath, { failAfterStageValidation: true });
-    expect(recovery.statePreparation).toMatchObject({ status: "migration_failed", mode: "read_only_recovery", storedVersion: 8, rollbackAvailable: true });
-    expect(recovery.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(8);
+    expect(recovery.statePreparation).toMatchObject({ status: "migration_failed", mode: "read_only_recovery", storedVersion: 9, rollbackAvailable: true });
+    expect(recovery.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(9);
     expect(() => recovery.setAccessMode("full")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
@@ -83,13 +83,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 9 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 10 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 9 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 10 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -235,6 +235,27 @@ describe("HostStateStore", () => {
     expect(store.recoverInterruptedReflections()).toMatchObject([{ id: run.id, status: "independent_interrupted" }]);
     expect(store.recoverInterruptedReflections()).toEqual([]);
     expect(store.getBootstrapState("0.1.0", idleActivity).runtimeActivity).toEqual(idleActivity);
+    store.close();
+  });
+
+  it("persists the isolated Memory-Aware Profile and explicit dialogue lifecycle", () => {
+    const { store } = createStore();
+    const project = store.registerProject({ id: crypto.randomUUID(), displayName: "Memory Reflection", path: "C:\\deals\\memory-reflection", createdAt: new Date().toISOString() });
+    const prompt = store.ensureDefaultSystemPrompt("Frozen VC prompt");
+    const evidenceProfile = store.createModelProfile({ name: "Evidence", provider: "fixture-a", model: "evidence", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
+    const dialogueProfile = store.createModelProfile({ name: "Dialogue", provider: "fixture-b", model: "dialogue", thinkingLevel: "medium", encryptedCredential: new Uint8Array([2]) });
+    let run = store.createReflectionRun({ projectId: project.id, framing: "reflection", objective: "Review this Project", promptRevision: prompt, independentProfileId: evidenceProfile.id, brief: { schemaVersion: 1, projectId: project.id, sourceVersion: "e".repeat(64), createdAt: new Date().toISOString(), contextFields: [], materialCards: [], recordReferences: [] } });
+    store.markReflectionRunning(run.id);
+    run = store.completeIndependentAssessment(run.id, { schemaVersion: 1, conclusion: "Uncertain", rationale: [], uncertainties: ["Retention"], counterarguments: [], evidenceReferences: [], decisionChangingQuestions: ["Month six?"], createdAt: new Date().toISOString() });
+    run = store.startMemoryAwareReflection(run.id, dialogueProfile.id, "memory-turn-1");
+    expect(run).toMatchObject({ status: "memory_aware_running", memoryAwareProfileId: dialogueProfile.id, memoryInitialTurnId: "memory-turn-1" });
+    expect(store.getThread(run.threadId)).toMatchObject({ activeProfileId: dialogueProfile.id, stateVersion: 2 });
+    run = store.failMemoryAwareReflection(run.id, { kind: "provider", code: "REJECTED", message: "Sanitized", provider: "fixture-b", model: "dialogue" });
+    expect(run.status).toBe("memory_aware_failed");
+    run = store.startMemoryAwareReflection(run.id, dialogueProfile.id, "memory-turn-2");
+    run = store.activateReflectionDialogue(run.id);
+    expect(run).toMatchObject({ status: "dialogue_active", memoryInitialTurnId: "memory-turn-2" });
+    expect(store.discardReflection(run.id).status).toBe("discarded");
     store.close();
   });
 

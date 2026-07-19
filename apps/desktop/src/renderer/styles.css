@@ -300,6 +300,8 @@ button { font: inherit; letter-spacing: 0; }
 .reflection-controls select { min-width: 220px; min-height: 32px; padding: 0 8px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; }
 .reflection-controls button { min-height: 32px; padding: 0 10px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #344239; }
 .reflection-controls .primary-button { border-color: #294a37; background: #294a37; color: #fff; }
+.reflection-dialogue-boundary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid #dfe3de; color: #697169; font-size: 10px; }
+.reflection-dialogue-boundary button { min-height: 29px; padding: 0 9px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #58463e; font-size: 10px; }
 .material-inventory > p { margin: 5px 0 12px; color: #747c75; font-size: 10px; }
 .material-row { align-items: center; display: flex; gap: 8px; justify-content: space-between; min-height: 48px; padding: 7px 2px; border-top: 1px solid #dfe3de; }
 .material-row > div { display: grid; gap: 3px; min-width: 0; }

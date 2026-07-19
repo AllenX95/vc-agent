@@ -95,7 +95,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 9, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 10, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -114,7 +114,7 @@ test("keeps old state active when staged migration fails", async () => {
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version = 9").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version = 10").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -129,7 +129,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 8, supportedVersion: 9, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 10, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -976,6 +976,7 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
   try {
     let window = await application.firstWindow();
     await window.getByRole("button", { name: "Open project" }).click();
+    writeFileSync(join(projectDirectory, "outputs", "system", "project-memory.md"), projectReflectionMemoryFixture(), "utf8");
     const projectName = projectDirectory.split(/[\\/]/).at(-1)!;
     await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
     await window.getByRole("button", { name: "Reflection", exact: true }).click();
@@ -992,8 +993,13 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
 
     await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByLabel("Long-term Memory").fill(reflectionLongTermMemoryFixture());
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
     await createProfile(window, { name: "Rejected Reflection fixture", provider: "vc-agent-reflection-provider-failure-faux", model: "failure-model", apiKey: "sk-reflection-secret-key" });
     await createProfile(window, { name: "Reflection fixture", provider: "vc-agent-reflection-faux", model: "vc-agent-reflection-faux-model", apiKey: "fixture-key" });
+    await createProfile(window, { name: "Critical Reflection fixture", provider: "vc-agent-reflection-memory-faux", model: "vc-agent-reflection-memory-faux-model", apiKey: "fixture-key" });
     await window.getByRole("button", { name: "Settings" }).click();
     const workspace = window.getByTestId("reflection-workspace");
     await workspace.getByLabel("Independent Evidence Profile").selectOption({ label: "Rejected Reflection fixture" });
@@ -1018,12 +1024,29 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     expect(JSON.parse(run.assessment_json)).toMatchObject({ conclusion: expect.stringContaining("continued diligence") });
     expect(physical).toBe(0);
 
+    await workspace.getByLabel("Memory-Aware Reflection Profile").selectOption({ label: "Critical Reflection fixture" });
+    await workspace.getByRole("button", { name: "Start critical dialogue" }).click();
+    await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
+    await expect(window.getByText("Which retention result would change your current view?", { exact: false })).toBeVisible();
+    await expect(window.locator(".tool-activity").filter({ hasText: "memory_recall" })).toHaveCount(3);
+    await expect(window.locator(".conversation")).not.toContainText("src_ref_reflection");
+    await expect(window.locator(".conversation")).not.toContainText("projectId");
+
+    await window.getByLabel("Message").fill("I would require month-six retention above 80% in a representative cohort.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("That threshold clarifies the decision rule.", { exact: false })).toBeVisible({ timeout: 30_000 });
+    const activeDatabase = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    expect(activeDatabase.prepare("SELECT status FROM reflection_runs").get()).toMatchObject({ status: "dialogue_active" });
+    expect(Number((activeDatabase.prepare("SELECT COUNT(*) AS count FROM physical_contexts WHERE thread_id = ?").get(run.thread_id) as { count: number }).count)).toBe(1);
+    activeDatabase.close();
+
     await application.close();
     application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory });
     window = await application.firstWindow();
     await window.getByRole("button", { name: "Investment Reflection", exact: true }).click();
-    await expect(window.getByTestId("reflection-workspace")).toContainText("Evidence pass complete");
+    await expect(window.getByTestId("reflection-workspace")).toContainText("Reflection dialogue");
     await expect(window.getByTestId("reflection-workspace")).toContainText("continued diligence");
+    await expect(window.getByText("That threshold clarifies the decision rule.", { exact: false })).toBeVisible();
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
   } finally {
     await application.close();
@@ -1031,6 +1054,14 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     rmSync(projectDirectory, { recursive: true, force: true });
   }
 });
+
+function projectReflectionMemoryFixture(): string {
+  return `# Project Memory\n\n## 2026-07-19 - Retention is the core execution risk\nTags: retention, execution, diligence\nSource: user-confirmed\nScope: project\n\nRetention quality matters more than top-line pilot count.\n\nRelated:\n- Thread:\n- Output:\n`;
+}
+
+function reflectionLongTermMemoryFixture(): string {
+  return `# Long-term Memory\n\nSchema-Version: 1\n\n## 2026-07-19 - Early retention thresholds need representative cohorts\nID: ltm-reflection-pattern\nVersion: 1\nStatus: current\nTags: retention, execution risk\nScope: global\nApplies To: early-stage software, Series A diligence\nMaturity: user-confirmed\nRecall: automatic\nConflict: none\nLimitations: Immature or selected cohorts can mislead.\nSource References: src_ref_reflection\n\nUse representative cohort retention before treating early demand as repeatable.\n`;
+}
 
 async function launchApplication(root: string, userDataDirectory: string, extraEnvironment: Record<string, string> = {}) {
   return electron.launch({

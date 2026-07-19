@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIndependentEvidencePrompt, buildReflectionProjectBrief, parseIndependentAssessment, reflectionFraming } from "@vc-agent/host-services";
+import { MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, parseIndependentAssessment, reflectionFraming } from "@vc-agent/host-services";
 
 describe("Reflection Project Brief", () => {
   it("contains bounded navigation metadata without paths, Memory, material bodies, or prior conclusions", () => {
@@ -45,5 +45,19 @@ describe("Reflection Project Brief", () => {
     const assessment = { schemaVersion: 1, conclusion: "Continue diligence.", rationale: ["Evidence is bounded."], uncertainties: [], counterarguments: [], evidenceReferences: [], decisionChangingQuestions: ["Does retention hold?"], createdAt: "2026-07-19T09:00:00.000Z" };
     expect(parseIndependentAssessment(`\`\`\`json\n${JSON.stringify(assessment)}\n\`\`\``)).toEqual(assessment);
     expect(() => parseIndependentAssessment("Continue diligence, probably.")).toThrow("INVALID_INDEPENDENT_ASSESSMENT");
+  });
+
+  it("hands only the bounded assessment and basic brief into the critical dialogue", () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const prompt = buildMemoryAwareReflectionPrompt({
+      objective: "Review this Project",
+      brief: { schemaVersion: 1, projectId, sourceVersion: "d".repeat(64), createdAt: new Date().toISOString(), contextFields: [{ id: "stage", label: "Financing stage", value: "Series A" }], materialCards: [], recordReferences: [] },
+      assessment: { schemaVersion: 1, conclusion: "Retention is uncertain.", rationale: ["Cohorts are immature."], uncertainties: ["Selection bias"], counterarguments: ["Expansion may offset churn."], evidenceReferences: [], decisionChangingQuestions: ["Does month-six retention hold?"], createdAt: new Date().toISOString() }
+    });
+    expect(prompt).toContain("Independent Assessment handoff");
+    expect(prompt).toContain("Series A");
+    expect(prompt).not.toMatch(/material body|first-stage transcript|hidden reasoning/iu);
+    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("Memory is challengeable historical judgment");
+    expect(MEMORY_AWARE_REFLECTION_INSTRUCTIONS).toContain("bounded Evidence Drilldown");
   });
 });

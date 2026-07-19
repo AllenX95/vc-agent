@@ -48,3 +48,17 @@ export function reflectionFixtureResponses() {
     }))
   ];
 }
+
+export function memoryAwareReflectionFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "project_memory", disclosureLevel: "cards", query: "retention execution risk", maxItems: 4, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "cards", query: "early stage retention execution risk", maxItems: 4, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "full", entryIds: ["ltm-reflection-pattern"], maxItems: 2, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("The source evidence remains incomplete. Your historical judgment emphasizes retention risk, but it is not source evidence and may over-weight execution before cohort data matures. Which retention result would change your current view?"),
+    fauxAssistantMessage("That threshold clarifies the decision rule. The remaining tension is whether the current evidence can measure it without selection bias.")
+  ];
+}
+
+export function memoryAwareReflectionContinuationFixtureResponses() {
+  return [fauxAssistantMessage("That threshold clarifies the decision rule. The remaining tension is whether the current evidence can measure it without selection bias.")];
+}

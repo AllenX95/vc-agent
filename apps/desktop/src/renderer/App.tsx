@@ -137,6 +137,7 @@ export function App() {
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
   const activeReflection = reflectionRuns.find((run) => run.threadId === activeThreadId);
+  const activeReflectionProfile = profiles.find((profile) => profile.id === activeReflection?.memoryAwareProfileId);
   const items = activeThreadId === null ? [] : conversations[activeThreadId] ?? [];
   const hasActiveTurn = items.some(
     (item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming")
@@ -511,6 +512,10 @@ export function App() {
     void invoke(createCommand({ command: "reflection.independent.start", payload: { runId: run.id, ...(profileId === undefined || profileId === "" ? {} : { profileId }) } }));
   };
 
+  const startMemoryAwareReflection = (run: ReflectionRun, profileId?: string) => {
+    void invoke(createCommand({ command: "reflection.memory_aware.start", payload: { runId: run.id, ...(profileId === undefined || profileId === "" ? {} : { profileId }) } }));
+  };
+
   return (
     <div className={`app-shell ${readOnlyRecovery ? "read-only-recovery" : ""}`}>
       <aside className="left-rail" aria-label="Navigation">
@@ -552,9 +557,10 @@ export function App() {
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : reflectionStatusLabel(activeReflection.status)}</span></header>
+            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span></header>
             <div className="message-list">
-              {activeReflection !== undefined ? <ReflectionWorkspace run={activeReflection} profiles={profiles} start={startOrRetryReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} /> : items.length === 0 ? <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
+              {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} />}
+              {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
                 <MessageItem key={item.id} item={item} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
               ))}
               {Object.values(memoryCandidates).filter((candidate) => candidate.threadId === activeThreadId && candidate.status === "active").map((candidate) => <div className="memory-candidate" key={candidate.id}><div><strong>Memory candidate captured</strong><span>{candidate.sourceSnippet}</span></div><div>{candidate.scope === "project" && <button type="button" onClick={() => reviewCandidate(candidate)}>Review</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "memory.candidate.dismiss", payload: { candidateId: candidate.id } }))}>Dismiss</button></div></div>)}
@@ -580,16 +586,16 @@ export function App() {
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
         {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>The first pass is isolated from Project Memory and Long-term Memory.</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder="Review this Project broadly" /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
 
-        {view === "workspace" && activeThread !== undefined && activeReflection === undefined && (
+        {view === "workspace" && activeThread !== undefined && (activeReflection === undefined || activeReflection.status === "dialogue_active") && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
             <textarea aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={hasActiveTurn || readOnlyRecovery} />
             <div className="composer-footer">
-              <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={hasActiveTurn || profiles.length === 0 || readOnlyRecovery}>
+              <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={activeReflection !== undefined || hasActiveTurn || profiles.length === 0 || readOnlyRecovery}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
               <span className="output-location" title={activeThread.scope === "unscoped" ? activeThread.outputLocation : projects.find((project) => project.id === activeThread.projectId)?.path}>{activeThread.scope === "unscoped" ? activeThread.outputLocation ?? "No output location" : "Project scoped"}</span>
               {bootstrap?.accessMode === "full" && <span className="full-access-indicator">Full access</span>}
-              <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={hasActiveTurn || activeProfile === undefined || items.length === 0 || readOnlyRecovery}><Minimize2 size={15} /></button>
+              <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={activeReflection !== undefined || hasActiveTurn || activeProfile === undefined || items.length === 0 || readOnlyRecovery}><Minimize2 size={15} /></button>
               {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0 || readOnlyRecovery}><Send size={16} /></button>}
             </div>
           </form>
@@ -611,15 +617,18 @@ export function App() {
   );
 }
 
-function ReflectionWorkspace({ run, profiles, start, stop, configure }: { run: ReflectionRun; profiles: ModelProfile[]; start(run: ReflectionRun, profileId?: string): void; stop(): void; configure(): void }) {
-  const [profileId, setProfileId] = useState(run.independentProfileId ?? "");
-  useEffect(() => setProfileId(run.independentProfileId ?? ""), [run.id, run.independentProfileId]);
+function ReflectionWorkspace({ run, profiles, taskAssignments, start, startMemoryAware, stop, discard, configure }: { run: ReflectionRun; profiles: ModelProfile[]; taskAssignments: TaskModelAssignment[]; start(run: ReflectionRun, profileId?: string): void; startMemoryAware(run: ReflectionRun, profileId?: string): void; stop(): void; discard(): void; configure(): void }) {
+  const evidenceStage = ["awaiting_profile", "ready", "independent_running", "independent_failed", "independent_interrupted"].includes(run.status);
+  const assignedMemoryProfile = taskAssignments.find((item) => item.taskType === "memory_aware_reflection")?.profileId;
+  const [profileId, setProfileId] = useState(evidenceStage ? run.independentProfileId ?? "" : run.memoryAwareProfileId ?? assignedMemoryProfile ?? "");
+  useEffect(() => setProfileId(evidenceStage ? run.independentProfileId ?? "" : run.memoryAwareProfileId ?? assignedMemoryProfile ?? ""), [run.id, run.independentProfileId, run.memoryAwareProfileId, assignedMemoryProfile, evidenceStage]);
   const assessment = run.assessment;
   return <article className="reflection-workspace" data-testid="reflection-workspace">
     <div className="reflection-summary"><div><span className={`reflection-status ${run.status}`}>{reflectionStatusLabel(run.status)}</span><h2>{run.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection"}</h2><p>{run.objective}</p>{run.focus && <p><strong>Focus:</strong> {run.focus}</p>}</div><dl><div><dt>Brief</dt><dd>{run.brief.materialCards.length} materials · {run.brief.recordReferences.length} records</dd></div><div><dt>Prompt</dt><dd>{run.promptSnapshot.hash.slice(0, 12)}</dd></div><div><dt>Frozen</dt><dd>{new Date(run.createdAt).toLocaleString()}</dd></div></dl></div>
     {assessment !== undefined && <section className="assessment"><h3>Independent Assessment</h3><p className="assessment-conclusion">{assessment.conclusion}</p><AssessmentList title="Rationale" items={assessment.rationale} /><AssessmentList title="Uncertainties" items={assessment.uncertainties} /><AssessmentList title="Counterarguments" items={assessment.counterarguments} /><AssessmentList title="Decision-changing questions" items={assessment.decisionChangingQuestions} />{assessment.evidenceReferences.length > 0 && <div><h4>Evidence references</h4>{assessment.evidenceReferences.map((reference) => <p className="evidence-reference" key={`${reference.referenceId}-${reference.claim}`}><strong>{reference.support}</strong> {reference.claim}<span>{reference.referenceId}</span></p>)}</div>}</section>}
     {run.failure !== undefined && <div className="reflection-failure" role="alert"><strong>{run.failure.code}</strong><p>{run.failure.message}</p>{run.failure.requestId && <span>Request {run.failure.requestId}</span>}</div>}
-    {run.status !== "independent_completed" && <div className="reflection-controls"><select aria-label="Independent Evidence Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={run.status === "independent_running"}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>{profiles.length === 0 ? <button type="button" onClick={configure}>Configure profiles</button> : run.status === "independent_running" ? <button type="button" onClick={stop}>Stop</button> : <button className="primary-button" type="button" onClick={() => start(run, profileId)} disabled={profileId === ""}>{run.status === "ready" || run.status === "awaiting_profile" ? "Start evidence pass" : "Retry evidence pass"}</button>}</div>}
+    {run.status !== "dialogue_active" && run.status !== "discarded" && <div className="reflection-controls"><select aria-label={evidenceStage ? "Independent Evidence Profile" : "Memory-Aware Reflection Profile"} value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={run.status === "independent_running" || run.status === "memory_aware_running"}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>{profiles.length === 0 ? <button type="button" onClick={configure}>Configure profiles</button> : run.status === "independent_running" ? <button type="button" onClick={stop}>Stop</button> : evidenceStage ? <button className="primary-button" type="button" onClick={() => start(run, profileId)} disabled={profileId === ""}>{run.status === "ready" || run.status === "awaiting_profile" ? "Start evidence pass" : "Retry evidence pass"}</button> : run.status === "memory_aware_running" ? <span>Starting dialogue...</span> : <><button type="button" onClick={discard}>Discard</button><button className="primary-button" type="button" onClick={() => startMemoryAware(run, profileId)} disabled={profileId === ""}>{run.status === "independent_completed" ? "Start critical dialogue" : "Retry critical dialogue"}</button></>}</div>}
+    {run.status === "dialogue_active" && <div className="reflection-dialogue-boundary"><span>Memory recalls and evidence drilldowns remain visible in this task.</span><button type="button" onClick={discard}>Discard Reflection</button></div>}
   </article>;
 }
 
@@ -629,7 +638,7 @@ function AssessmentList({ title, items }: { title: string; items: string[] }) {
 }
 
 function reflectionStatusLabel(status: ReflectionRun["status"]): string {
-  return ({ awaiting_profile: "Awaiting profile", ready: "Ready", independent_running: "Analyzing evidence", independent_completed: "Evidence pass complete", independent_failed: "Evidence pass failed", independent_interrupted: "Evidence pass interrupted" })[status];
+  return ({ awaiting_profile: "Awaiting profile", ready: "Ready", independent_running: "Analyzing evidence", independent_completed: "Evidence pass complete", independent_failed: "Evidence pass failed", independent_interrupted: "Evidence pass interrupted", memory_aware_running: "Recalling prior judgment", dialogue_active: "Reflection dialogue", memory_aware_failed: "Reflection start failed", memory_aware_interrupted: "Reflection start interrupted", discarded: "Discarded" })[status];
 }
 
 function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {

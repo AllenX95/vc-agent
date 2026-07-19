@@ -264,6 +264,11 @@ export class MemoryEvolutionStore {
     return { sourceReferenceId, status: "available", record };
   }
 
+  preferredMemoryEntryIds(projectId: string): Set<string> {
+    const sourceReferences = new Set(readProvenance(this.#provenancePath).filter((record) => record.projectId === projectId && record.availability === "active").map((record) => record.sourceReferenceId));
+    return new Set(this.#memory.readCurrent().entries.filter((entry) => entry.sourceReferenceIds.some((reference) => sourceReferences.has(reference))).map((entry) => entry.id));
+  }
+
   commit(id: string): ReturnType<LongTermMemoryStore["rebuild"]> {
     if (this.#committing) throw new Error("MEMORY_EVOLUTION_COMMIT_IN_PROGRESS");
     const patch = this.#readPatch(id);

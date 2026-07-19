@@ -240,9 +240,9 @@ export type ProviderFailure = z.infer<typeof providerFailureSchema>;
 
 export const reflectionRunSchema = z.object({
   schemaVersion: z.literal(1), id: z.string().uuid(), threadId: z.string().min(1), projectId: z.string().uuid(), framing: z.enum(["reflection", "retrospective"]),
-  objective: z.string().min(1).max(5_000), focus: z.string().max(5_000).optional(), status: z.enum(["awaiting_profile", "ready", "independent_running", "independent_completed", "independent_failed", "independent_interrupted"]),
+  objective: z.string().min(1).max(5_000), focus: z.string().max(5_000).optional(), status: z.enum(["awaiting_profile", "ready", "independent_running", "independent_completed", "independent_failed", "independent_interrupted", "memory_aware_running", "dialogue_active", "memory_aware_failed", "memory_aware_interrupted", "discarded"]),
   brief: reflectionProjectBriefSchema, promptSnapshot: z.object({ revisionId: z.string().uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }),
-  independentProfileId: z.string().min(1).optional(), launchOverrideProfileId: z.string().min(1).optional(), assessment: independentAssessmentSchema.optional(), failure: providerFailureSchema.optional(),
+  independentProfileId: z.string().min(1).optional(), launchOverrideProfileId: z.string().min(1).optional(), memoryAwareProfileId: z.string().min(1).optional(), memoryInitialTurnId: z.string().min(1).optional(), assessment: independentAssessmentSchema.optional(), failure: providerFailureSchema.optional(),
   sessionFile: z.string().min(1).optional(), createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 });
 export type ReflectionRun = z.infer<typeof reflectionRunSchema>;
@@ -325,6 +325,8 @@ const listReflectionRunsCommandSchema = commandMetadataSchema.extend({ command: 
 const startProjectReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.start.project"), payload: z.object({ projectId: z.string().uuid(), focus: z.string().trim().max(5_000).optional(), profileId: z.string().min(1).optional() }) });
 const startIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
 const stopIndependentAssessmentCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.independent.stop"), payload: z.object({ runId: z.string().uuid() }) });
+const startMemoryAwareReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.memory_aware.start"), payload: z.object({ runId: z.string().uuid(), profileId: z.string().min(1).optional() }) });
+const discardReflectionCommandSchema = commandMetadataSchema.extend({ command: z.literal("reflection.discard"), payload: z.object({ runId: z.string().uuid() }) });
 const listThreadsCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.list") });
 const listProjectsCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.list") });
 const openProjectCommandSchema = commandMetadataSchema.extend({ command: z.literal("project.open") });
@@ -442,6 +444,8 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   startProjectReflectionCommandSchema,
   startIndependentAssessmentCommandSchema,
   stopIndependentAssessmentCommandSchema,
+  startMemoryAwareReflectionCommandSchema,
+  discardReflectionCommandSchema,
   listProjectsCommandSchema,
   openProjectCommandSchema,
   resolveProjectCollisionCommandSchema,
