@@ -173,15 +173,16 @@ export interface MemoryCandidate {
   readonly turnId: string;
   readonly capturedAt: string;
   readonly sourceSnippet: string;
-  readonly signal: "explicit_remember" | "strong_user_judgment";
+  readonly sourceKind: "ordinary_user_signal" | "reflection_dialogue";
+  readonly signal: "explicit_remember" | "strong_user_judgment" | "reflection_adoption" | "reflection_correction" | "reflection_confirmation";
   readonly status: "active" | "dismissed" | "promoted";
 }
 
 export class MemoryCandidateStore {
   readonly #path: string;
   constructor(path: string) { this.#path = path; }
-  capture(candidate: Omit<MemoryCandidate, "id" | "capturedAt" | "status">): MemoryCandidate {
-    const record: MemoryCandidate = { ...candidate, id: randomUUID(), capturedAt: new Date().toISOString(), status: "active" };
+  capture(candidate: Omit<MemoryCandidate, "id" | "capturedAt" | "status" | "sourceKind"> & { readonly sourceKind?: MemoryCandidate["sourceKind"] }): MemoryCandidate {
+    const record: MemoryCandidate = { ...candidate, sourceKind: candidate.sourceKind ?? "ordinary_user_signal", id: randomUUID(), capturedAt: new Date().toISOString(), status: "active" };
     this.#append({ operation: "capture", candidate: record });
     return record;
   }
@@ -196,7 +197,10 @@ export class MemoryCandidateStore {
     if (!existsSync(this.#path)) return [];
     const latest = new Map<string, MemoryCandidate>();
     for (const line of readFileSync(this.#path, "utf8").split("\n").filter(Boolean)) {
-      try { const event = JSON.parse(line) as { candidate: MemoryCandidate }; latest.set(event.candidate.id, event.candidate); } catch { /* Preserve later valid records. */ }
+      try {
+        const event = JSON.parse(line) as { candidate: MemoryCandidate & { sourceKind?: MemoryCandidate["sourceKind"] } };
+        latest.set(event.candidate.id, { ...event.candidate, sourceKind: event.candidate.sourceKind ?? "ordinary_user_signal" });
+      } catch { /* Preserve later valid records. */ }
     }
     return [...latest.values()];
   }

@@ -1043,6 +1043,16 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(window.locator(".tool-activity.completed").filter({ hasText: "reflection_outcome_propose" })).toBeVisible();
     await expect(workspace.getByTestId("judgment-record-draft")).toContainText("Draft · not authoritative");
     await expect(workspace.getByTestId("learning-proposal-draft")).toContainText("Draft · not in Memory");
+    const reflectionTrajectoryPath = join(userDataDirectory, "threads", run.thread_id, "trajectory.jsonl");
+    const reflectionTrajectory = readFileSync(reflectionTrajectoryPath, "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    const submittedReflectionTurns = reflectionTrajectory.filter((event) => event.event === "turn.submitted");
+    expect(submittedReflectionTurns.find((event) => event.payload.text === "Begin Memory-Aware Investment Reflection.")?.payload).not.toHaveProperty("dreamEligibility");
+    const adoptedTurn = submittedReflectionTurns.find((event) => event.payload.text.startsWith("I adopt month-six retention"));
+    expect(adoptedTurn?.payload.dreamEligibility).toEqual({ sourceKind: "reflection_dialogue", signal: "adoption" });
+    await expect.poll(() => readFileSync(reflectionTrajectoryPath, "utf8").split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)).some((event) => event.event === "turn.completed" && event.turnId === adoptedTurn?.turnId)).toBe(true);
+    expect(readFileSync(reflectionTrajectoryPath, "utf8")).not.toContain("The current evidence supports continued diligence");
+    const reflectionCandidates = readFileSync(join(userDataDirectory, "memory", "candidates.jsonl"), "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line).candidate).filter((candidate) => candidate.threadId === run.thread_id);
+    expect(reflectionCandidates).toMatchObject([{ turnId: adoptedTurn.turnId, sourceKind: "reflection_dialogue", signal: "reflection_adoption", status: "active" }]);
     expect(existsSync(judgmentRoot)).toBe(false);
     expect(readFileSync(join(userDataDirectory, "memory", "long-term", "long-term-memory.md"), "utf8")).not.toContain("ltm-representative-retention-threshold");
     await workspace.getByRole("button", { name: "Confirm Judgment Record" }).click();

@@ -31,12 +31,19 @@ const trajectoryEventBase = z.object({
   occurredAt: z.string().datetime()
 });
 
+export const reflectionDreamEligibilitySchema = z.object({
+  sourceKind: z.literal("reflection_dialogue"),
+  signal: z.enum(["adoption", "correction", "confirmation"])
+});
+export type ReflectionDreamEligibility = z.infer<typeof reflectionDreamEligibilitySchema>;
+
 const turnSubmitted = trajectoryEventBase.extend({
   event: z.literal("turn.submitted"),
   payload: z.object({
     text: z.string(),
     idempotencyKey: z.string().min(1),
     retryOfTurnId: z.string().min(1).optional(),
+    dreamEligibility: reflectionDreamEligibilitySchema.optional(),
     profile: trajectoryProfileSchema.optional(),
     prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
   })

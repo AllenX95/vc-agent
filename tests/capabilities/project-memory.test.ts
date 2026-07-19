@@ -57,8 +57,10 @@ describe("Project Memory", () => {
     expect(detectMemoryCandidateSignal("请记住这个判断：渠道质量更重要")).toBe("explicit_remember");
     expect(detectMemoryCandidateSignal("我认为生产稳定性是核心风险")).toBe("strong_user_judgment");
     expect(detectMemoryCandidateSignal("总结这份材料")).toBeUndefined();
+    const reflectionCandidate = candidates.capture({ scope: "unscoped", threadId: "reflection-thread", turnId: "reflection-turn", sourceSnippet: "I adopt this view.", sourceKind: "reflection_dialogue", signal: "reflection_adoption" });
+    expect(reflectionCandidate).toMatchObject({ sourceKind: "reflection_dialogue", signal: "reflection_adoption", status: "active" });
     const candidate = candidates.capture({ scope: "project", projectId, threadId: "thread-1", turnId: "turn-1", sourceSnippet: "我认为生产稳定性是核心风险", signal: "strong_user_judgment" });
-    expect(candidates.list()).toMatchObject([{ id: candidate.id, status: "active" }]);
+    expect(candidates.list().find((item) => item.id === candidate.id)).toMatchObject({ status: "active", sourceKind: "ordinary_user_signal" });
     expect(store.load(projectId, project, false)?.sourceHash).toBe(initial.sourceHash);
     expect(candidates.resolve(candidate.id, "dismissed")).toMatchObject({ status: "dismissed" });
     expect(candidates.resolve(candidate.id, "promoted")).toBeUndefined();

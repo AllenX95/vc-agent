@@ -221,7 +221,8 @@ export const memoryMaintenanceStateSchema = z.object({
 export type MemoryMaintenanceState = z.infer<typeof memoryMaintenanceStateSchema>;
 export const memoryCandidateSchema = z.object({
   id: z.string().uuid(), scope: z.enum(["project", "unscoped"]), projectId: z.string().uuid().optional(), threadId: z.string().min(1), turnId: z.string().min(1),
-  capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), signal: z.enum(["explicit_remember", "strong_user_judgment"]), status: z.enum(["active", "dismissed", "promoted"])
+  capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), sourceKind: z.enum(["ordinary_user_signal", "reflection_dialogue"]).default("ordinary_user_signal"),
+  signal: z.enum(["explicit_remember", "strong_user_judgment", "reflection_adoption", "reflection_correction", "reflection_confirmation"]), status: z.enum(["active", "dismissed", "promoted"])
 });
 export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;
 export const projectOutputArtifactSchema = z.object({

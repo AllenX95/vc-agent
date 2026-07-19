@@ -325,8 +325,12 @@ A potential memory signal that Dream recovers from auditable Thread trajectory b
 _Avoid_: Existing Memory, arbitrary model output, automatic promotion, untraceable inference
 
 **Eligible Dream Trajectory**:
-User-participating conversation history that Dream may inspect for missed memory signals, including Project Threads, Unscoped Threads, and the user-facing dialogue of Investment Reflection Threads while excluding internal or autonomous model work.
+User-participating conversation history that Dream may inspect for missed memory signals, including Project Threads, Unscoped Threads, and only completed Investment Reflection dialogue exchanges carrying an attributable Reflection Dream Eligibility Signal, while excluding internal or autonomous model work.
 _Avoid_: Independent Evidence Pass, Dream's own sessions, background helper sessions, pure tool trajectory, all runtime history
+
+**Reflection Dream Eligibility Signal**:
+A Host-recorded marker on a completed user-facing Reflection dialogue turn where the User explicitly adopts, corrects, or confirms an investment view. It makes that bounded exchange inspectable by Dream but gives it no Memory authority and does not qualify surrounding assistant output independently.
+_Avoid_: Assistant proposal, initial Reflection response, failed turn, outcome-preparation command, tool result, automatic Memory write
 
 **Thread Trajectory**:
 The complete user-inspectable sequence of messages, tool activity, permissions, interruptions, Sub-Agent records, and other product events retained for one Thread independently of its current Physical Model Context.
