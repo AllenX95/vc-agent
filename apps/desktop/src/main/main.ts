@@ -9,6 +9,7 @@ import {
   type ActorRef,
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
+  type DreamProfileSnapshot,
   type HostCommand,
   type HostEvent,
   type ReflectionRun,
@@ -26,7 +27,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -49,6 +50,7 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "task_model_assignment.list",
   "reflection.list",
   "reflection.outcome.list",
+  "dream.state.load",
   "project.list",
   "project.material.list",
   "project.output.list",
@@ -105,6 +107,7 @@ let longTermMemories: LongTermMemoryStore | null = null;
 let memoryEvolution: MemoryEvolutionStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
 let reflectionOutcomes: ReflectionOutcomeStore | null = null;
+let dreamReviews: DreamReviewStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -183,6 +186,48 @@ function diagnostic(
   message: string
 ): HostEvent {
   return { ...eventMetadata(correlationId), event: "diagnostic.raised", payload: { code, message, recoverable: true } };
+}
+
+function currentEligibleDreamTrajectory() {
+  if (stateStore === null || trajectoryStore === null) return [];
+  const threads = stateStore.listThreads();
+  const reflectionThreadIds = new Set(stateStore.listReflectionRuns().map((run) => run.threadId));
+  return selectEligibleDreamTrajectory(
+    threads,
+    new Map(threads.map((thread) => [thread.id, trajectoryStore!.loadEvents(thread.id)])),
+    reflectionThreadIds
+  );
+}
+
+function synchronizeDreamSchedulingIndex(): void {
+  if (stateStore?.isReadOnlyRecovery !== false || dreamReviews === null || memoryCandidates === null) return;
+  dreamReviews.synchronizeSchedulingIndex(currentEligibleDreamTrajectory(), memoryCandidates.list());
+}
+
+function resolveDreamProfile(profileId?: string): ModelProfile | undefined {
+  if (stateStore === null) return undefined;
+  const effectiveId = profileId ?? stateStore.getTaskModelAssignment("dream")?.profileId;
+  return effectiveId === undefined ? undefined : stateStore.getModelProfile(effectiveId);
+}
+
+function toDreamProfileSnapshot(profile: ModelProfile): DreamProfileSnapshot {
+  return { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel };
+}
+
+function dreamStateEvent(correlationId: string): HostEvent {
+  if (dreamReviews === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
+  const profile = resolveDreamProfile();
+  const dueProposal = dreamReviews.dueCheck(profile === undefined ? undefined : toDreamProfileSnapshot(profile));
+  const reminder = dreamReviews.pendingReminder();
+  return {
+    ...eventMetadata(correlationId),
+    event: "dream.state.updated",
+    payload: {
+      state: dreamReviews.load(),
+      ...(dueProposal === undefined ? {} : { dueProposal }),
+      ...(reminder === undefined ? {} : { reminder })
+    }
+  };
 }
 
 async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Promise<HostEvent> {
@@ -546,7 +591,47 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "memory.candidate.dismiss": {
         const candidate = memoryCandidates?.resolve(command.payload.candidateId, "dismissed");
         if (candidate === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory candidate is no longer active.");
+        synchronizeDreamSchedulingIndex();
         return { ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate } };
+      }
+      case "dream.state.load":
+        return dreamStateEvent(command.correlationId);
+      case "dream.interval.set": {
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
+        dreamReviews.setReviewIntervalDays(command.payload.reviewIntervalDays);
+        return dreamStateEvent(command.correlationId);
+      }
+      case "dream.reminder.defer": {
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
+        dreamReviews.defer(command.payload.until);
+        return dreamStateEvent(command.correlationId);
+      }
+      case "dream.launch": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream requires explicit User initiation.");
+        if (dreamReviews === null || memoryCandidates === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        const profile = resolveDreamProfile(command.payload.profileId);
+        if (profile === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Configure a Dream Task Model Assignment or choose a Model Profile before launching Dream.");
+        const promptRevision = stateStore.getActiveSystemPromptRevision();
+        if (promptRevision === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "An active System Prompt Revision is required before launching Dream.");
+        synchronizeDreamSchedulingIndex();
+        try {
+          dreamReviews.createBatch({ promptRevision, profile: toDreamProfileSnapshot(profile), trajectory: currentEligibleDreamTrajectory(), candidates: memoryCandidates.list() });
+          return dreamStateEvent(command.correlationId);
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream batch could not be created.");
+        }
+      }
+      case "dream.resume": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Resuming Dream requires explicit User action.");
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        try { dreamReviews.resume(command.payload.batchId); return dreamStateEvent(command.correlationId); }
+        catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream could not be resumed."); }
+      }
+      case "dream.discard": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Dream requires explicit User action.");
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        try { dreamReviews.discard(command.payload.batchId); return dreamStateEvent(command.correlationId); }
+        catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream could not be discarded."); }
       }
       case "project.memory.append.confirm": {
         const candidate = memoryCandidates?.list().find((item) => item.id === command.payload.candidateId && item.status === "active");
@@ -556,6 +641,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           const document = projectMemories.append(project.id, project.path, { title: command.payload.title, tags: command.payload.tags, body: command.payload.body, threadId: candidate.threadId }, command.payload.expectedSourceHash);
           ownProjectMemoryWrites.set(project.id, document.sourceHash);
           const resolved = memoryCandidates!.resolve(candidate.id, "promoted")!;
+          synchronizeDreamSchedulingIndex();
           emit({ ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate: resolved } });
           return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "confirmed_append" } };
         } catch (error) {
@@ -604,6 +690,25 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
             activities: trajectoryStore.projectActivities(command.payload.threadId)
           }
         };
+      case "thread.trajectory.delete": {
+        if (command.actor.actorType !== "user" || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread history deletion requires explicit User confirmation.");
+        if (activeTurnByThread.has(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting its history.");
+        if (stateStore.getThread(command.payload.threadId) === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
+        const before = dreamReviews?.load().batches ?? [];
+        const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
+        const removedCandidateIds = memoryCandidates?.removeByThread(command.payload.threadId) ?? [];
+        dreamReviews?.redactThreadSources(command.payload.threadId);
+        trajectoryStore.deleteThreadHistory(command.payload.threadId);
+        loadedPromptByThread.delete(command.payload.threadId);
+        sequenceByThread.set(command.payload.threadId, 0);
+        return { ...eventMetadata(command.correlationId, command.payload.threadId), event: "thread.trajectory.deleted", payload: { threadId: command.payload.threadId, removedCandidateIds, affectedBatchIds } };
+      }
+      case "thread.archive.set": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Thread archival requires explicit User action.");
+        if (activeTurnByThread.has(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing archive state.");
+        const thread = stateStore.setThreadArchived(command.payload.threadId, command.payload.archived);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.archived", payload: { thread } };
+      }
       case "thread.create.unscoped": {
         const thread = stateStore.createUnscopedThread(command.payload.title);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
@@ -1229,6 +1334,7 @@ function submitTurn(
   const memorySignal = dreamEligibility === undefined ? detectMemoryCandidateSignal(input.text) : `reflection_${dreamEligibility.signal}` as const;
   if (memorySignal !== undefined && input.retryOfTurnId === undefined && memoryCandidates !== null && options.skipMemoryCandidate !== true) {
     const candidate = memoryCandidates.capture({ scope: thread.scope, ...(thread.scope === "project" ? { projectId: thread.projectId } : {}), threadId: thread.id, turnId, sourceSnippet: input.text.slice(0, 2_000), sourceKind: reflectionRun?.status === "dialogue_active" ? "reflection_dialogue" : "ordinary_user_signal", signal: memorySignal });
+    synchronizeDreamSchedulingIndex();
     emit({ ...eventMetadata(correlationId, thread.id), event: "memory.candidate.captured", payload: { candidate } });
   }
 
@@ -1477,6 +1583,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
       payload
     };
     trajectoryStore!.append(record);
+    synchronizeDreamSchedulingIndex();
     if (workerEvent.event === "thread.compaction.completed") loadedPromptByThread.delete(context.threadId);
     if (workerEvent.event === "thread.compaction.completed") acknowledgeTrajectory(context, record);
     emit({ ...ipcMetadata(record), event: workerEvent.event, payload: { threadId: context.threadId, turnId: context.turnId, ...payload } });
@@ -2090,11 +2197,13 @@ app.whenReady().then(() => {
   }
   reflectionOutcomes = new ReflectionOutcomeStore(join(app.getPath("userData"), "memory", "reflection", "outcomes.jsonl"));
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"), { createRoot: !readOnlyRecovery });
+  dreamReviews = new DreamReviewStore(join(app.getPath("userData"), "memory", "dream"), { createRoot: !readOnlyRecovery });
   for (const thread of stateStore.listThreads()) {
     if (!readOnlyRecovery) trajectoryStore.recoverInterruptedTurns(thread.id);
     const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
     sequenceByThread.set(thread.id, lastSequence);
   }
+  if (!readOnlyRecovery) synchronizeDreamSchedulingIndex();
   inflight = new InflightTurnCoordinator(trajectoryStore);
   if (!readOnlyRecovery) stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
   capabilityRegistry = new CapabilityRegistry();

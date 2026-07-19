@@ -171,6 +171,7 @@ export interface MemoryCandidate {
   readonly projectId?: string;
   readonly threadId: string;
   readonly turnId: string;
+  readonly sourceReference: string;
   readonly capturedAt: string;
   readonly sourceSnippet: string;
   readonly sourceKind: "ordinary_user_signal" | "reflection_dialogue";
@@ -181,8 +182,8 @@ export interface MemoryCandidate {
 export class MemoryCandidateStore {
   readonly #path: string;
   constructor(path: string) { this.#path = path; }
-  capture(candidate: Omit<MemoryCandidate, "id" | "capturedAt" | "status" | "sourceKind"> & { readonly sourceKind?: MemoryCandidate["sourceKind"] }): MemoryCandidate {
-    const record: MemoryCandidate = { ...candidate, sourceKind: candidate.sourceKind ?? "ordinary_user_signal", id: randomUUID(), capturedAt: new Date().toISOString(), status: "active" };
+  capture(candidate: Omit<MemoryCandidate, "id" | "capturedAt" | "status" | "sourceKind" | "sourceReference"> & { readonly sourceKind?: MemoryCandidate["sourceKind"]; readonly sourceReference?: string }): MemoryCandidate {
+    const record: MemoryCandidate = { ...candidate, sourceKind: candidate.sourceKind ?? "ordinary_user_signal", sourceReference: candidate.sourceReference ?? `thread:${candidate.threadId}/turn:${candidate.turnId}`, id: randomUUID(), capturedAt: new Date().toISOString(), status: "active" };
     this.#append({ operation: "capture", candidate: record });
     return record;
   }
@@ -198,11 +199,28 @@ export class MemoryCandidateStore {
     const latest = new Map<string, MemoryCandidate>();
     for (const line of readFileSync(this.#path, "utf8").split("\n").filter(Boolean)) {
       try {
-        const event = JSON.parse(line) as { candidate: MemoryCandidate & { sourceKind?: MemoryCandidate["sourceKind"] } };
-        latest.set(event.candidate.id, { ...event.candidate, sourceKind: event.candidate.sourceKind ?? "ordinary_user_signal" });
+        const event = JSON.parse(line) as { candidate: MemoryCandidate & { sourceKind?: MemoryCandidate["sourceKind"]; sourceReference?: string } };
+        latest.set(event.candidate.id, { ...event.candidate, sourceKind: event.candidate.sourceKind ?? "ordinary_user_signal", sourceReference: event.candidate.sourceReference ?? `thread:${event.candidate.threadId}/turn:${event.candidate.turnId}` });
       } catch { /* Preserve later valid records. */ }
     }
     return [...latest.values()];
+  }
+  removeByThread(threadId: string): string[] {
+    if (!existsSync(this.#path)) return [];
+    const retained: string[] = [];
+    const removed = new Set<string>();
+    for (const line of readFileSync(this.#path, "utf8").split("\n").filter(Boolean)) {
+      try {
+        const event = JSON.parse(line) as { candidate?: { id?: string; threadId?: string } };
+        if (event.candidate?.threadId === threadId) {
+          if (event.candidate.id !== undefined) removed.add(event.candidate.id);
+        } else {
+          retained.push(line);
+        }
+      } catch { /* Invalid operational records are dropped during privacy-preserving rewrite. */ }
+    }
+    atomicWrite(this.#path, retained.length === 0 ? "" : `${retained.join("\n")}\n`);
+    return [...removed];
   }
   #append(event: { operation: "capture" | "resolve"; candidate: MemoryCandidate }): void {
     mkdirSync(dirname(this.#path), { recursive: true });

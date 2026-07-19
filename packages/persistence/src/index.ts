@@ -31,6 +31,7 @@ interface ThreadRow {
   state_version: number;
   scope: "unscoped" | "project";
   project_id: string | null;
+  archived_at: string | null;
   created_at: string;
 }
 
@@ -329,6 +330,10 @@ export class HostStateStore {
         .run(new Date().toISOString());
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (11, ?)")
+        .run(new Date().toISOString());
+      if (!this.#columnExists("threads", "archived_at")) this.#database.exec("ALTER TABLE threads ADD COLUMN archived_at TEXT");
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (12, ?)")
         .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
@@ -903,6 +908,12 @@ export class HostStateStore {
     return row === undefined ? undefined : mapThread(row);
   }
 
+  setThreadArchived(threadId: string, archived: boolean): Thread {
+    const result = this.#database.prepare("UPDATE threads SET archived_at = ?, state_version = state_version + 1 WHERE id = ?").run(archived ? new Date().toISOString() : null, threadId);
+    if (result.changes !== 1) throw new Error("Thread not found");
+    return this.getThread(threadId)!;
+  }
+
   listUnscopedThreads(): UnscopedThread[] {
     const rows = this.#database.prepare("SELECT * FROM threads WHERE scope = 'unscoped' ORDER BY created_at ASC").all() as unknown as ThreadRow[];
     return rows.map(mapThread) as UnscopedThread[];
@@ -1111,6 +1122,7 @@ function mapThread(row: ThreadRow): Thread {
     id: row.id,
     title: row.title,
     ...(row.active_profile_id === null ? {} : { activeProfileId: row.active_profile_id }),
+    ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
     stateVersion: row.state_version,
     createdAt: row.created_at
   };

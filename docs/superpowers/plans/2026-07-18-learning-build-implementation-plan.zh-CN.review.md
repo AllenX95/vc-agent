@@ -100,14 +100,14 @@
 
 **验收标准：**
 
-- [ ] 打开当前 schema 的行为保持不变，且不启动 Pi。
-- [ ] 受支持的旧 fixture 通过 staged destination 迁移，完整验证后才激活。
-- [ ] 激活前注入失败时，旧数据库和文件仍按原字节保持 active，rollback 后可写。
-- [ ] Migration 不调用模型、不改写用户 Memory 文本、不推断 provenance、不改变投资含义。
-- [ ] Derived index 可以重建，但不能成为权威 migration 输入。
-- [ ] 存储 schema 高于当前应用时，在任何 Turn 或状态修改前进入可见 Read-only Recovery Mode。
-- [ ] Read-only Recovery Mode 允许检查和受支持的导出，但阻止 Thread、Memory edit、workflow commit、Settings write 和 Project system write。
-- [ ] Environment Doctor 显示 active schema、pending migration、rollback availability 和脱敏 failure。
+- [x] 打开当前 schema 的行为保持不变，且不启动 Pi。
+- [x] 受支持的旧 fixture 通过 staged destination 迁移，完整验证后才激活。
+- [x] 激活前注入失败时，旧数据库和文件仍按原字节保持 active，rollback 后可写。
+- [x] Migration 不调用模型、不改写用户 Memory 文本、不推断 provenance、不改变投资含义。
+- [x] Derived index 可以重建，但不能成为权威 migration 输入。
+- [x] 存储 schema 高于当前应用时，在任何 Turn 或状态修改前进入可见 Read-only Recovery Mode。
+- [x] Read-only Recovery Mode 允许检查和受支持的导出，但阻止 Thread、Memory edit、workflow commit、Settings write 和 Project system write。
+- [x] Environment Doctor 显示 active schema、pending migration、rollback availability 和脱敏 failure。
 
 ### L1. 建立权威、可召回的 Long-term Memory
 
@@ -117,17 +117,17 @@
 
 **验收标准：**
 
-- [ ] 首次启动不创建 Long-term Memory；首次打开 Settings Memory view 时才延迟创建最小 active file。
-- [ ] Settings 显示全局位置、打开目录、refresh/re-index、文件摘要、warning 和最近更新时间。
-- [ ] Active entry 具有稳定 id、version、current status、title、tags、applicability、maturity、Recall policy、conflict state、content 和 opaque source reference。
-- [ ] Parser 保留 malformed content，只索引安全 entry，并在不调用 LLM repair 的情况下显示 warning。
-- [ ] 外部编辑改变权威版本并重建 index，不启动 Pi。
-- [ ] Automatic Judgment Recall 只检索与 judgment-heavy work 相关的 `automatic` entry。
-- [ ] Explicit Memory Recall 只绕过 task classification，不绕过 relevance、scope、de-identification、conflict、active-version 或 budget。
-- [ ] `explicit-only` entry 只在用户显式请求覆盖它们时出现。
-- [ ] Unscoped recall 返回去项目化 Long-term Memory，不能访问来源 Project 或任何 Project State。
-- [ ] 冲突 view 一起返回，并标记为 Memory 而不是 source evidence。
-- [ ] 普通 recall payload 不包含 Project identity、company name、path、未公开指标、交易条款、原始 excerpt 或本地 provenance mapping。
+- [x] 首次启动不创建 Long-term Memory；首次打开 Settings Memory view 时才延迟创建最小 active file。
+- [x] Settings 显示全局位置、打开目录、refresh/re-index、文件摘要、warning 和最近更新时间。
+- [x] Active entry 具有稳定 id、version、current status、title、tags、applicability、maturity、Recall policy、conflict state、content 和 opaque source reference。
+- [x] Parser 保留 malformed content，只索引安全 entry，并在不调用 LLM repair 的情况下显示 warning。
+- [x] 外部编辑改变权威版本并重建 index，不启动 Pi。
+- [x] Automatic Judgment Recall 只检索与 judgment-heavy work 相关的 `automatic` entry。
+- [x] Explicit Memory Recall 只绕过 task classification，不绕过 relevance、scope、de-identification、conflict、active-version 或 budget。
+- [x] `explicit-only` entry 只在用户显式请求覆盖它们时出现。
+- [x] Unscoped recall 返回去项目化 Long-term Memory，不能访问来源 Project 或任何 Project State。
+- [x] 冲突 view 一起返回，并标记为 Memory 而不是 source evidence。
+- [x] 普通 recall payload 不包含 Project identity、company name、path、未公开指标、交易条款、原始 excerpt 或本地 provenance mapping。
 
 ### L2. 在不重写历史的前提下演化 Memory
 
@@ -137,17 +137,17 @@
 
 **验收标准：**
 
-- [ ] Patch 记录所有目标文件 base hash；任何 manual 或 workflow write 改变目标后 patch 变 stale。
-- [ ] `Add` 创建稳定新 entry；`Reinforce` 增加 provenance 或 maturity，但不复制语义。
-- [ ] `Narrow` 和 `Revise` 创建新的 current version，并将旧原文与理由保存到 Cognitive Evolution History。
-- [ ] `Contradict` 将实质冲突保存为 Unresolved Memory Conflict。
-- [ ] `Merge / Condense` 将删除的冗余内容移入 Condensation Archive，不伪造 cognitive evolution。
-- [ ] Recency、重复次数、置信措辞或模型偏好不能将 `Contradict` 自动变成 `Revise`。
-- [ ] Commit 前显示最终 Markdown 和 lineage diff；Full Access 也必须确认。
-- [ ] Active Memory、history、archive、provenance 和 index 要么全部激活，要么全部不激活。
-- [ ] Manual edit/delete 不推断 evolution、archive、provenance 或 history。
-- [ ] Archive retention 支持 30、90、180、365 天或永久；默认不自动删除，且永不包含 Cognitive Evolution History。
-- [ ] Source drilldown 只在来源 Project 内、遵守 Provider Authorization 时可用；缺失来源显示 unavailable。
+- [x] Patch 记录所有目标文件 base hash；任何 manual 或 workflow write 改变目标后 patch 变 stale。
+- [x] `Add` 创建稳定新 entry；`Reinforce` 增加 provenance 或 maturity，但不复制语义。
+- [x] `Narrow` 和 `Revise` 创建新的 current version，并将旧原文与理由保存到 Cognitive Evolution History。
+- [x] `Contradict` 将实质冲突保存为 Unresolved Memory Conflict。
+- [x] `Merge / Condense` 将删除的冗余内容移入 Condensation Archive，不伪造 cognitive evolution。
+- [x] Recency、重复次数、置信措辞或模型偏好不能将 `Contradict` 自动变成 `Revise`。
+- [x] Commit 前显示最终 Markdown 和 lineage diff；Full Access 也必须确认。
+- [x] Active Memory、history、archive、provenance 和 index 要么全部激活，要么全部不激活。
+- [x] Manual edit/delete 不推断 evolution、archive、provenance 或 history。
+- [x] Archive retention 支持 30、90、180、365 天或永久；默认不自动删除，且永不包含 Cognitive Evolution History。
+- [x] Source drilldown 只在来源 Project 内、遵守 Provider Authorization 时可用；缺失来源显示 unavailable。
 
 ### L3. 运行宽泛启动的 Project Independent Evidence Pass
 
@@ -157,16 +157,16 @@
 
 **验收标准：**
 
-- [ ] Reflection 只从用户显式操作启动，并创建专用 Investment Reflection Thread 和 run record。
-- [ ] 默认目标检查当前 view、assumption、risk、counterargument 和可能适用的 prior learning；focus 和 Material selection 可选。
-- [ ] 用户提到后续结果或过去判断是否成立时，UI 明确使用 Investment Retrospective framing。
-- [ ] Launch 冻结 scope、Project Identity、objective、Brief version、Workflow Prompt Snapshot 和有效 Evidence Profile。
-- [ ] Brief 只包含有边界的基础 Context field、Material card、record 或 Output reference，排除 Memory、prior conclusion、path 和 Material body。
-- [ ] Independent Evidence Pass 不接收 Project Memory、Long-term Memory、Memory index result 或 Local Memory Provenance。
-- [ ] 模型按需扩展 evidence，并输出有边界的 Independent Assessment。
-- [ ] 缺少 assignment 或 Profile 时 run 保持本地可见、可 retry，不启动 Pi，也不选择 fallback。
-- [ ] Provider Failure 保留 brief 和 run state，显示脱敏信息，只允许手动 retry 或调整 Profile。
-- [ ] 重启只显示 run 和已完成 Assessment，不启动 Pi；未完成模型工作只允许显式恢复。
+- [x] Reflection 只从用户显式操作启动，并创建专用 Investment Reflection Thread 和 run record。
+- [x] 默认目标检查当前 view、assumption、risk、counterargument 和可能适用的 prior learning；focus 和 Material selection 可选。
+- [x] 用户提到后续结果或过去判断是否成立时，UI 明确使用 Investment Retrospective framing。
+- [x] Launch 冻结 scope、Project Identity、objective、Brief version、Workflow Prompt Snapshot 和有效 Evidence Profile。
+- [x] Brief 只包含有边界的基础 Context field、Material card、record 或 Output reference，排除 Memory、prior conclusion、path 和 Material body。
+- [x] Independent Evidence Pass 不接收 Project Memory、Long-term Memory、Memory index result 或 Local Memory Provenance。
+- [x] 模型按需扩展 evidence，并输出有边界的 Independent Assessment。
+- [x] 缺少 assignment 或 Profile 时 run 保持本地可见、可 retry，不启动 Pi，也不选择 fallback。
+- [x] Provider Failure 保留 brief 和 run state，显示脱敏信息，只允许手动 retry 或调整 Profile。
+- [x] 重启只显示 run 和已完成 Assessment，不启动 Pi；未完成模型工作只允许显式恢复。
 
 ### L4. 完成 Memory-Aware Reflection 并确认结果
 
@@ -176,17 +176,17 @@
 
 **验收标准：**
 
-- [ ] 第二阶段只接收 bounded Assessment、objective 和允许的 stage instructions，不接收第一阶段原始材料、transcript、full context 或 hidden reasoning。
-- [ ] 它根据 Assessment 与 Brief 自主查询 Memory，从 card 开始并选择性展开。
-- [ ] same-Project provenance 可以提高候选排序，但不进入 Provider payload，也不使 Memory 具有权威性。
-- [ ] 推断相关性使用 applicability、industry、financing stage、risk、diligence question、counterargument 和 uncertainty。
-- [ ] 所有 recall 可见且有 budget；没有显式 intent 时继续排除 `explicit-only`。
-- [ ] Critical Reflection Stance 区分 evidence、historical User judgment 和 new inference，并在有理由时挑战 Memory。
+- [x] 第二阶段只接收 bounded Assessment、objective 和允许的 stage instructions，不接收第一阶段原始材料、transcript、full context 或 hidden reasoning。
+- [x] 它根据 Assessment 与 Brief 自主查询 Memory，从 card 开始并选择性展开。
+- [x] same-Project provenance 可以提高候选排序，但不进入 Provider payload，也不使 Memory 具有权威性。
+- [x] 推断相关性使用 applicability、industry、financing stage、risk、diligence question、counterargument 和 uncertainty。
+- [x] 所有 recall 可见且有 budget；没有显式 intent 时继续排除 `explicit-only`。
+- [x] Critical Reflection Stance 区分 evidence、historical User judgment 和 new inference，并在有理由时挑战 Memory。
 - [x] Evidence Drilldown 只读取 stable reference 后的 bounded excerpt；不受支持的 handoff claim 必须被标记。
-- [ ] 对话可以保持 unresolved 或 discard，不强制生成 Judgment Record 或 Memory patch。
-- [ ] Confirmed Judgment Record 保存 view、reasoning、uncertainty、counterargument、evidence reference、decision state 和 source availability。
-- [ ] Long-term Learning Proposal 陈述去标识化 applicability、limitation/counterexample、maturity 和 source reference，并与 active Memory 比较。
-- [ ] Proposal 必须使用 L2 preview 和 confirmation path，不能绕过 Memory Evolution rule。
+- [x] 对话可以保持 unresolved 或 discard，不强制生成 Judgment Record 或 Memory patch。
+- [x] Confirmed Judgment Record 保存 view、reasoning、uncertainty、counterargument、evidence reference、decision state 和 source availability。
+- [x] Long-term Learning Proposal 陈述去标识化 applicability、limitation/counterexample、maturity 和 source reference，并与 active Memory 比较。
+- [x] Proposal 必须使用 L2 preview 和 confirmation path，不能绕过 Memory Evolution rule。
 - [x] Project Reflection 的 Judgment Record 属于 Project；Unscoped Reflection 写入选定 Output Location，且不访问 Project State。
 - [x] 只有用户明确采纳、修正或确认的 Reflection dialogue 才具备 Dream eligibility；Independent Evidence Pass 永远不具备。
 - [x] Restart recovery 复用未变化的 stage；相关 Memory 或 evidence 改变后 proposal 变 stale。
@@ -199,16 +199,16 @@
 
 **验收标准：**
 
-- [ ] 默认七天 Due Check 只读 scheduling metadata，不创建 batch、不读 trajectory content、不启动 Worker、不调用 Provider。
-- [ ] Manual launch 或批准 due proposal 只创建一个 batch，并将 cutoff 冻结为最新 eligible user-facing session 的完成时间。
-- [ ] Cutoff 之后的新 session 属于下一个 batch，不使当前 result stale。
-- [ ] Eligible trajectory 包含普通 Project/Unscoped 对话和 Memory-Aware Reflection dialogue，排除 Dream、Independent Evidence Pass、internal work、pure tool 和未被用户采纳的 assistant output。
-- [ ] Captured/recovered candidate 保存可归属的 Thread、Turn、timestamp、scope、source kind 和 bounded reference。
-- [ ] 已删除 trajectory 不可扫描，并按设计从 pending/archive candidate 清除内容；archive 不等于删除。
-- [ ] Keep Pending、skip、failure 和其他 unresolved input 在 cutoff 前也必须变为显式 Carryover。
-- [ ] Resumable run 或 Carryover 立即产生 non-blocking reminder，但不启动模型或自动建 batch。
-- [ ] Resume/Discard 解决现有 run 前，不允许创建新的 periodic batch。
-- [ ] Full Access 下 launch/resume 仍需显式操作，并冻结 Dream prompt 与 Profile assignment。
+- [x] 默认七天 Due Check 只读 scheduling metadata，不创建 batch、不读 trajectory content、不启动 Worker、不调用 Provider。
+- [x] Manual launch 或批准 due proposal 只创建一个 batch，并将 cutoff 冻结为最新 eligible user-facing session 的完成时间。
+- [x] Cutoff 之后的新 session 属于下一个 batch，不使当前 result stale。
+- [x] Eligible trajectory 包含普通 Project/Unscoped 对话和 Memory-Aware Reflection dialogue，排除 Dream、Independent Evidence Pass、internal work、pure tool 和未被用户采纳的 assistant output。
+- [x] Captured/recovered candidate 保存可归属的 Thread、Turn、timestamp、scope、source kind 和 bounded reference。
+- [x] 已删除 trajectory 不可扫描，并按设计从 pending/archive candidate 清除内容；archive 不等于删除。
+- [x] Keep Pending、skip、failure 和其他 unresolved input 在 cutoff 前也必须变为显式 Carryover。
+- [x] Resumable run 或 Carryover 立即产生 non-blocking reminder，但不启动模型或自动建 batch。
+- [x] Resume/Discard 解决现有 run 前，不允许创建新的 periodic batch。
+- [x] Full Access 下 launch/resume 仍需显式操作，并冻结 Dream prompt 与 Profile assignment。
 
 ### L6. 隔离提取并审阅 Dream Scope
 

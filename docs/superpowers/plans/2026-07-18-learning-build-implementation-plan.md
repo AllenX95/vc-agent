@@ -205,16 +205,16 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] The default seven-day Due Check reads scheduling metadata only and never creates a batch, reads trajectory content, starts a Worker, or calls a Provider.
-- [ ] Manual launch and approval of a due proposal create exactly one batch and freeze one shared cutoff at the latest eligible completed user-facing session.
-- [ ] New sessions after the cutoff belong to the next batch and do not make current results stale.
-- [ ] Eligible trajectory includes ordinary Project and Unscoped user-facing dialogue plus Memory-Aware Reflection dialogue; it excludes Dream, Independent Evidence Pass, internal work, pure tools, and unadopted assistant output.
-- [ ] Captured and recovered candidates retain attributable Thread, Turn, timestamp, scope, source kind, and bounded source reference.
-- [ ] Deleted trajectory cannot be scanned and cascades content out of pending/archive candidates as specified; archived trajectory remains eligible.
-- [ ] Keep Pending, skipped, failed, and otherwise unresolved inputs become explicit Carryover even after a cutoff advances.
-- [ ] A resumable run or Carryover produces an immediate non-blocking reminder without starting model work or creating a new batch.
-- [ ] Resume and Discard resolve an existing run before a new periodic batch can start.
-- [ ] Workflow launch and resume remain explicit under Full Access and freeze the Dream prompt and effective Profile assignments.
+- [x] The default seven-day Due Check reads scheduling metadata only and never creates a batch, reads trajectory content, starts a Worker, or calls a Provider.
+- [x] Manual launch and approval of a due proposal create exactly one batch and freeze one shared cutoff at the latest eligible completed user-facing session.
+- [x] New sessions after the cutoff belong to the next batch and do not make current results stale.
+- [x] Eligible trajectory includes ordinary Project and Unscoped user-facing dialogue plus Memory-Aware Reflection dialogue; it excludes Dream, Independent Evidence Pass, internal work, pure tools, and unadopted assistant output.
+- [x] Captured and recovered candidates retain attributable Thread, Turn, timestamp, scope, source kind, and bounded source reference.
+- [x] Deleted trajectory cannot be scanned and cascades content out of pending/archive candidates as specified; archived trajectory remains eligible.
+- [x] Keep Pending, skipped, failed, and otherwise unresolved inputs become explicit Carryover even after a cutoff advances.
+- [x] A resumable run or Carryover produces an immediate non-blocking reminder without starting model work or creating a new batch.
+- [x] Resume and Discard resolve an existing run before a new periodic batch can start.
+- [x] Workflow launch and resume remain explicit under Full Access and freeze the Dream prompt and effective Profile assignments.
 
 ### L6. Extract And Review Dream Scopes In Isolation
 

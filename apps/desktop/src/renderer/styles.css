@@ -37,10 +37,13 @@ button { font: inherit; letter-spacing: 0; }
 .project-row { align-items: center; color: #2c342d; display: flex; font-size: 12px; font-weight: 650; justify-content: space-between; min-height: 28px; padding: 0 8px 0 10px; }
 .project-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-row.project-thread { padding-left: 36px; }
+.archived-thread-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; }
+.archived-thread-row .thread-row { padding-left: 27px; }
+.archived-thread-row .section-action { margin-left: 0; }
 .settings-button { display: flex; align-items: center; gap: 9px; margin: 8px; min-height: 38px; padding: 0 11px; border: 0; border-radius: 6px; color: #444b45; background: transparent; text-align: left; }
 .settings-button:hover, .settings-button.active { background: #dfe4dd; color: #1f2e26; }
 
-.center-pane { position: relative; display: flex; min-width: 0; background: #fafbf9; }
+.center-pane { position: relative; display: flex; flex-direction: column; min-width: 0; background: #fafbf9; }
 .center-pane.recovery { flex-direction: column; }
 .center-pane.recovery .conversation { flex: 1; min-height: 0; }
 .recovery-banner { flex: none; display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 8px 18px; border-bottom: 1px solid #d9a94c; background: #fff7df; color: #553f14; font-size: 11px; }
@@ -57,6 +60,9 @@ button { font: inherit; letter-spacing: 0; }
 .conversation { display: flex; flex-direction: column; width: 100%; min-width: 0; padding-bottom: 116px; }
 .conversation-header { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 22px; border-bottom: 1px solid #e0e3de; }
 .conversation-header h1 { margin: 2px 0 0; font-size: 16px; line-height: 1.3; }
+.conversation-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.conversation-header-actions .header-model { max-width: 280px; }
+.conversation-header-actions .icon-button { flex: none; margin-left: 0; }
 .header-model { max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #687068; font-size: 11px; }
 .message-list { flex: 1; overflow: auto; padding: 24px max(24px, calc((100% - 760px) / 2)); }
 .thread-empty { height: 100%; display: flex; align-items: center; justify-content: center; gap: 9px; color: #7a827a; font-size: 13px; }
@@ -130,9 +136,20 @@ button { font: inherit; letter-spacing: 0; }
 .reflection-launch textarea, .reflection-launch select { width: 100%; padding: 8px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #28332c; }
 .reflection-launch textarea { min-height: 82px; resize: vertical; }
 .reflection-launch .form-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
+.dream-launch { display: grid; gap: 10px; }
+.dream-launch label { display: grid; gap: 5px; color: #59615a; font-size: 11px; }
+.dream-launch select { width: 100%; padding: 8px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #28332c; }
+.workspace-dialog .danger-button { border-color: #9d5e51; background: #7b463b; color: #fff; }
 
 .diagnostic { position: absolute; z-index: 2; top: 14px; left: 18px; right: 18px; display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid #d9a94c; border-radius: 6px; background: #fff7df; color: #553f14; font-size: 12px; }
 .diagnostic strong { font-size: 11px; }
+.dream-notice { position: relative; z-index: 1; flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 48px; padding: 8px 14px; border-bottom: 1px solid #9aab9e; background: #f2f6f1; color: #34443a; }
+.dream-notice strong, .dream-notice span { display: block; }
+.dream-notice strong { font-size: 11px; }
+.dream-notice span { margin-top: 2px; overflow: hidden; color: #68736b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.dream-notice > div:last-child { display: flex; gap: 5px; }
+.dream-notice button { min-height: 27px; padding: 0 8px; border: 1px solid #bdc6bf; border-radius: 5px; background: #fff; color: #3b4940; font-size: 10px; }
+.dream-notice .primary-button { border-color: #315642; background: #315642; color: #fff; }
 
 .settings-view { width: min(740px, calc(100% - 64px)); margin: 42px auto; overflow: auto; }
 .settings-write-controls { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -146,6 +163,7 @@ button { font: inherit; letter-spacing: 0; }
 .settings-tabs button.active { background: #fff; color: #29352e; box-shadow: 0 1px 4px rgba(36, 48, 40, .1); }
 .settings-tabs button:disabled { color: #a0a6a0; }
 .memory-settings-loading { padding: 40px 0; color: #747b74; font-size: 12px; }
+.memory-settings-stack { padding-bottom: 40px; }
 .long-term-memory-settings { padding: 24px 0 40px; }
 .memory-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid #dfe2dd; }
 .memory-settings-heading h2 { margin: 3px 0 0; font-size: 18px; }
@@ -199,6 +217,18 @@ button { font: inherit; letter-spacing: 0; }
 .settings-section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .settings-section-header h2 { margin-bottom: 3px; }
 .settings-section-header p { margin: 0; color: #747b74; font-size: 11px; }
+.dream-settings { padding-top: 24px; }
+.dream-settings dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; column-gap: 24px; }
+.dream-interval { display: flex; align-items: end; gap: 7px; margin-top: 12px; }
+.dream-interval label { display: grid; gap: 4px; color: #5e675f; font-size: 10px; }
+.dream-interval input { width: 84px; min-height: 31px; padding: 0 8px; border: 1px solid #c9cec7; border-radius: 4px; background: #fff; }
+.dream-interval span { padding-bottom: 8px; color: #747b74; font-size: 10px; }
+.dream-interval button, .dream-batch-summary button { min-height: 31px; padding: 0 9px; border: 1px solid #c9cec7; border-radius: 5px; background: #fff; color: #38433b; font-size: 10px; }
+.dream-batch-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding: 12px 0; border-top: 1px solid #e1e4df; }
+.dream-batch-summary > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.dream-batch-summary strong { font-size: 11px; }
+.dream-batch-summary span { overflow: hidden; color: #707870; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.dream-batch-summary > div:last-child { display: flex; gap: 6px; flex: none; }
 .compact-button { display: flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 9px; border: 1px solid #ccd2cb; border-radius: 5px; background: #fff; color: #344239; font-size: 11px; white-space: nowrap; }
 .profile-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid #d8dcd6; border-radius: 7px; background: #f5f7f3; }
 .profile-form label { display: flex; flex-direction: column; gap: 5px; color: #59615a; font-size: 10px; font-weight: 650; }

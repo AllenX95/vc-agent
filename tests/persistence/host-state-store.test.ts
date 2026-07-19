@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 11,
+      stateSchemaVersion: 12,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -41,17 +41,17 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 11").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 11, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(11);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 12, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(12);
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 11 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 12 });
     verified.close();
   });
 
@@ -59,7 +59,7 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11)").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12)").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
@@ -83,13 +83,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 11 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 12 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 11 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 12 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -156,6 +156,9 @@ describe("HostStateStore", () => {
     ]);
     expect(store.isProjectProfileAuthorized(project.id, profile.id)).toBe(true);
     expect(store.getPhysicalContext(first.id)?.sessionFile).not.toBe(store.getPhysicalContext(second.id)?.sessionFile);
+    expect(store.setThreadArchived(first.id, true)).toMatchObject({ id: first.id, archivedAt: expect.any(String) });
+    expect(store.listThreads().find((thread) => thread.id === first.id)?.archivedAt).toEqual(expect.any(String));
+    expect(store.setThreadArchived(first.id, false)).not.toHaveProperty("archivedAt");
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ projects: 1, threads: 2 });
     store.close();
   });

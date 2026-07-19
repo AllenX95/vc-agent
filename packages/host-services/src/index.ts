@@ -24,6 +24,7 @@ export { DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJEC
 export { ReflectionEvidenceDrilldownSource, parseMaterialBlockReference, type ReflectionEvidenceAccess, type ReflectionEvidenceDrilldownQuery } from "./reflection-evidence.js";
 export { captureReflectionDependencies, reflectionDependencyFingerprint, staleReflectionDependencies, type CaptureReflectionDependenciesInput, type ReflectionDependencyEntry, type ReflectionDependencyState } from "./reflection-staleness.js";
 export { detectReflectionDreamEligibility, selectEligibleReflectionTrajectory, type EligibleReflectionTrajectoryTurn } from "./dream-eligibility.js";
+export { DreamReviewStore, selectEligibleDreamTrajectory, type CreateDreamBatchInput, type DreamReviewStoreOptions } from "./dream-review.js";
 export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutcomeStoreOptions } from "./reflection-outcomes.js";
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 

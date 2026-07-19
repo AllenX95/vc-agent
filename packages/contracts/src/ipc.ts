@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
 
 export const IPC_SCHEMA_VERSION = 1 as const;
 
@@ -43,6 +44,7 @@ export const unscopedThreadSchema = z.object({
   scope: z.literal("unscoped"),
   activeProfileId: z.string().min(1).optional(),
   outputLocation: z.string().min(1).optional(),
+  archivedAt: z.string().datetime().optional(),
   stateVersion: z.number().int().positive(),
   createdAt: z.string().datetime()
 });
@@ -89,6 +91,7 @@ export const projectThreadSchema = z.object({
   scope: z.literal("project"),
   projectId: z.string().uuid(),
   activeProfileId: z.string().min(1).optional(),
+  archivedAt: z.string().datetime().optional(),
   stateVersion: z.number().int().positive(),
   createdAt: z.string().datetime()
 });
@@ -221,7 +224,7 @@ export const memoryMaintenanceStateSchema = z.object({
 export type MemoryMaintenanceState = z.infer<typeof memoryMaintenanceStateSchema>;
 export const memoryCandidateSchema = z.object({
   id: z.string().uuid(), scope: z.enum(["project", "unscoped"]), projectId: z.string().uuid().optional(), threadId: z.string().min(1), turnId: z.string().min(1),
-  capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), sourceKind: z.enum(["ordinary_user_signal", "reflection_dialogue"]).default("ordinary_user_signal"),
+  sourceReference: z.string().min(1).max(500), capturedAt: z.string().datetime(), sourceSnippet: z.string().min(1).max(2_000), sourceKind: z.enum(["ordinary_user_signal", "reflection_dialogue"]).default("ordinary_user_signal"),
   signal: z.enum(["explicit_remember", "strong_user_judgment", "reflection_adoption", "reflection_correction", "reflection_confirmation"]), status: z.enum(["active", "dismissed", "promoted"])
 });
 export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;
@@ -422,6 +425,12 @@ const updateCondensationArchiveCommandSchema = commandMetadataSchema.extend({ co
 const cleanupCondensationArchiveCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.archive.cleanup"), payload: z.object({ archiveIds: z.array(z.string().min(1)).max(100) }) });
 const inspectLongTermMemoryProvenanceCommandSchema = commandMetadataSchema.extend({ command: z.literal("long_term_memory.provenance.inspect"), payload: z.object({ threadId: z.string().min(1), sourceReferenceId: z.string().min(6).max(80) }) });
 const dismissMemoryCandidateCommandSchema = commandMetadataSchema.extend({ command: z.literal("memory.candidate.dismiss"), payload: z.object({ candidateId: z.string().uuid() }) });
+const loadDreamStateCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.state.load") });
+const setDreamIntervalCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.interval.set"), payload: z.object({ reviewIntervalDays: z.number().int().min(1).max(365) }) });
+const deferDreamReminderCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.reminder.defer"), payload: z.object({ until: z.string().datetime() }) });
+const launchDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.launch"), payload: z.object({ profileId: z.string().min(1).optional() }) });
+const resumeDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.resume"), payload: z.object({ batchId: z.string().uuid() }) });
+const discardDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.discard"), payload: z.object({ batchId: z.string().uuid() }) });
 const confirmProjectMemoryAppendCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.memory.append.confirm"),
   payload: z.object({ candidateId: z.string().uuid(), projectId: z.string().uuid(), title: z.string().trim().min(1).max(160), tags: z.array(z.string().trim().min(1).max(80)).max(12), body: z.string().trim().min(1).max(20_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
@@ -442,6 +451,8 @@ const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.trajectory.load"),
   payload: z.object({ threadId: z.string().min(1) })
 });
+const deleteThreadTrajectoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.trajectory.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
+const setThreadArchivedCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.archive.set"), payload: z.object({ threadId: z.string().min(1), archived: z.boolean() }) });
 const createThreadCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.create.unscoped"),
   payload: z.object({ title: z.string().trim().min(1).max(120) })
@@ -533,6 +544,12 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   cleanupCondensationArchiveCommandSchema,
   inspectLongTermMemoryProvenanceCommandSchema,
   dismissMemoryCandidateCommandSchema,
+  loadDreamStateCommandSchema,
+  setDreamIntervalCommandSchema,
+  deferDreamReminderCommandSchema,
+  launchDreamCommandSchema,
+  resumeDreamCommandSchema,
+  discardDreamCommandSchema,
   confirmProjectMemoryAppendCommandSchema,
   listProjectOutputsCommandSchema,
   openProjectOutputCommandSchema,
@@ -541,6 +558,8 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   resolveParseRefreshCommandSchema,
   listThreadsCommandSchema,
   loadThreadTrajectoryCommandSchema,
+  deleteThreadTrajectoryCommandSchema,
+  setThreadArchivedCommandSchema,
   createThreadCommandSchema,
   createProjectThreadCommandSchema,
   selectThreadProfileCommandSchema,
@@ -822,6 +841,15 @@ const longTermMemoryProvenanceInspectedEventSchema = eventMetadataSchema.extend(
 const memoryCandidateEventSchema = eventMetadataSchema.extend({
   event: z.enum(["memory.candidate.captured", "memory.candidate.resolved"]), payload: z.object({ candidate: memoryCandidateSchema })
 });
+const dreamStateUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("dream.state.updated"),
+  payload: z.object({ state: dreamReviewStateSchema, dueProposal: dreamDueProposalSchema.optional(), reminder: pendingDreamReminderSchema.optional() })
+});
+const threadTrajectoryDeletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.trajectory.deleted"),
+  payload: z.object({ threadId: z.string().min(1), removedCandidateIds: z.array(z.string().uuid()), affectedBatchIds: z.array(z.string().uuid()) })
+});
+const threadArchivedEventSchema = eventMetadataSchema.extend({ event: z.literal("thread.archived"), payload: z.object({ thread: threadSchema }) });
 const projectOutputsEventSchema = eventMetadataSchema.extend({
   event: z.enum(["project.outputs.listed", "project.outputs.updated"]), payload: z.object({ projectId: z.string().uuid(), outputs: z.array(projectOutputArtifactSchema) })
 });
@@ -915,6 +943,9 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   memoryMaintenanceEventSchema,
   longTermMemoryProvenanceInspectedEventSchema,
   memoryCandidateEventSchema,
+  dreamStateUpdatedEventSchema,
+  threadTrajectoryDeletedEventSchema,
+  threadArchivedEventSchema,
   projectOutputsEventSchema,
   projectOutputOpenedEventSchema,
   threadCompactionEventSchema,

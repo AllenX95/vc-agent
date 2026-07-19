@@ -95,7 +95,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 11, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 12, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -114,7 +114,7 @@ test("keeps old state active when staged migration fails", async () => {
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11)").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12)").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -129,7 +129,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 11, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 12, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -1238,6 +1238,80 @@ test("marks only unconfirmed Reflection outcomes stale after a recalled Memory t
     rmSync(projectDirectory, { recursive: true, force: true });
   }
 });
+
+test("creates and restores a frozen Dream batch without hidden model work", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-dream-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory);
+
+  try {
+    let window = await application.firstWindow();
+    const profileEvent = await invokeRaw(window, "profile.create", { name: "Dream fixture", provider: "fixture", model: "dream-model", apiKey: "fixture-key", thinkingLevel: "medium" }) as { payload: { profile: { id: string; name: string; provider: string; model: string; thinkingLevel: string } } };
+    const profile = profileEvent.payload.profile;
+    await invokeRaw(window, "task_model_assignment.set", { taskType: "dream", profileId: profile.id });
+    const threadEvent = await invokeRaw(window, "thread.create.unscoped", { title: "Dream source" }) as { payload: { thread: { id: string } } };
+    const threadId = threadEvent.payload.thread.id;
+    await invokeRaw(window, "thread.archive.set", { threadId, archived: true });
+    await application.close();
+
+    const threadDirectory = join(userDataDirectory, "threads", threadId);
+    mkdirSync(threadDirectory, { recursive: true });
+    const firstCompletedAt = "2026-07-18T08:00:02.000Z";
+    writeFileSync(join(threadDirectory, "trajectory.jsonl"), dreamTrajectoryFixture(threadId, "turn-1", "My diligence view", "Challenge the view", firstCompletedAt, profile), "utf8");
+
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    const dream = window.locator(".dream-settings");
+    await expect(dream).toContainText("Eligible exchanges");
+    await expect(dream).toContainText("1");
+    await window.getByRole("button", { name: "New batch" }).click();
+    const launch = window.getByRole("dialog", { name: "Start Dream" });
+    await expect(launch.getByLabel("Dream Model Profile")).toHaveValue(profile.id);
+    await launch.getByRole("button", { name: "Create Dream Batch" }).click();
+    await expect(window.getByText("Frozen batch", { exact: true })).toBeVisible();
+    await expect(window.getByText("1 exchanges", { exact: false })).toBeVisible();
+
+    const statePath = join(userDataDirectory, "memory", "dream", "review-state.json");
+    const created = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(created.batches).toHaveLength(1);
+    expect(created.batches[0]).toMatchObject({ status: "ready", cutoff: firstCompletedAt, promptSnapshot: { hash: expect.stringMatching(/^[a-f0-9]{64}$/) }, profileSnapshot: { id: profile.id }, trajectoryInputs: [{ turnId: "turn-1" }] });
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+    await application.close();
+
+    const laterCompletedAt = "2026-07-19T08:00:02.000Z";
+    writeFileSync(join(threadDirectory, "trajectory.jsonl"), `${readFileSync(join(threadDirectory, "trajectory.jsonl"), "utf8")}${dreamTrajectoryFixture(threadId, "turn-2", "A later view", "A later response", laterCompletedAt, profile, 3)}`, "utf8");
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await expect(window.getByText("Dream run can resume", { exact: true })).toBeVisible();
+    const restored = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(restored.batches[0].cutoff).toBe(firstCompletedAt);
+    expect(restored.batches[0].trajectoryInputs).toHaveLength(1);
+    expect(restored.schedule.latestEligibleCompletedAt).toBe(laterCompletedAt);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByRole("button", { name: "Dream source", exact: true }).click();
+    await window.getByRole("button", { name: "Delete thread history" }).click();
+    const deletion = window.getByRole("dialog", { name: "Delete thread history" });
+    await deletion.getByRole("button", { name: "Delete history" }).click();
+    await expect(window.getByText("Ready for a new conversation", { exact: true })).toBeVisible();
+    expect(existsSync(join(threadDirectory, "trajectory.jsonl"))).toBe(false);
+    expect(readFileSync(statePath, "utf8")).not.toContain("My diligence view");
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+function dreamTrajectoryFixture(threadId: string, turnId: string, userText: string, assistantText: string, completedAt: string, profile: { id: string; name: string; provider: string; model: string; thinkingLevel: string }, firstSequence = 1): string {
+  const common = { schemaVersion: 1, correlationId: `correlation-${turnId}`, threadId, turnId, actor: { actorType: "user", actorId: "e2e" }, provenance: { producerType: "user", producerId: "e2e" } };
+  return [
+    { ...common, eventId: `submitted-${turnId}`, sequence: firstSequence, occurredAt: new Date(new Date(completedAt).valueOf() - 1_000).toISOString(), event: "turn.submitted", payload: { text: userText, idempotencyKey: `key-${turnId}` } },
+    { ...common, eventId: `completed-${turnId}`, sequence: firstSequence + 1, occurredAt: completedAt, actor: { actorType: "agent", actorId: "primary-agent" }, provenance: { producerType: "agent", producerId: "primary-agent" }, event: "turn.completed", payload: { message: assistantText, profile, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 } } }
+  ].map((event) => JSON.stringify(event)).join("\n") + "\n";
+}
 
 function projectReflectionMemoryFixture(): string {
   return `# Project Memory\n\n## 2026-07-19 - Retention is the core execution risk\nTags: retention, execution, diligence\nSource: user-confirmed\nScope: project\n\nRetention quality matters more than top-line pilot count.\n\nRelated:\n- Thread:\n- Output:\n`;

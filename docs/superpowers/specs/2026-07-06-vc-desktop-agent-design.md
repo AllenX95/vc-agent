@@ -1401,6 +1401,8 @@ The MVP defaults to a seven-day Dream review interval. On application start or t
 
 The seven-day interval applies only to proposing a new periodic Dream Batch. Existing Dream Carryover or a Resumable Dream Run produces a Pending Dream Reminder immediately on the next app start or relevant memory-state view. This reminder is model-free, non-blocking, and can be dismissed or deferred. It shows the pending type, affected scope count, oldest unresolved date, and last saved stage where applicable.
 
+The Host maintains a content-free Dream scheduling index with stable source references, scope, timestamps, active-candidate counts, and represented Project identities. Updating this index after local trajectory or candidate changes is a Host operation. The Due Check itself reads only `memory/dream/schedule.json`; resolving bounded conversation text happens only after explicit batch launch. Versioned batch state is stored separately in `memory/dream/review-state.json` and freezes source snapshots, Prompt Revision, and effective Dream Profile per batch.
+
 A Pending Dream Reminder never creates a new batch. If a Resumable Dream Run exists, Resume or Discard must resolve that run before another periodic Dream is created. If only Dream Carryover exists, approving the reminder may create a new batch that includes the carryover and a newly frozen cutoff. Dismissing or deferring the reminder leaves all pending state intact.
 
 Approval of the due Action Proposal starts one Dream run and freezes its Workflow Prompt Snapshot. It does not authorize Project Memory or Long-term Memory changes. Dream may finish preparing and retain a pending proposal, but the User must separately review the final Markdown patch and confirm the writes.

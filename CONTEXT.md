@@ -312,6 +312,10 @@ _Avoid_: New Dream Batch, automatic resume, repeated blocking prompt, seven-day 
 The set of captured and recovered memory candidates assembled for one Dream session and reviewed together before any promotion or discard.
 _Avoid_: Single candidate review, continuous background review
 
+**Dream Scheduling Index**:
+A content-free Host index of eligible stable references, scope, completion timestamps, candidate counts, and represented Project identities used by Dream Due Check without reading Thread trajectory bodies.
+_Avoid_: Transcript cache, candidate source excerpt, background batch construction, model classifier
+
 **Dream Cutoff**:
 The completion time of the latest eligible user-facing Thread session available when a Dream Batch is created, frozen as that batch's shared upper time boundary.
 _Avoid_: Per-Project watermark, Dream wall-clock finish time, moving cutoff during a run

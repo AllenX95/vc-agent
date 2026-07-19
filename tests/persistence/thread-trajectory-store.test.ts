@@ -154,4 +154,14 @@ describe("ThreadTrajectoryStore", () => {
     const { store } = fixture();
     expect(() => store.threadDirectory("../outside")).toThrow("escapes");
   });
+
+  it("deletes retained trajectory and physical context only through the explicit history operation", () => {
+    const { store } = fixture();
+    store.append(submitted());
+    store.writeCheckpoint(checkpoint());
+    expect(store.loadEvents("thread-1")).toHaveLength(1);
+    store.deleteThreadHistory("thread-1");
+    expect(store.loadEvents("thread-1")).toEqual([]);
+    expect(store.loadCheckpoints("thread-1")).toEqual([]);
+  });
 });

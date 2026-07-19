@@ -60,6 +60,10 @@ export class ThreadTrajectoryStore {
       .map((line) => trajectoryEventSchema.parse(JSON.parse(line)));
   }
 
+  deleteThreadHistory(threadId: string): void {
+    rmSync(this.threadDirectory(threadId), { recursive: true, force: true });
+  }
+
   nextSequence(threadId: string): number {
     return (this.loadEvents(threadId).at(-1)?.sequence ?? 0) + 1;
   }

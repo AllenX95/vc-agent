@@ -4,6 +4,8 @@ import {
   createCommand,
   hostEventSchema,
   type BootstrapState,
+  type DreamDueProposal,
+  type DreamReviewState,
   type HostCommand,
   type HostEvent,
   type JudgmentRecordDraft,
@@ -13,6 +15,7 @@ import {
   type MaterialInventoryItem,
   type MemoryCandidate,
   type ModelProfile,
+  type PendingDreamReminder,
   type Project,
   type ProjectContextDocument,
   type ProjectMemoryDocument,
@@ -29,6 +32,7 @@ import {
   type Thread
 } from "@vc-agent/contracts";
 import {
+  Archive,
   ChevronDown,
   ClipboardCheck,
   CircleStop,
@@ -38,13 +42,15 @@ import {
   KeyRound,
   MessageSquare,
   Minimize2,
+  Moon,
   PanelRight,
   Plus,
   RefreshCw,
   Search,
   Send,
   Settings,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Trash2
 } from "lucide-react";
 
 type View = "workspace" | "settings";
@@ -135,6 +141,12 @@ export function App() {
   const [longTermMemoryDraft, setLongTermMemoryDraft] = useState("");
   const [preparedMemoryPatch, setPreparedMemoryPatch] = useState<PreparedMemoryPatch | null>(null);
   const [memoryMaintenance, setMemoryMaintenance] = useState<MemoryMaintenanceState | null>(null);
+  const [dreamState, setDreamState] = useState<DreamReviewState | null>(null);
+  const [dreamDueProposal, setDreamDueProposal] = useState<DreamDueProposal | null>(null);
+  const [pendingDreamReminder, setPendingDreamReminder] = useState<PendingDreamReminder | null>(null);
+  const [dreamLaunchProfileId, setDreamLaunchProfileId] = useState<string | null>(null);
+  const [dreamNoticeDismissed, setDreamNoticeDismissed] = useState(false);
+  const [deleteHistoryThreadId, setDeleteHistoryThreadId] = useState<string | null>(null);
   const longTermMemoryDirty = useRef(false);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
@@ -228,6 +240,19 @@ export function App() {
       case "memory.candidate.resolved":
         setMemoryCandidates((current) => ({ ...current, [event.payload.candidate.id]: event.payload.candidate }));
         if (event.payload.candidate.status !== "active") setCandidateDraft((draft) => draft?.candidate.id === event.payload.candidate.id ? null : draft);
+        break;
+      case "dream.state.updated":
+        setDreamState(event.payload.state);
+        setDreamDueProposal(event.payload.dueProposal ?? null);
+        setPendingDreamReminder(event.payload.reminder ?? null);
+        break;
+      case "thread.trajectory.deleted":
+        setConversations((current) => ({ ...current, [event.payload.threadId]: [] }));
+        setMemoryCandidates((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !event.payload.removedCandidateIds.includes(id))));
+        setDeleteHistoryThreadId(null);
+        break;
+      case "thread.archived":
+        setThreads((current) => [...current.filter((item) => item.id !== event.payload.thread.id), event.payload.thread]);
         break;
       case "project.outputs.listed":
       case "project.outputs.updated": setOutputsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.outputs })); break;
@@ -352,6 +377,7 @@ export function App() {
     void invoke(createCommand({ command: "profile.list" }));
     void invoke(createCommand({ command: "task_model_assignment.list" }));
     void invoke(createCommand({ command: "reflection.list", payload: {} }));
+    void invoke(createCommand({ command: "dream.state.load" }));
     void invoke(createCommand({ command: "prompt.revision.list" }));
     void invoke(createCommand({ command: "project.list" }));
     void invoke(createCommand({ command: "thread.list" }));
@@ -415,6 +441,30 @@ export function App() {
   const compact = () => {
     if (activeThreadId === null || hasActiveTurn) return;
     void invoke(createCommand({ command: "thread.compact", payload: { threadId: activeThreadId } }));
+  };
+
+  const openDreamLaunch = () => {
+    setDreamLaunchProfileId(taskAssignments.find((item) => item.taskType === "dream")?.profileId ?? "");
+  };
+
+  const launchDream = async () => {
+    if (dreamLaunchProfileId === null) return;
+    const event = await invoke(createCommand({ command: "dream.launch", payload: { ...(dreamLaunchProfileId === "" ? {} : { profileId: dreamLaunchProfileId }) } }));
+    if (event?.event === "dream.state.updated") {
+      setDreamLaunchProfileId(null);
+      setDreamNoticeDismissed(false);
+    }
+  };
+
+  const deferDreamNotice = () => {
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+    void invoke(createCommand({ command: "dream.reminder.defer", payload: { until } }));
+  };
+
+  const deleteThreadHistory = async () => {
+    if (deleteHistoryThreadId === null) return;
+    const event = await invoke(createCommand({ command: "thread.trajectory.delete", payload: { threadId: deleteHistoryThreadId, confirmed: true } }));
+    if (event?.event === "thread.trajectory.deleted") void invoke(createCommand({ command: "dream.state.load" }));
   };
 
   const resolveProfileChange = (action: "continue_current_thread" | "start_new_thread") => {
@@ -538,7 +588,7 @@ export function App() {
               <MessageSquare size={15} /><span>Unscoped Threads</span>
               <button className="section-action" type="button" title="New thread" aria-label="New thread" onClick={createThread} disabled={readOnlyRecovery}><Plus size={15} /></button>
             </div>
-            {threads.filter((thread) => thread.scope === "unscoped").length === 0 ? <p className="empty-list">No threads</p> : threads.filter((thread) => thread.scope === "unscoped").map((thread) => (
+            {threads.filter((thread) => thread.scope === "unscoped" && thread.archivedAt === undefined).length === 0 ? <p className="empty-list">No threads</p> : threads.filter((thread) => thread.scope === "unscoped" && thread.archivedAt === undefined).map((thread) => (
               <button key={thread.id} className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}>
                 <MessageSquare size={14} /><span>{thread.title}</span>
               </button>
@@ -548,9 +598,10 @@ export function App() {
             <div className="section-label"><Folder size={15} /><span>Projects</span><button className="section-action" type="button" title="Open project" aria-label="Open project" onClick={openProject} disabled={readOnlyRecovery}><Plus size={15} /></button></div>
             {projects.length === 0 ? <p className="empty-list">No projects</p> : projects.map((project) => <div className="project-group" key={project.id}>
               <div className="project-row"><span title={project.path}>{project.displayName}</span><button className="section-action" type="button" title="New project thread" aria-label={`New thread in ${project.displayName}`} onClick={() => createProjectThread(project.id)} disabled={readOnlyRecovery}><Plus size={14} /></button></div>
-              {threads.filter((thread) => thread.scope === "project" && thread.projectId === project.id).map((thread) => <button key={thread.id} className={`thread-row project-thread ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}><MessageSquare size={14} /><span>{thread.title}</span></button>)}
+              {threads.filter((thread) => thread.scope === "project" && thread.projectId === project.id && thread.archivedAt === undefined).map((thread) => <button key={thread.id} className={`thread-row project-thread ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}><MessageSquare size={14} /><span>{thread.title}</span></button>)}
             </div>)}
           </section>
+          {threads.some((thread) => thread.archivedAt !== undefined) && <section><div className="section-label"><Archive size={15} /><span>Archived</span></div>{threads.filter((thread) => thread.archivedAt !== undefined).map((thread) => <div className="archived-thread-row" key={thread.id}><button className={`thread-row ${thread.id === activeThreadId ? "active" : ""}`} type="button" onClick={() => selectThread(thread.id)}><MessageSquare size={14} /><span>{thread.title}</span></button><button className="section-action" type="button" title="Restore thread" aria-label={`Restore ${thread.title}`} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: thread.id, archived: false } }))}><Archive size={13} /></button></div>)}</section>}
         </nav>
         <button className={`settings-button ${view === "settings" ? "active" : ""}`} type="button" onClick={() => setView(view === "settings" ? "workspace" : "settings")}>
           <Settings size={17} /><span>Settings</span>
@@ -560,13 +611,14 @@ export function App() {
       <main className={`center-pane ${readOnlyRecovery ? "recovery" : ""}`}>
         <RecoveryBanner bootstrap={bootstrap} />
         <DiagnosticBanner event={diagnostic} />
+        {!dreamNoticeDismissed && (dreamDueProposal !== null || pendingDreamReminder !== null) && <div className="dream-notice" role="status"><Moon size={17} /><div><strong>{pendingDreamReminder?.kind === "resumable_run" ? "Dream run can resume" : pendingDreamReminder?.kind === "carryover" ? "Dream has unresolved carryover" : "Dream review is due"}</strong><span>{pendingDreamReminder !== null ? `${pendingDreamReminder.affectedScopeCount} scope(s) · oldest ${new Date(pendingDreamReminder.oldestUnresolvedAt).toLocaleDateString()}` : `${dreamDueProposal?.candidateCount ?? 0} captured candidate(s) · ${dreamDueProposal?.eligibleSessionCount ?? 0} eligible exchange(s)`}</span></div><div>{pendingDreamReminder?.kind === "resumable_run" && pendingDreamReminder.batchId !== undefined ? <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: pendingDreamReminder.batchId! } }))}>Resume</button> : <button className="primary-button" type="button" onClick={openDreamLaunch}>Review</button>}<button type="button" onClick={deferDreamNotice}>Tomorrow</button><button type="button" onClick={() => setDreamNoticeDismissed(true)}>Dismiss</button></div></div>}
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} taskAssignments={taskAssignments} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} taskAssignments={taskAssignments} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span></header>
+            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread history" aria-label="Delete thread history" onClick={() => setDeleteHistoryThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
             <div className="message-list">
               {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} outputLocation={activeThread.scope === "unscoped" ? activeThread.outputLocation : undefined} outcomes={reflectionOutcomes[activeReflection.id] ?? { judgments: [], learningProposals: [] }} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} prepareOutcomes={() => submit("Prepare a Judgment Record and one de-identified Long-term Learning Proposal from this Reflection.")} confirmJudgment={(draftId) => void invoke(createCommand({ command: "reflection.judgment.confirm", payload: { draftId } }))} discardOutcome={(draftId) => void invoke(createCommand({ command: "reflection.outcome.discard", payload: { draftId } }))} prepareLearningPatch={(proposalId, judgmentDraftId) => void invoke(createCommand({ command: "reflection.learning.prepare_patch", payload: { proposalId, judgmentDraftId } }))} />}
               {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
@@ -594,6 +646,8 @@ export function App() {
         </div>}
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
         {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>{reflectionLaunch.scope === "project" ? "The first pass is isolated from Project Memory and Long-term Memory." : "The first pass uses only frozen User inputs and public evidence. It cannot access Project State or Memory."}</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder={reflectionLaunch.scope === "project" ? "Review this Project broadly" : "Review this investment question broadly"} /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
+        {dreamLaunchProfileId !== null && <div className="workspace-dialog dream-launch" role="dialog" aria-label="Start Dream"><strong>Start Dream</strong><span>This creates one frozen cross-project review batch. It does not authorize any Memory write.</span><label>Dream Model Profile<select aria-label="Dream Model Profile" value={dreamLaunchProfileId} onChange={(event) => setDreamLaunchProfileId(event.target.value)}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setDreamLaunchProfileId(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchDream()} disabled={dreamLaunchProfileId === ""}>Create Dream Batch</button></div></div>}
+        {deleteHistoryThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread history"><strong>Delete thread history?</strong><span>This removes the retained conversation and physical context. Unapproved candidate and Dream source text from this task will also be removed. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteHistoryThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThreadHistory()}>Delete history</button></div></div>}
         {view === "workspace" && preparedMemoryPatch && <div className="workspace-dialog reflection-memory-patch" role="dialog" aria-label="Reflection Memory patch preview"><strong>Confirm Long-term Memory change</strong><span>This is a separate confirmation after the Judgment Record. Review the lineage and file diffs before committing.</span><p>{preparedMemoryPatch.rationale}</p><pre>{preparedMemoryPatch.lineageDiff}</pre>{preparedMemoryPatch.files.map((file) => <details key={file.kind} open={file.changed}><summary>{file.kind.replaceAll("_", " ")} · {file.changed ? "changed" : "unchanged"}</summary><span title={file.path}>{file.path}</span><pre>{file.diff}</pre></details>)}<div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.discard", payload: { patchId: preparedMemoryPatch.id } }))}>Discard</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.commit", payload: { patchId: preparedMemoryPatch.id, confirmed: true } }))}>Confirm Memory change</button></div></div>}
 
         {view === "workspace" && activeThread !== undefined && (activeReflection === undefined || activeReflection.status === "dialogue_active") && (
@@ -696,7 +750,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   taskAssignments: TaskModelAssignment[];
@@ -711,6 +765,8 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
   longTermMemoryDraft: string;
   preparedMemoryPatch: PreparedMemoryPatch | null;
   memoryMaintenance: MemoryMaintenanceState | null;
+  dreamState: DreamReviewState | null;
+  openDreamLaunch(): void;
   onLongTermMemoryChange(content: string): void;
   onLongTermMemoryRefresh(): void;
 }) {
@@ -741,7 +797,7 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
     <section className="settings-view" aria-labelledby="settings-title">
       <header><div><span className="eyebrow">Application</span><h1 id="settings-title">Settings</h1></div><SlidersHorizontal size={20} /></header>
       <div className="settings-tabs" role="tablist" aria-label="Settings views"><button type="button" role="tab" aria-selected={tab === "general"} className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button><button type="button" role="tab" aria-selected={tab === "memory"} className={tab === "memory" ? "active" : ""} onClick={openMemory} disabled={readOnly}>Memory</button></div>
-      {tab === "memory" ? <LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} patch={preparedMemoryPatch} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /> : <>
+      {tab === "memory" ? <div className="memory-settings-stack"><DreamSettings state={dreamState} invoke={invoke} launch={openDreamLaunch} /><LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} patch={preparedMemoryPatch} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /></div> : <>
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>
       <div className="settings-section profile-settings">
@@ -766,6 +822,20 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
       </>}
     </section>
   );
+}
+
+function DreamSettings({ state, invoke, launch }: { state: DreamReviewState | null; invoke(command: HostCommand): Promise<unknown>; launch(): void }) {
+  const [interval, setInterval] = useState(state?.schedule.reviewIntervalDays ?? 7);
+  useEffect(() => { if (state !== null) setInterval(state.schedule.reviewIntervalDays); }, [state?.schedule.reviewIntervalDays]);
+  const active = state?.batches.find((batch) => batch.id === state.schedule.activeBatchId);
+  return <section className="settings-section dream-settings" aria-labelledby="dream-settings-title">
+    <div className="settings-section-header"><div><span className="eyebrow">Cognitive review</span><h2 id="dream-settings-title">Dream</h2><p>Cross-project review remains inert until you create or resume one batch.</p></div><button className="compact-button" type="button" onClick={launch}><Moon size={15} /> New batch</button></div>
+    {state === null ? <p>Loading Dream state...</p> : <>
+      <dl><div><dt>Captured candidates</dt><dd>{state.schedule.pendingCandidateCount}</dd></div><div><dt>Eligible exchanges</dt><dd>{state.schedule.eligibleSessionCount}</dd></div><div><dt>Carryover</dt><dd>{state.schedule.carryoverCount}</dd></div><div><dt>Committed cutoff</dt><dd>{state.schedule.lastCommittedCutoff === undefined ? "None" : new Date(state.schedule.lastCommittedCutoff).toLocaleString()}</dd></div></dl>
+      <div className="dream-interval"><label>Review interval<input aria-label="Dream review interval" type="number" min="1" max="365" value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></label><span>days</span><button type="button" onClick={() => void invoke(createCommand({ command: "dream.interval.set", payload: { reviewIntervalDays: interval } }))} disabled={!Number.isInteger(interval) || interval < 1 || interval > 365}>Save</button></div>
+      {active !== undefined && <div className="dream-batch-summary"><div><strong>Frozen batch</strong><span>{active.status.replace("_", " ")} · cutoff {new Date(active.cutoff).toLocaleString()}</span><span>{active.trajectoryInputs.length} exchanges · {active.candidateInputs.length} candidates · {active.carryoverInputs.length} carryover</span><span>{active.profileSnapshot.name} · prompt {active.promptSnapshot.hash.slice(0, 12)}</span></div><div>{active.status === "resumable" && <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: active.id } }))}>Resume</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "dream.discard", payload: { batchId: active.id } }))}>Discard</button></div></div>}
+    </>}
+  </section>;
 }
 
 function LongTermMemorySettings({ document, draft, patch, maintenance, invoke, onChange, onRefresh, onSave, openFolder }: {
