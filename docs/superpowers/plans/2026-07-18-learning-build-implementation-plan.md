@@ -269,16 +269,16 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] Backup includes Long-term Memory, Cognitive Evolution History, Condensation Archive, System Prompt Revisions, Model Profiles and task assignments, non-secret settings, and the VC Agent Skills Directory when present.
-- [ ] Thread and Sub-Agent trajectories are optional and excluded by default.
-- [ ] Backup excludes Project registry, names, ids, paths, references, Materials, Outputs, parses, Project Context, Project Memory, artifact state, local provenance mappings, pending candidates, Dream/Reflection run state, caches, logs, and Physical Model Context.
-- [ ] Protected Credentials are never exported; restored Profile references require fresh credential setup.
-- [ ] The transparent manifest records format/schema version, domain inventory, checksums, creation time, and security warning without absolute Project paths.
-- [ ] Restore validates the complete bundle before replacing any domain and performs no LLM call, Memory merge, duplicate inference, or provenance manufacture.
-- [ ] Restore into non-empty personal state requires explicit whole-domain replacement confirmation under both Access Modes.
-- [ ] Failed restore leaves all prior domains active and unchanged.
-- [ ] Semantic lineage and opaque source references survive; excluded Project provenance is shown as unavailable.
-- [ ] Backup and Restore remain Host-only and do not start Pi.
+- [x] Backup includes Long-term Memory, Cognitive Evolution History, Condensation Archive, System Prompt Revisions, Model Profiles and task assignments, non-secret settings, and the VC Agent Skills Directory when present.
+- [x] Thread and Sub-Agent trajectories are optional and excluded by default.
+- [x] Backup excludes Project registry, names, ids, paths, references, Materials, Outputs, parses, Project Context, Project Memory, artifact state, local provenance mappings, pending candidates, Dream/Reflection run state, caches, logs, and Physical Model Context.
+- [x] Protected Credentials are never exported; restored Profile references require fresh credential setup.
+- [x] The transparent manifest records format/schema version, domain inventory, checksums, creation time, and security warning without absolute Project paths.
+- [x] Restore validates the complete bundle before replacing any domain and performs no LLM call, Memory merge, duplicate inference, or provenance manufacture.
+- [x] Restore into non-empty personal state requires explicit whole-domain replacement confirmation under both Access Modes.
+- [x] Failed restore leaves all prior domains active and unchanged.
+- [x] Semantic lineage and opaque source references survive; excluded Project provenance is shown as unavailable.
+- [x] Backup and Restore remain Host-only and do not start Pi.
 
 ## Learning Exit Slice
 
@@ -290,17 +290,17 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] One Playwright scenario broadly launches Project Reflection, completes isolated evidence assessment, recalls relevant Project and Long-term Memory, conducts dialogue, confirms a Judgment Record, previews a Memory Evolution Action, commits it, restarts, and recalls the resulting learning from an Unscoped Thread.
-- [ ] The scenario proves ordinary recall contains no Project identity while local source inspection resolves the originating Project under authorization.
-- [ ] A Retrospective fixture revises or contradicts an earlier judgment without erasing its original rationale.
-- [ ] A Dream E2E spans at least two Projects and one Unscoped Thread, proves raw-scope isolation, reviews summaries, handles one failed/skipped scope, displays Partial Dream Coverage, confirms final patches, and retains Carryover.
-- [ ] Restart recovery preserves completed Reflection and Dream stages but starts no Pi until explicit resume or submitted work.
-- [ ] Missing Profile, Provider Failure, stale evidence, external Memory edit, stopped workflow stage, failed patch commit, and manual retry never cause fallback, duplicate writes, or silent stage reuse.
-- [ ] Migration failure restores prior state; newer state opens read-only; Personal Cognition Backup/Restore preserves supported cognition without Project metadata or credentials.
-- [ ] Telemetry exposes stage prompt/tool/context/recall/output reserve, latency, token contribution, coverage, and failure counters without remote content telemetry.
-- [ ] Architecture tests exercise migration, Long-term Memory source, Memory Patch Store, Reflection runner, Dream runner, provenance registry, and backup adapters without importing Integration or Delegation feature code.
-- [ ] Office, OCR, MCP, Skills, Extension Audit, arbitrary Extensions, and Sub-Agent controls remain absent as working features.
-- [ ] The sole User can move from ordinary VC work to reviewed durable personal learning without developer intervention.
+- [x] One Playwright scenario broadly launches Project Reflection, completes isolated evidence assessment, recalls relevant Project and Long-term Memory, conducts dialogue, confirms a Judgment Record, previews a Memory Evolution Action, commits it, restarts, and recalls the resulting learning from an Unscoped Thread.
+- [x] The scenario proves ordinary recall contains no Project identity while local source inspection resolves the originating Project under authorization.
+- [x] A Retrospective fixture revises or contradicts an earlier judgment without erasing its original rationale.
+- [x] A Dream E2E spans at least two Projects and one Unscoped Thread, proves raw-scope isolation, reviews summaries, handles one failed/skipped scope, displays Partial Dream Coverage, confirms final patches, and retains Carryover.
+- [x] Restart recovery preserves completed Reflection and Dream stages but starts no Pi until explicit resume or submitted work.
+- [x] Missing Profile, Provider Failure, stale evidence, external Memory edit, stopped workflow stage, failed patch commit, and manual retry never cause fallback, duplicate writes, or silent stage reuse.
+- [x] Migration failure restores prior state; newer state opens read-only; Personal Cognition Backup/Restore preserves supported cognition without Project metadata or credentials.
+- [x] Telemetry exposes stage prompt/tool/context/recall/output reserve, latency, token contribution, coverage, and failure counters without remote content telemetry.
+- [x] Architecture tests exercise migration, Long-term Memory source, Memory Patch Store, Reflection runner, Dream runner, provenance registry, and backup adapters without importing Integration or Delegation feature code.
+- [x] Office, OCR, MCP, Skills, Extension Audit, arbitrary Extensions, and Sub-Agent controls remain absent as working features.
+- [x] The sole User can move from ordinary VC work to reviewed durable personal learning without developer intervention.
 
 ## Dependency Graph
 

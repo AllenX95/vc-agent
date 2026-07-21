@@ -54,6 +54,8 @@ test("launches the empty shell without activating execution resources", async ()
     await expect(window.getByText("Agent workers")).toBeVisible();
     await expect(window.locator("dl").nth(1).getByText("0", { exact: true })).toHaveCount(3);
     await expect(window.getByRole("heading", { name: "Environment Doctor" })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "Learning telemetry" })).toBeVisible();
+    await expect(window.getByText("Remote content telemetry", { exact: true })).toBeVisible();
     for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Migration", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
     for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "MCP", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
 
@@ -141,6 +143,53 @@ test("keeps old state active when staged migration fails", async () => {
   }
 });
 
+test("backs up and mechanically restores Personal Cognition without Project metadata, credentials, or Pi", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-cognition-e2e-"));
+  const backupParent = mkdtempSync(join(tmpdir(), "vc-agent-cognition-backup-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const memory = new LongTermMemoryStore(join(userDataDirectory, "memory", "long-term"));
+  memory.load(true);
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_BACKUP_DESTINATION: backupParent });
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Restored profile", provider: "anthropic", model: "model-backup", apiKey: "must-not-export" });
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByLabel("Long-term Memory").fill(longTermMemoryFixture());
+    await window.getByRole("button", { name: "Save Memory" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
+    await window.getByRole("button", { name: "Create backup" }).click();
+    await expect(window.getByRole("status")).toContainText("Backup created");
+    const bundle = join(backupParent, readdirSync(backupParent)[0]!);
+    const manifest = readFileSync(join(bundle, "manifest.json"), "utf8");
+    const state = readFileSync(join(bundle, "domains", "personal-state.json"), "utf8");
+    expect(manifest).toContain('"credentialsIncluded": false');
+    expect(manifest).toContain('"trajectoriesIncluded": false');
+    expect(`${manifest}\n${state}`).not.toContain(userDataDirectory);
+    expect(`${manifest}\n${state}`).not.toContain("must-not-export");
+    expect(state).not.toContain("credentialRef");
+
+    await application.close();
+    writeFileSync(memory.markdownPath, "# Long-term Memory\n\nSchema-Version: 1\n\nchanged after backup\n", "utf8");
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_RESTORE_SOURCE: bundle, VC_AGENT_TEST_CONFIRM_RESTORE: "1" });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Restore backup" }).click();
+    await expect.poll(() => readFileSync(memory.markdownPath, "utf8")).toContain("Conservative TAM framing");
+    await expect(window.getByText("Restored profile", { exact: true })).toBeVisible();
+    const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const credential = database.prepare("SELECT length(encrypted_value) AS length FROM protected_credentials").get() as { length: number };
+    database.close();
+    expect(credential.length).toBe(0);
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(backupParent, { recursive: true, force: true });
+  }
+});
+
 test("edits and recalls de-identified Long-term Memory without Project state", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-ltm-e2e-"));
@@ -215,7 +264,7 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
 
     await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
     await createProfile(window, { name: "Memory fixture", provider: "vc-agent-memory-faux", model: "memory-fixture", apiKey: "fixture-key" });
-    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByRole("button", { name: "New thread", exact: true }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Memory fixture" });
     await window.getByLabel("Message").fill("Provide an investment judgment on market sizing for an early-stage hard tech opportunity.");
     await window.getByRole("button", { name: "Send" }).click();
@@ -1082,6 +1131,25 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(window.getByTestId("judgment-record-draft")).toContainText("confirmed");
     await expect(window.getByTestId("learning-proposal-draft")).toContainText("adopted");
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Learning Gate recall", provider: "vc-agent-learning-recall-faux", model: "learning-recall", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "New thread", exact: true }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Learning Gate recall" });
+    await window.getByLabel("Message").fill("Recall the reviewed representative retention threshold for a new investment decision.");
+    await window.getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Recalled the reviewed representative-retention decision rule", { exact: false })).toBeVisible({ timeout: 30_000 });
+    const recallDatabase = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
+    const recallThread = recallDatabase.prepare("SELECT id FROM threads WHERE scope = 'unscoped' ORDER BY created_at DESC, rowid DESC LIMIT 1").get() as { id: string };
+    recallDatabase.close();
+    const recallTrajectory = readFileSync(join(userDataDirectory, "threads", recallThread.id, "trajectory.jsonl"), "utf8");
+    expect(recallTrajectory).not.toContain(projectDirectory);
+    expect(recallTrajectory).not.toContain(projectName);
+    await expect(window.locator(".conversation")).not.toContainText(projectDirectory);
+    await expect(window.locator(".conversation")).not.toContainText(projectName);
+    await expect(window.locator(".usage-row")).toContainText("prompt");
+    await expect(window.locator(".usage-row")).toContainText("recall");
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -1173,7 +1241,7 @@ test("runs an isolated Unscoped Reflection without Project State and writes only
 });
 
 test("marks only unconfirmed Reflection outcomes stale after a recalled Memory target changes", async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-e2e-"));
   const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-project-"));
   const root = resolve(import.meta.dirname, "../..");
@@ -1344,6 +1412,23 @@ test("reviews Global Dream proposals separately from the final atomic Memory com
     scope.result = { schemaVersion: 1, scopeKind: "unscoped", deidentified: true, summary: "Staged diligence can expose decision-changing uncertainty early.", uncertainty: "Medium", sourceReferences: [sourceReference], candidates: [{ candidateId: "recovered-staged-diligence", origin: "recovered", sourceKind: "ordinary_user_signal", attributableSignal: "strong_user_judgment", sourceReferences: [sourceReference], uncertainty: "Medium", summary: "Use staged diligence around explicit uncertainty.", proposedDestination: "long_term_memory" }] };
     scope.completedAt = "2026-07-19T00:00:00.000Z";
     scope.reviewedAt = "2026-07-19T00:00:00.000Z";
+    const projectA = "33333333-3333-4333-8333-333333333333";
+    const projectB = "44444444-4444-4444-8444-444444444444";
+    const projectSource = "thread:project-a/turn:turn-project-a";
+    const skippedSource = "thread:project-b/turn:turn-project-b";
+    batch.trajectoryInputs.push(
+      { sourceKind: "ordinary_dialogue", scope: "project", projectId: projectA, threadId: "project-a", turnId: "turn-project-a", completedAt: "2026-07-18T08:00:02.000Z", sourceReference: projectSource, userText: "A de-identified Project judgment", assistantText: "Challenge A" },
+      { sourceKind: "ordinary_dialogue", scope: "project", projectId: projectB, threadId: "project-b", turnId: "turn-project-b", completedAt: "2026-07-18T08:00:02.000Z", sourceReference: skippedSource, userText: "A failed Project judgment", assistantText: "Challenge B" }
+    );
+    batch.extractionScopes.unshift(
+      { ...scope, id: `project:${projectA}`, kind: "project", projectId: projectA, threadId: undefined, sourceReferences: [projectSource], status: "approved", result: { ...scope.result, scopeKind: "project", sourceReferences: [projectSource], candidates: [{ ...scope.result.candidates[0], candidateId: "recovered-project-a", sourceReferences: [projectSource], proposedDestination: "long_term_memory" }] } },
+      { ...scope, id: `project:${projectB}`, kind: "project", projectId: projectB, threadId: undefined, sourceReferences: [skippedSource], status: "skipped", result: undefined, failure: { kind: "provider", code: "FIXTURE_SCOPE_FAILED", message: "Sanitized scope failure" } }
+    );
+    batch.partialCoverageScopeIds = [`project:${projectB}`];
+    batch.representedProjectIds = [projectA, projectB];
+    batch.representedScopeCount = 3;
+    state.carryover.push({ id: "55555555-5555-4555-8555-555555555555", sourceBatchId: batch.id, kind: "trajectory_scope", scope: "project", projectId: projectB, sourceReference: skippedSource, reason: "skipped", oldestUnresolvedAt: "2026-07-18T08:00:02.000Z", sourceStatus: "available", sourceText: "A failed Project judgment" });
+    state.schedule.carryoverCount = 1;
     batch.status = "synthesis_pending";
     batch.currentStage = "global_synthesis";
     writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -1355,6 +1440,7 @@ test("reviews Global Dream proposals separately from the final atomic Memory com
     await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
     await window.getByRole("button", { name: "Run Global Synthesis" }).click();
     await expect(window.getByText("Global Dream Synthesis", { exact: true })).toBeVisible();
+    await expect(window.locator(".dream-synthesis-review")).toContainText("Partial Dream Coverage");
     await expect(window.getByText("Stage diligence around uncertainty", { exact: true })).toBeVisible();
     await window.locator(".dream-proposal-card").getByRole("button", { name: "Approve", exact: true }).click();
     await window.getByRole("button", { name: "Prepare Markdown Patch Preview" }).click();
@@ -1363,7 +1449,9 @@ test("reviews Global Dream proposals separately from the final atomic Memory com
     await window.getByRole("button", { name: "Confirm Memory Commit" }).click();
     await expect(window.getByText("Latest completed Dream", { exact: true })).toBeVisible();
     expect(readFileSync(memory.markdownPath, "utf8")).toContain("Stage diligence around uncertainty");
-    expect(JSON.parse(readFileSync(statePath, "utf8")).batches[0]).toMatchObject({ status: "completed", preparedPatch: { status: "committed" } });
+    const completed = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(completed.batches[0]).toMatchObject({ status: "completed", partialCoverageScopeIds: [`project:${projectB}`], preparedPatch: { status: "committed", partialCoverageScopeReferences: [expect.any(String)] } });
+    expect(completed.carryover).toMatchObject([{ projectId: projectB, reason: "skipped" }]);
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });

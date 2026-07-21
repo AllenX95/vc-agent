@@ -133,6 +133,33 @@ describe("HostStateStore", () => {
     store.close();
   });
 
+  it("exports and atomically replaces only allowlisted Personal Cognition state", () => {
+    const { store } = createStore();
+    const shipped = store.ensureDefaultSystemPrompt("Default VC prompt");
+    const edited = store.createSystemPromptRevision("Edited VC prompt", "Personal revision");
+    store.activateSystemPromptRevision(edited.id);
+    const profile = store.createModelProfile({ name: "Dream", provider: "anthropic", model: "model-a", thinkingLevel: "low", encryptedCredential: new Uint8Array([7, 8, 9]) });
+    store.setTaskModelAssignment("dream", profile.id);
+    store.setAccessMode("full");
+    const snapshot = store.exportPersonalCognitionState();
+    expect(snapshot).toMatchObject({ schemaVersion: 1, accessMode: "full", activePromptRevisionId: edited.id });
+    expect(snapshot.profiles[0]).not.toHaveProperty("credentialRef");
+    expect(JSON.stringify(snapshot)).not.toContain("7,8,9");
+
+    store.restoreDefaultSystemPrompt("Default VC prompt", "Changed after backup");
+    store.replacePersonalCognitionState(snapshot);
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(edited.id);
+    expect(store.getSystemPromptRevision(shipped.id)?.content).toBe("Default VC prompt");
+    expect(store.listTaskModelAssignments()).toMatchObject([{ taskType: "dream", profileId: profile.id }]);
+    const restoredProfile = store.getModelProfile(profile.id)!;
+    expect(restoredProfile.credentialRef).toMatch(/^setup-required-/u);
+    expect(store.getEncryptedCredential(restoredProfile.credentialRef)).toBeUndefined();
+    const configured = store.setModelProfileCredential(restoredProfile.id, new Uint8Array([4, 5, 6]));
+    expect(configured.credentialRef).not.toBe(restoredProfile.credentialRef);
+    expect(store.getEncryptedCredential(configured.credentialRef)).toEqual(new Uint8Array([4, 5, 6]));
+    store.close();
+  });
+
   it("registers stable Projects, authorizes explicit Profiles, and isolates Project Threads", () => {
     const { store } = createStore();
     const createdAt = new Date().toISOString();

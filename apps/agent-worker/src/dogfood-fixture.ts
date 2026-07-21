@@ -33,6 +33,14 @@ export function explicitLongTermMemoryFixtureResponses() {
   ];
 }
 
+export function learningGateRecallFixtureResponses() {
+  return [
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "cards", query: "representative retention threshold", maxItems: 4, maxChars: 2_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage(fauxToolCall("memory_recall", { source: "long_term_memory", disclosureLevel: "full", entryIds: ["ltm-representative-retention-threshold"], maxItems: 2, maxChars: 3_000 }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("Recalled the reviewed representative-retention decision rule without loading Project identity or Project state.")
+  ];
+}
+
 export function dreamSynthesisFixtureResponses(prompt: string) {
   const marker = "De-identified synthesis input:\n";
   const start = prompt.indexOf(marker);

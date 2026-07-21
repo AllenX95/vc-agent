@@ -108,6 +108,25 @@ export interface RuntimeActivitySnapshot {
   readonly externalNetworkRequests: number;
 }
 
+export interface PersonalCognitionProfile {
+  readonly id: string;
+  readonly name: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly thinkingLevel: ThinkingLevel;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface PersonalCognitionState {
+  readonly schemaVersion: 1;
+  readonly accessMode: AccessMode;
+  readonly profiles: readonly PersonalCognitionProfile[];
+  readonly taskAssignments: readonly TaskModelAssignment[];
+  readonly promptRevisions: readonly SystemPromptRevision[];
+  readonly activePromptRevisionId: string;
+}
+
 export interface PhysicalContextState {
   readonly threadId: string;
   readonly sessionFile: string;
@@ -529,7 +548,25 @@ export class HostStateStore {
     const row = this.#database
       .prepare("SELECT encrypted_value FROM protected_credentials WHERE id = ?")
       .get(credentialRef) as { encrypted_value: Uint8Array } | undefined;
-    return row?.encrypted_value;
+    return row?.encrypted_value.byteLength === 0 ? undefined : row?.encrypted_value;
+  }
+
+  setModelProfileCredential(profileId: string, encryptedCredential: Uint8Array): ModelProfile {
+    const profile = this.getModelProfile(profileId);
+    if (profile === undefined) throw new Error("Model Profile not found");
+    const credentialRef = randomUUID();
+    const now = new Date().toISOString();
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.prepare("INSERT INTO protected_credentials(id, provider, encrypted_value, created_at) VALUES (?, ?, ?, ?)").run(credentialRef, profile.provider, encryptedCredential, now);
+      this.#database.prepare("UPDATE model_profiles SET credential_ref = ?, updated_at = ? WHERE id = ?").run(credentialRef, now, profileId);
+      this.#database.prepare("DELETE FROM protected_credentials WHERE id = ?").run(profile.credentialRef);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getModelProfile(profileId)!;
   }
 
   listTaskModelAssignments(): TaskModelAssignment[] {
@@ -956,6 +993,65 @@ export class HostStateStore {
     this.#database.prepare("UPDATE application_settings SET value = ?, updated_at = ? WHERE key = 'access_mode'").run(mode, new Date().toISOString());
   }
 
+  exportPersonalCognitionState(): PersonalCognitionState {
+    const activePromptRevision = this.getActiveSystemPromptRevision();
+    if (activePromptRevision === undefined) throw new Error("System Prompt is not initialized");
+    return {
+      schemaVersion: 1,
+      accessMode: this.getAccessMode(),
+      profiles: this.listModelProfiles().map(({ credentialRef: _credentialRef, ...profile }) => profile),
+      taskAssignments: this.listTaskModelAssignments(),
+      promptRevisions: this.listSystemPromptRevisions(),
+      activePromptRevisionId: activePromptRevision.id
+    };
+  }
+
+  replacePersonalCognitionState(snapshot: PersonalCognitionState): void {
+    validatePersonalCognitionState(snapshot);
+    const now = new Date().toISOString();
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database.prepare("UPDATE threads SET active_profile_id = NULL").run();
+      this.#database.prepare("DELETE FROM project_provider_authorizations").run();
+      this.#database.prepare("DELETE FROM task_model_assignments").run();
+      this.#database.prepare("DELETE FROM reflection_runs").run();
+      this.#database.prepare("DELETE FROM physical_contexts").run();
+      this.#database.prepare("DELETE FROM model_profiles").run();
+      this.#database.prepare("DELETE FROM protected_credentials").run();
+      this.#database.prepare("DELETE FROM application_settings WHERE key = 'active_prompt_revision_id'").run();
+      this.#database.prepare("DELETE FROM system_prompt_revisions").run();
+
+      for (const revision of [...snapshot.promptRevisions].sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
+        this.#database.prepare(`
+          INSERT INTO system_prompt_revisions(id, content, hash, source_revision_id, change_note, diff, source, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(revision.id, revision.content, revision.hash, revision.sourceRevisionId ?? null, revision.changeNote ?? null, revision.diff, revision.source, revision.createdAt);
+      }
+      this.#database.prepare("INSERT INTO application_settings(key, value, updated_at) VALUES ('active_prompt_revision_id', ?, ?)")
+        .run(snapshot.activePromptRevisionId, now);
+      this.#database.prepare("UPDATE application_settings SET value = ?, updated_at = ? WHERE key = 'access_mode'")
+        .run(snapshot.accessMode, now);
+
+      for (const profile of snapshot.profiles) {
+        const credentialRef = `setup-required-${randomUUID()}`;
+        this.#database.prepare("INSERT INTO protected_credentials(id, provider, encrypted_value, created_at) VALUES (?, ?, ?, ?)")
+          .run(credentialRef, profile.provider, new Uint8Array(), now);
+        this.#database.prepare(`
+          INSERT INTO model_profiles(id, name, provider, model, credential_ref, thinking_level, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(profile.id, profile.name, profile.provider, profile.model, credentialRef, profile.thinkingLevel, profile.createdAt, profile.updatedAt);
+      }
+      for (const assignment of snapshot.taskAssignments) {
+        this.#database.prepare("INSERT INTO task_model_assignments(task_type, profile_id, updated_at) VALUES (?, ?, ?)")
+          .run(assignment.taskType, assignment.profileId, assignment.updatedAt);
+      }
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   setThreadOutputLocation(threadId: string, outputLocation: string): UnscopedThread {
     const result = this.#database.prepare(`
       UPDATE threads SET output_location = ?, state_version = state_version + 1 WHERE id = ?
@@ -1102,6 +1198,15 @@ export class HostStateStore {
   close(): void {
     this.#database.close();
   }
+}
+
+function validatePersonalCognitionState(snapshot: PersonalCognitionState): void {
+  if (snapshot.schemaVersion !== 1) throw new Error("Unsupported Personal Cognition state schema");
+  if (snapshot.accessMode !== "standard" && snapshot.accessMode !== "full") throw new Error("Invalid Personal Cognition Access Mode");
+  const profileIds = new Set(snapshot.profiles.map((profile) => profile.id));
+  if (profileIds.size !== snapshot.profiles.length) throw new Error("Duplicate Model Profile id in Personal Cognition state");
+  if (!snapshot.promptRevisions.some((revision) => revision.id === snapshot.activePromptRevisionId)) throw new Error("Active System Prompt Revision is missing");
+  for (const assignment of snapshot.taskAssignments) if (!profileIds.has(assignment.profileId)) throw new Error("Task Model Assignment references a missing Profile");
 }
 
 function mapProfile(row: ProfileRow): ModelProfile {

@@ -8,6 +8,7 @@ import { DreamCommitStore, DreamReviewStore, LongTermMemoryStore, MemoryCandidat
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 const projectId = "11111111-1111-4111-8111-111111111111";
+const skippedProjectId = "22222222-2222-4222-8222-222222222222";
 const profile: DreamProfileSnapshot = { id: "dream-profile", name: "Dream", provider: "fixture", model: "dream", thinkingLevel: "medium" };
 const prompt: SystemPromptRevision = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", content: "Prompt", hash: "a".repeat(64), diff: "Initial", source: "shipped_default", createdAt: "2026-07-01T00:00:00.000Z" };
 
@@ -23,7 +24,7 @@ describe("Dream reviewed patch commit", () => {
     expect(fixture.reviews.load().batches[0]).toMatchObject({ status: "patch_pending", preparedPatch: { status: "prepared" } });
 
     const completed = fixture.commits.commit(fixture.batchId, patch.id);
-    expect(completed).toMatchObject({ status: "completed", currentStage: "completed", partialCoverageScopeIds: [expect.stringContaining("skipped-thread")], preparedPatch: { status: "committed", partialCoverageScopeReferences: [expect.stringMatching(/^scope_ref_/)] } });
+    expect(completed).toMatchObject({ status: "completed", currentStage: "completed", partialCoverageScopeIds: [expect.stringContaining(skippedProjectId)], preparedPatch: { status: "committed", partialCoverageScopeReferences: [expect.stringMatching(/^scope_ref_/)] } });
     expect(readFileSync(fixture.projectMemory.markdownPath(fixture.projectPath), "utf8")).toContain("Project-specific diligence lesson");
     expect(fixture.memory.readCurrent().entries).toMatchObject([{ title: "Reusable diligence lesson", maturity: "user-confirmed" }]);
     expect(fixture.reviews.load().schedule.lastCommittedCutoff).toBe("2026-07-18T00:00:00.000Z");
@@ -57,18 +58,18 @@ function setup(failAfterTargetActivation?: number) {
   const root = mkdtempSync(join(tmpdir(), "vc-agent-dream-commit-"));
   directories.push(root);
   const reviews = new DreamReviewStore(join(root, "dream"), { now: () => new Date("2026-07-19T00:00:00.000Z") });
-  const trajectory = [input("project", "project-thread"), input("unscoped", "unscoped-thread"), input("unscoped", "skipped-thread")];
-  let batch = reviews.createBatch({ promptRevision: prompt, profile, trajectory, candidates: [], projectMemoryHashes: { [projectId]: undefined } });
+  const trajectory = [input("project", "project-thread", projectId), input("unscoped", "unscoped-thread"), input("project", "skipped-thread", skippedProjectId)];
+  let batch = reviews.createBatch({ promptRevision: prompt, profile, trajectory, candidates: [], projectMemoryHashes: { [projectId]: undefined, [skippedProjectId]: undefined } });
   for (const scope of batch.extractionScopes) {
     reviews.startScope(batch.id, scope.id);
     reviews.completeScope(batch.id, scope.id, scopeSummary(scope.kind, scope.sourceReferences[0]!));
-    reviews.reviewScope(batch.id, scope.id, scope.threadId === "skipped-thread" ? "skip" : "approve");
+    reviews.reviewScope(batch.id, scope.id, scope.projectId === skippedProjectId ? "skip" : "approve");
   }
   batch = reviews.beginSynthesis(batch.id);
   const scopes = batch.extractionScopes;
   const projectScope = scopes.find((scope) => scope.kind === "project")!;
   const unscopedScope = scopes.find((scope) => scope.threadId === "unscoped-thread")!;
-  const skippedScope = scopes.find((scope) => scope.threadId === "skipped-thread")!;
+  const skippedScope = scopes.find((scope) => scope.projectId === skippedProjectId)!;
   const synthesis: DreamGlobalSynthesis = {
     schemaVersion: 1, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", status: "review_pending", inputHash: "3".repeat(64), longTermMemoryHash: "4".repeat(64), summary: "Reviewed synthesis", uncertainty: "Medium", partialCoverageScopeReferences: [opaqueScopeReference(batch.id, skippedScope.id)],
     scopeMap: [{ scopeReference: opaqueScopeReference(batch.id, projectScope.id), scopeId: projectScope.id }, { scopeReference: opaqueScopeReference(batch.id, unscopedScope.id), scopeId: unscopedScope.id }],
@@ -87,12 +88,12 @@ function setup(failAfterTargetActivation?: number) {
   const candidates = new MemoryCandidateStore(join(root, "memory", "candidates.jsonl"));
   const commits = new DreamCommitStore(join(root, "dream"), { reviews, evolution, memory, projectMemory, candidates }, () => new Date("2026-07-19T00:00:00.000Z"));
   const projectPath = join(root, "Secret Project Name");
-  const projects = new Map([[projectId, { id: projectId, path: projectPath }]]);
+  const projects = new Map([[projectId, { id: projectId, path: projectPath }], [skippedProjectId, { id: skippedProjectId, path: join(root, "Second Secret Project") }]]);
   return { root, reviews, memory, projectMemory, commits, batchId: batch.id, projectPath, projects };
 }
 
-function input(scope: "project" | "unscoped", threadId: string): DreamTrajectoryInput {
-  return { sourceKind: "ordinary_dialogue", scope, ...(scope === "project" ? { projectId } : {}), threadId, turnId: `turn-${threadId}`, completedAt: "2026-07-18T00:00:00.000Z", sourceReference: `thread:${threadId}/turn:turn-${threadId}`, userText: "User judgment", assistantText: "Assistant response" };
+function input(scope: "project" | "unscoped", threadId: string, sourceProjectId = projectId): DreamTrajectoryInput {
+  return { sourceKind: "ordinary_dialogue", scope, ...(scope === "project" ? { projectId: sourceProjectId } : {}), threadId, turnId: `turn-${threadId}`, completedAt: "2026-07-18T00:00:00.000Z", sourceReference: `thread:${threadId}/turn:turn-${threadId}`, userText: "User judgment", assistantText: "Assistant response" };
 }
 function scopeSummary(scopeKind: "project" | "unscoped", sourceReference: string): DreamScopeSummary {
   return { schemaVersion: 1, scopeKind, deidentified: true, summary: `${scopeKind} summary`, uncertainty: "Medium", sourceReferences: [sourceReference], candidates: [{ candidateId: `candidate-${scopeKind}`, origin: "recovered", sourceKind: "ordinary_user_signal", attributableSignal: "strong_user_judgment", sourceReferences: [sourceReference], uncertainty: "Medium", summary: "Diligence lesson", proposedDestination: scopeKind === "project" ? "project_memory" : "long_term_memory" }] };

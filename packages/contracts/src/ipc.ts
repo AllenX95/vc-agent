@@ -350,6 +350,8 @@ const commandMetadataSchema = z.object({
 
 const bootstrapCommandSchema = commandMetadataSchema.extend({ command: z.literal("app.bootstrap") });
 const exportRecoveryStateCommandSchema = commandMetadataSchema.extend({ command: z.literal("state.recovery.export") });
+const createPersonalCognitionBackupCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.backup.create") });
+const restorePersonalCognitionCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.restore") });
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
 const setAccessModeCommandSchema = commandMetadataSchema.extend({
   command: z.literal("access.mode.set"),
@@ -365,6 +367,7 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
     thinkingLevel: thinkingLevelSchema
   })
 });
+const setProfileCredentialCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.credential.set"), payload: z.object({ profileId: z.string().min(1), apiKey: z.string().min(1).max(8192) }) });
 const listPromptRevisionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("prompt.revision.list") });
 const createPromptRevisionCommandSchema = commandMetadataSchema.extend({
   command: z.literal("prompt.revision.create"),
@@ -509,9 +512,12 @@ const resolveCapabilityConfirmationCommandSchema = commandMetadataSchema.extend(
 export const hostCommandSchema = z.discriminatedUnion("command", [
   bootstrapCommandSchema,
   exportRecoveryStateCommandSchema,
+  createPersonalCognitionBackupCommandSchema,
+  restorePersonalCognitionCommandSchema,
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
   createProfileCommandSchema,
+  setProfileCredentialCommandSchema,
   listPromptRevisionsCommandSchema,
   createPromptRevisionCommandSchema,
   activatePromptRevisionCommandSchema,
@@ -638,6 +644,16 @@ const recoveryStateExportCompletedEventSchema = eventMetadataSchema.extend({
   event: z.literal("state.recovery.export.completed"),
   payload: z.object({ status: z.enum(["exported", "canceled"]), destination: z.string().min(1).max(4096).optional(), fileCount: z.number().int().nonnegative() })
 });
+const personalCognitionOperationCompletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("personal_cognition.operation.completed"),
+  payload: z.object({
+    operation: z.enum(["backup", "restore"]),
+    status: z.enum(["completed", "canceled"]),
+    path: z.string().min(1).max(4096).optional(),
+    fileCount: z.number().int().nonnegative(),
+    requiresCredentialSetup: z.boolean()
+  })
+});
 const accessModeChangedEventSchema = eventMetadataSchema.extend({
   event: z.literal("access.mode.changed"),
   payload: z.object({ mode: z.enum(["standard", "full"]) })
@@ -658,6 +674,7 @@ const profileCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("profile.created"),
   payload: z.object({ profile: modelProfileSchema })
 });
+const profileCredentialUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("profile.credential.updated"), payload: z.object({ profile: modelProfileSchema }) });
 const promptRevisionsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("prompt.revisions.listed"),
   payload: z.object({ activeRevisionId: z.string().uuid(), revisions: z.array(systemPromptRevisionSchema) })
@@ -910,10 +927,12 @@ const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
 export const hostEventSchema = z.discriminatedUnion("event", [
   bootstrapCompletedEventSchema,
   recoveryStateExportCompletedEventSchema,
+  personalCognitionOperationCompletedEventSchema,
   accessModeChangedEventSchema,
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
+  profileCredentialUpdatedEventSchema,
   promptRevisionsListedEventSchema,
   promptRevisionCreatedEventSchema,
   promptRevisionActivatedEventSchema,

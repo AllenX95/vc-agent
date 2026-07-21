@@ -28,7 +28,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -130,6 +130,7 @@ let memoryCandidates: MemoryCandidateStore | null = null;
 let reflectionOutcomes: ReflectionOutcomeStore | null = null;
 let dreamReviews: DreamReviewStore | null = null;
 let dreamCommits: DreamCommitStore | null = null;
+let personalCognition: PersonalCognitionBackupService | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -425,6 +426,38 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const files = exportRawStateBundle(source, destination, preparation);
         return { ...eventMetadata(command.correlationId), event: "state.recovery.export.completed", payload: { status: "exported", destination, fileCount: files.length } };
       }
+      case "personal_cognition.backup.create": {
+        if (command.actor.actorType !== "user" || personalCognition === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Personal Cognition Backup requires explicit User action.");
+        let parent = process.env.VC_AGENT_TEST_BACKUP_DESTINATION;
+        if (parent === undefined) {
+          const selection = await dialog.showOpenDialog({ title: "Choose Personal Cognition Backup destination", properties: ["openDirectory", "createDirectory"] });
+          parent = selection.canceled ? undefined : selection.filePaths[0];
+        }
+        if (parent === undefined) return { ...eventMetadata(command.correlationId), event: "personal_cognition.operation.completed", payload: { operation: "backup", status: "canceled", fileCount: 0, requiresCredentialSetup: false } };
+        const destination = join(parent, `vc-agent-personal-cognition-${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`);
+        const manifest = personalCognition.create(destination);
+        return { ...eventMetadata(command.correlationId), event: "personal_cognition.operation.completed", payload: { operation: "backup", status: "completed", path: destination, fileCount: manifest.files.length, requiresCredentialSetup: false } };
+      }
+      case "personal_cognition.restore": {
+        if (command.actor.actorType !== "user" || personalCognition === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Personal Cognition Restore requires explicit User action.");
+        let source = process.env.VC_AGENT_TEST_RESTORE_SOURCE;
+        if (source === undefined) {
+          const selection = await dialog.showOpenDialog({ title: "Select Personal Cognition Backup", properties: ["openDirectory"] });
+          source = selection.canceled ? undefined : selection.filePaths[0];
+        }
+        if (source === undefined) return { ...eventMetadata(command.correlationId), event: "personal_cognition.operation.completed", payload: { operation: "restore", status: "canceled", fileCount: 0, requiresCredentialSetup: false } };
+        const preview = personalCognition.inspect(source);
+        let confirmed = process.env.VC_AGENT_TEST_CONFIRM_RESTORE === "1";
+        if (!confirmed) {
+          const choice = await dialog.showMessageBox({ type: "warning", buttons: ["Cancel", "Replace Personal Cognition"], defaultId: 0, cancelId: 0, title: "Replace Personal Cognition?", message: "This replaces all supported personal cognition domains.", detail: "The bundle is validated first. Project data and credentials are not restored. Model Profiles will require fresh credential setup." });
+          confirmed = choice.response === 1;
+        }
+        if (!confirmed) return { ...eventMetadata(command.correlationId), event: "personal_cognition.operation.completed", payload: { operation: "restore", status: "canceled", path: source, fileCount: preview.manifest.files.length, requiresCredentialSetup: preview.requiresCredentialSetup } };
+        personalCognition.restore(source, true);
+        loadedPromptByThread.clear();
+        longTermMemories?.refreshIfExists();
+        return { ...eventMetadata(command.correlationId), event: "personal_cognition.operation.completed", payload: { operation: "restore", status: "completed", path: source, fileCount: preview.manifest.files.length, requiresCredentialSetup: preview.requiresCredentialSetup } };
+      }
       case "access.mode.set":
         stateStore.setAccessMode(command.payload.mode);
         return { ...eventMetadata(command.correlationId), event: "access.mode.changed", payload: { mode: command.payload.mode } };
@@ -439,6 +472,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           encryptedCredential: credentials.encrypt(command.payload.apiKey)
         });
         return { ...eventMetadata(command.correlationId), event: "profile.created", payload: { profile } };
+      }
+      case "profile.credential.set": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Credential setup requires explicit User action.");
+        const profile = stateStore.setModelProfileCredential(command.payload.profileId, credentials.encrypt(command.payload.apiKey));
+        return { ...eventMetadata(command.correlationId), event: "profile.credential.updated", payload: { profile } };
       }
       case "prompt.revision.list": {
         const active = stateStore.getActiveSystemPromptRevision();
@@ -2502,6 +2540,16 @@ app.whenReady().then(() => {
   if (!readOnlyRecovery) synchronizeDreamSchedulingIndex();
   inflight = new InflightTurnCoordinator(trajectoryStore);
   if (!readOnlyRecovery) stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
+  if (!readOnlyRecovery) personalCognition = new PersonalCognitionBackupService({
+    state: stateStore,
+    memoryFiles: {
+      "long-term-memory.md": longTermMemories.markdownPath,
+      "long-term-memory-condensation-archive.md": longTermMemories.archivePath,
+      "cognitive-evolution-history.md": longTermMemories.historyPath,
+      "long-term-maintenance.json": join(app.getPath("userData"), "memory", "long-term-maintenance.json")
+    },
+    skillsRoot: join(app.getPath("userData"), "skills")
+  });
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityRegistry.register(createCapabilityBroker((input, context) => {

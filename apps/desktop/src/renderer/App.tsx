@@ -139,6 +139,7 @@ export function App() {
   const [candidateDraft, setCandidateDraft] = useState<{ candidate: MemoryCandidate; title: string; tags: string; body: string } | null>(null);
   const [outputsByProject, setOutputsByProject] = useState<Record<string, ProjectOutputArtifact[]>>({});
   const [recoveryExport, setRecoveryExport] = useState<string | null>(null);
+  const [personalCognitionNotice, setPersonalCognitionNotice] = useState<string | null>(null);
   const [longTermMemoryDocument, setLongTermMemoryDocument] = useState<LongTermMemoryDocument | null>(null);
   const [longTermMemoryDraft, setLongTermMemoryDraft] = useState("");
   const [preparedMemoryPatch, setPreparedMemoryPatch] = useState<PreparedMemoryPatch | null>(null);
@@ -161,11 +162,22 @@ export function App() {
   );
   const activeTurn = items.find((item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming"));
   const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
+  const learningTelemetry = {
+    coveredScopes: dreamState?.batches.flatMap((batch) => batch.extractionScopes).filter((scope) => scope.status === "approved" || scope.status === "skipped").length ?? 0,
+    totalScopes: dreamState?.batches.flatMap((batch) => batch.extractionScopes).length ?? 0,
+    failureCount: reflectionRuns.filter((run) => run.status.includes("failed")).length
+      + (dreamState?.batches.flatMap((batch) => batch.extractionScopes).filter((scope) => scope.status === "failed").length ?? 0)
+      + Object.values(conversations).flat().filter((item) => item.role === "assistant" && item.status === "failed").length
+  };
 
   const applyEvent = useCallback((event: HostEvent) => {
     switch (event.event) {
       case "app.bootstrap.completed": setBootstrap(event.payload); break;
       case "state.recovery.export.completed": setRecoveryExport(event.payload.status === "exported" ? event.payload.destination ?? "Export completed" : "Export canceled"); break;
+      case "personal_cognition.operation.completed":
+        setPersonalCognitionNotice(event.payload.status === "completed" ? `${event.payload.operation === "backup" ? "Backup created" : "Restore completed"}: ${event.payload.path ?? ""}${event.payload.requiresCredentialSetup ? " · Model Profile credentials require fresh setup." : ""}` : `${event.payload.operation === "backup" ? "Backup" : "Restore"} canceled`);
+        if (event.payload.operation === "restore" && event.payload.status === "completed") window.setTimeout(() => window.location.reload(), 50);
+        break;
       case "long_term_memory.loaded":
       case "long_term_memory.updated":
         if (event.payload.source === "external_edit" && longTermMemoryDirty.current) {
@@ -190,6 +202,7 @@ export function App() {
       case "long_term_memory.provenance.inspected": break;
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
+      case "profile.credential.updated": setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]); break;
       case "task_model_assignments.listed": setTaskAssignments(event.payload.assignments); break;
       case "task_model_assignment.updated": setTaskAssignments((current) => event.payload.assignment === undefined ? current.filter((item) => item.taskType !== event.payload.taskType) : [...current.filter((item) => item.taskType !== event.payload.taskType), event.payload.assignment]); break;
       case "reflection.runs.listed": setReflectionRuns(event.payload.runs); break;
@@ -615,7 +628,7 @@ export function App() {
         <DiagnosticBanner event={diagnostic} />
         {!dreamNoticeDismissed && (dreamDueProposal !== null || pendingDreamReminder !== null) && <div className="dream-notice" role="status"><Moon size={17} /><div><strong>{pendingDreamReminder?.kind === "resumable_run" ? "Dream run can resume" : pendingDreamReminder?.kind === "carryover" ? "Dream has unresolved carryover" : "Dream review is due"}</strong><span>{pendingDreamReminder !== null ? `${pendingDreamReminder.affectedScopeCount} scope(s) · oldest ${new Date(pendingDreamReminder.oldestUnresolvedAt).toLocaleDateString()}` : `${dreamDueProposal?.candidateCount ?? 0} captured candidate(s) · ${dreamDueProposal?.eligibleSessionCount ?? 0} eligible exchange(s)`}</span></div><div>{pendingDreamReminder?.kind === "resumable_run" && pendingDreamReminder.batchId !== undefined ? <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: pendingDreamReminder.batchId! } }))}>Resume</button> : <button className="primary-button" type="button" onClick={openDreamLaunch}>Review</button>}<button type="button" onClick={deferDreamNotice}>Tomorrow</button><button type="button" onClick={() => setDreamNoticeDismissed(true)}>Dismiss</button></div></div>}
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} taskAssignments={taskAssignments} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} taskAssignments={taskAssignments} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} personalCognitionNotice={personalCognitionNotice} learningTelemetry={learningTelemetry} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -752,7 +765,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, personalCognitionNotice, learningTelemetry, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   taskAssignments: TaskModelAssignment[];
@@ -763,6 +776,8 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
   invoke(command: HostCommand): Promise<unknown>;
   readOnly: boolean;
   recoveryExport: string | null;
+  personalCognitionNotice: string | null;
+  learningTelemetry: { coveredScopes: number; totalScopes: number; failureCount: number };
   longTermMemoryDocument: LongTermMemoryDocument | null;
   longTermMemoryDraft: string;
   preparedMemoryPatch: PreparedMemoryPatch | null;
@@ -778,6 +793,8 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [thinkingLevel, setThinkingLevel] = useState<ModelProfile["thinkingLevel"]>("off");
+  const [credentialProfileId, setCredentialProfileId] = useState<string | null>(null);
+  const [replacementCredential, setReplacementCredential] = useState("");
   const valid = name.trim() && provider.trim() && model.trim() && apiKey;
   const save = (event: FormEvent) => {
     event.preventDefault();
@@ -802,6 +819,7 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
       {tab === "memory" ? <div className="memory-settings-stack"><DreamSettings state={dreamState} invoke={invoke} launch={openDreamLaunch} /><LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} patch={preparedMemoryPatch} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /></div> : <>
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>
+      <div className="settings-section personal-cognition-settings"><div className="settings-section-header"><div><h2>Personal Cognition Backup</h2><p>Portable, checksummed cognition only. Projects, workflow state, trajectories, and credentials are excluded.</p></div></div><div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.restore" }))}>Restore backup</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.backup.create" }))}>Create backup</button></div>{personalCognitionNotice && <span role="status" title={personalCognitionNotice}>{personalCognitionNotice}</span>}</div>
       <div className="settings-section profile-settings">
         <div className="settings-section-header"><div><h2>Model Profiles</h2><p>Credentials are protected by Windows and stored only by reference.</p></div><button className="compact-button" type="button" onClick={() => setFormOpen(!formOpen)}><Plus size={15} /> New profile</button></div>
         {formOpen && <form className="profile-form" onSubmit={save}>
@@ -812,7 +830,7 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
           <label>Reasoning<select value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value as ModelProfile["thinkingLevel"])}><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <div className="form-actions"><button type="button" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={!valid}>Save profile</button></div>
         </form>}
-        <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span></div><span>{profile.thinkingLevel}</span></div>)}</div>
+        <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span>{profile.credentialRef.startsWith("setup-required-") && <><span>Credential setup required after restore</span>{credentialProfileId === profile.id ? <span className="secret-input"><KeyRound size={14} /><input aria-label={`Credential for ${profile.name}`} type="password" value={replacementCredential} onChange={(event) => setReplacementCredential(event.target.value)} autoComplete="off" /><button type="button" disabled={!replacementCredential} onClick={() => void invoke(createCommand({ command: "profile.credential.set", payload: { profileId: profile.id, apiKey: replacementCredential } })).then(() => { setCredentialProfileId(null); setReplacementCredential(""); })}>Save credential</button></span> : <button type="button" onClick={() => setCredentialProfileId(profile.id)}>Set credential</button>}</>}</div><span>{profile.thinkingLevel}</span></div>)}</div>
       </div>
       <div className="settings-section task-assignment-settings"><div className="settings-section-header"><div><h2>Task Model Assignments</h2><p>Workflow defaults; launch-time selection remains available.</p></div></div>{TASK_MODEL_TYPES.map((task) => <label key={task.id}><span>{task.label}</span><select aria-label={`${task.label} Profile`} value={taskAssignments.find((item) => item.taskType === task.id)?.profileId ?? ""} onChange={(event) => void invoke(createCommand(event.target.value === "" ? { command: "task_model_assignment.clear", payload: { taskType: task.id } } : { command: "task_model_assignment.set", payload: { taskType: task.id, profileId: event.target.value } }))}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</option>)}</select></label>)}</div>
       <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
@@ -820,6 +838,7 @@ function SettingsView({ bootstrap, profiles, taskAssignments, promptRevisions, a
       </fieldset>
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>Storage mode</dt><dd>{bootstrap?.storageMode ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Supported schema</dt><dd>{bootstrap?.migration.supportedVersion ?? "Loading"}</dd></div><div><dt>Migration status</dt><dd>{bootstrap?.migration.status ?? "Loading"}</dd></div><div><dt>Rollback</dt><dd>{bootstrap?.migration.rollbackAvailable ? "Available" : "Unavailable"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div></dl></div>
+      <div className="settings-section learning-telemetry"><h2>Learning telemetry</h2><p>Turn details expose prompt, tools, retained context, recall, output reserve, token contribution, and latency.</p><dl><div><dt>Dream scope coverage</dt><dd>{learningTelemetry.coveredScopes} / {learningTelemetry.totalScopes}</dd></div><div><dt>Visible workflow failures</dt><dd>{learningTelemetry.failureCount}</dd></div><div><dt>Remote content telemetry</dt><dd>Disabled</dd></div></dl></div>
       <div className="settings-section"><h2>Environment Doctor</h2><dl>{bootstrap?.environmentDoctor === undefined ? <div><dt>Status</dt><dd>Loading</dd></div> : Object.entries(bootstrap.environmentDoctor).map(([name, diagnostic]) => <div key={name}><dt>{doctorLabel(name)}</dt><dd><span className={`doctor-status ${diagnostic.status}`}>{diagnostic.status}</span> {diagnostic.message}</dd></div>)}</dl></div>
       </>}
     </section>

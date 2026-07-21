@@ -30,6 +30,7 @@ export { DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, buildDreamGlobalSynthesisPrompt, b
 export { DreamCommitStore, type DreamCommitProject } from "./dream-commit.js";
 export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutcomeStoreOptions } from "./reflection-outcomes.js";
 export { ProjectOutputRegistry } from "./project-output-registry.js";
+export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

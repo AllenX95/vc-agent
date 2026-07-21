@@ -120,7 +120,7 @@ describe("MemoryEvolutionStore", () => {
       targetEntryIds: ["ltm-tam-framing"],
       proposed: draft,
       rationale: `${action} after approved discussion.`,
-      resolutionSignal: { type: action === "revise" ? "approved_reflection" : "user_correction", referenceId: "judgment-record-01" },
+      resolutionSignal: { type: action === "revise" ? "approved_retrospective" : "user_correction", referenceId: "judgment-record-01" },
       provenanceRecords: [provenance("src_ref_beta")]
     });
     const after = evolution.commit(patch.id).entries.find((entry) => entry.id === "ltm-tam-framing")!;
