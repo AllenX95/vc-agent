@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
+import { LongTermMemoryStore } from "@vc-agent/host-services";
 
 test("launches the empty shell without activating execution resources", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-e2e-"));
@@ -1273,11 +1274,13 @@ test("creates and restores a frozen Dream batch without hidden model work", asyn
     await launch.getByRole("button", { name: "Create Dream Batch" }).click();
     await expect(window.getByText("Frozen batch", { exact: true })).toBeVisible();
     await expect(window.getByText("1 exchanges", { exact: false })).toBeVisible();
+    await expect(window.getByText("Unscoped Thread", { exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Extract", exact: true })).toBeVisible();
 
     const statePath = join(userDataDirectory, "memory", "dream", "review-state.json");
     const created = JSON.parse(readFileSync(statePath, "utf8"));
     expect(created.batches).toHaveLength(1);
-    expect(created.batches[0]).toMatchObject({ status: "ready", cutoff: firstCompletedAt, promptSnapshot: { hash: expect.stringMatching(/^[a-f0-9]{64}$/) }, profileSnapshot: { id: profile.id }, trajectoryInputs: [{ turnId: "turn-1" }] });
+    expect(created.batches[0]).toMatchObject({ status: "ready", cutoff: firstCompletedAt, promptSnapshot: { hash: expect.stringMatching(/^[a-f0-9]{64}$/) }, profileSnapshot: { id: profile.id }, trajectoryInputs: [{ turnId: "turn-1" }], extractionScopes: [{ id: `unscoped:${threadId}`, status: "pending", threadId }] });
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
     await application.close();
 
@@ -1299,6 +1302,68 @@ test("creates and restores a frozen Dream batch without hidden model work", asyn
     await expect(window.getByText("Ready for a new conversation", { exact: true })).toBeVisible();
     expect(existsSync(join(threadDirectory, "trajectory.jsonl"))).toBe(false);
     expect(readFileSync(statePath, "utf8")).not.toContain("My diligence view");
+    expect(JSON.parse(readFileSync(statePath, "utf8")).batches[0].extractionScopes[0]).toMatchObject({ status: "stale", sourceReferences: [] });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("reviews Global Dream proposals separately from the final atomic Memory commit", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-dream-synthesis-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory);
+  try {
+    let window = await application.firstWindow();
+    const profileEvent = await invokeRaw(window, "profile.create", { name: "Dream synthesis fixture", provider: "vc-agent-dream-synthesis-faux", model: "dream-model", apiKey: "fixture-key", thinkingLevel: "medium" }) as { payload: { profile: { id: string; name: string; provider: string; model: string; thinkingLevel: string } } };
+    const profile = profileEvent.payload.profile;
+    await invokeRaw(window, "task_model_assignment.set", { taskType: "dream", profileId: profile.id });
+    const threadEvent = await invokeRaw(window, "thread.create.unscoped", { title: "Dream synthesis source" }) as { payload: { thread: { id: string } } };
+    const threadId = threadEvent.payload.thread.id;
+    await invokeRaw(window, "thread.archive.set", { threadId, archived: true });
+    await application.close();
+    const threadDirectory = join(userDataDirectory, "threads", threadId);
+    mkdirSync(threadDirectory, { recursive: true });
+    writeFileSync(join(threadDirectory, "trajectory.jsonl"), dreamTrajectoryFixture(threadId, "turn-1", "I prefer staged diligence", "Challenge the view", "2026-07-18T08:00:02.000Z", profile), "utf8");
+
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByRole("button", { name: "New batch" }).click();
+    await window.getByRole("dialog", { name: "Start Dream" }).getByRole("button", { name: "Create Dream Batch" }).click();
+    await application.close();
+
+    const statePath = join(userDataDirectory, "memory", "dream", "review-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    const batch = state.batches[0];
+    const scope = batch.extractionScopes[0];
+    const sourceReference = batch.trajectoryInputs[0].sourceReference;
+    scope.status = "approved";
+    scope.result = { schemaVersion: 1, scopeKind: "unscoped", deidentified: true, summary: "Staged diligence can expose decision-changing uncertainty early.", uncertainty: "Medium", sourceReferences: [sourceReference], candidates: [{ candidateId: "recovered-staged-diligence", origin: "recovered", sourceKind: "ordinary_user_signal", attributableSignal: "strong_user_judgment", sourceReferences: [sourceReference], uncertainty: "Medium", summary: "Use staged diligence around explicit uncertainty.", proposedDestination: "long_term_memory" }] };
+    scope.completedAt = "2026-07-19T00:00:00.000Z";
+    scope.reviewedAt = "2026-07-19T00:00:00.000Z";
+    batch.status = "synthesis_pending";
+    batch.currentStage = "global_synthesis";
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    const memory = new LongTermMemoryStore(join(userDataDirectory, "memory", "long-term"));
+
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Memory" }).click();
+    await window.getByRole("button", { name: "Run Global Synthesis" }).click();
+    await expect(window.getByText("Global Dream Synthesis", { exact: true })).toBeVisible();
+    await expect(window.getByText("Stage diligence around uncertainty", { exact: true })).toBeVisible();
+    await window.locator(".dream-proposal-card").getByRole("button", { name: "Approve", exact: true }).click();
+    await window.getByRole("button", { name: "Prepare Markdown Patch Preview" }).click();
+    await expect(window.getByText("Final Markdown Patch Preview", { exact: true })).toBeVisible();
+    expect(readFileSync(memory.markdownPath, "utf8")).not.toContain("Stage diligence around uncertainty");
+    await window.getByRole("button", { name: "Confirm Memory Commit" }).click();
+    await expect(window.getByText("Latest completed Dream", { exact: true })).toBeVisible();
+    expect(readFileSync(memory.markdownPath, "utf8")).toContain("Stage diligence around uncertainty");
+    expect(JSON.parse(readFileSync(statePath, "utf8")).batches[0]).toMatchObject({ status: "completed", preparedPatch: { status: "committed" } });
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });

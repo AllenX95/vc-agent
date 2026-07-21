@@ -83,6 +83,149 @@ export const dreamCarryoverSchema = z.object({
 });
 export type DreamCarryover = z.infer<typeof dreamCarryoverSchema>;
 
+export const dreamScopeCandidateSummarySchema = z.object({
+  candidateId: z.string().min(1).max(80),
+  origin: z.enum(["captured", "recovered", "carryover"]),
+  sourceKind: z.enum(["ordinary_user_signal", "reflection_dialogue", "confirmed_judgment"]),
+  attributableSignal: z.enum(["explicit_remember", "strong_user_judgment", "reflection_adoption", "reflection_correction", "reflection_confirmation", "user_correction", "confirmed_judgment", "explicit_memory_action"]),
+  sourceReferences: z.array(z.string().min(1).max(500)).min(1).max(20),
+  uncertainty: z.string().max(1_000),
+  summary: z.string().min(1).max(2_000),
+  proposedDestination: z.enum(["project_memory", "long_term_memory", "keep_pending", "discard"])
+});
+export type DreamScopeCandidateSummary = z.infer<typeof dreamScopeCandidateSummarySchema>;
+
+export const dreamScopeSummarySchema = z.object({
+  schemaVersion: z.literal(1),
+  scopeKind: z.enum(["project", "unscoped"]),
+  deidentified: z.literal(true),
+  summary: z.string().min(1).max(4_000),
+  uncertainty: z.string().max(1_000),
+  sourceReferences: z.array(z.string().min(1).max(500)).max(100),
+  candidates: z.array(dreamScopeCandidateSummarySchema).max(30)
+}).superRefine((value, context) => {
+  if (value.scopeKind === "unscoped" && value.candidates.some((candidate) => candidate.proposedDestination === "project_memory")) {
+    context.addIssue({ code: "custom", message: "Unscoped Dream extraction cannot propose Project Memory" });
+  }
+});
+export type DreamScopeSummary = z.infer<typeof dreamScopeSummarySchema>;
+
+const dreamScopeFailureSchema = z.object({
+  kind: z.enum(["provider", "configuration", "worker"]),
+  code: z.string().min(1),
+  message: z.string().min(1).max(2_000),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  requestId: z.string().optional()
+});
+
+export const dreamExtractionScopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().min(1).max(120),
+  kind: z.enum(["project", "unscoped"]),
+  projectId: z.string().uuid().optional(),
+  threadId: z.string().min(1).optional(),
+  status: z.enum(["pending", "running", "succeeded", "approved", "failed", "skipped", "keep_pending", "stale"]),
+  inputHash: z.string().regex(/^[a-f0-9]{64}$/),
+  projectMemoryHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  attemptCount: z.number().int().nonnegative(),
+  sourceReferences: z.array(z.string().min(1).max(500)).max(200),
+  result: dreamScopeSummarySchema.optional(),
+  failure: dreamScopeFailureSchema.optional(),
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  reviewedAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime()
+}).superRefine((value, context) => {
+  if ((value.kind === "project") !== (value.projectId !== undefined) || (value.kind === "unscoped") !== (value.threadId !== undefined)) {
+    context.addIssue({ code: "custom", message: "Dream extraction scope identity is invalid" });
+  }
+  if (["succeeded", "approved", "skipped", "keep_pending"].includes(value.status) && value.result === undefined && value.status !== "skipped") {
+    context.addIssue({ code: "custom", message: "Reviewed Dream extraction scope requires a result" });
+  }
+  if (value.result !== undefined && value.result.scopeKind !== value.kind) {
+    context.addIssue({ code: "custom", message: "Dream extraction result scope does not match its isolated scope" });
+  }
+  if (value.status === "failed" && value.failure === undefined) {
+    context.addIssue({ code: "custom", message: "Failed Dream extraction scope requires a sanitized failure" });
+  }
+});
+export type DreamExtractionScope = z.infer<typeof dreamExtractionScopeSchema>;
+
+const dreamLearningDraftSchema = z.object({
+  title: z.string().min(1).max(200),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  tags: z.array(z.string().min(1).max(80)).max(20),
+  applicability: z.array(z.string().min(1).max(200)).max(20),
+  maturity: z.literal("user-confirmed"),
+  recallPolicy: z.enum(["automatic", "explicit-only"]),
+  limitations: z.string().min(1).max(2_000),
+  content: z.string().min(1).max(4_000)
+});
+
+export const dreamSynthesisProposalSchema = z.object({
+  id: z.string().min(6).max(80),
+  sourceScopeReferences: z.array(z.string().min(6).max(80)).min(1).max(20),
+  sourceReferences: z.array(z.string().min(1).max(500)).min(1).max(100),
+  candidateOrigins: z.array(z.enum(["captured", "recovered", "carryover"])).min(1).max(3),
+  destination: z.enum(["project_memory", "long_term_memory", "keep_pending", "discard", "merge_condense"]),
+  memoryAction: z.enum(["add", "reinforce", "narrow", "revise", "contradict", "merge_condense"]).optional(),
+  targetEntryIds: z.array(z.string().min(6).max(80)).max(20),
+  learning: dreamLearningDraftSchema.optional(),
+  uncertainty: z.string().max(1_000),
+  comparisonSummary: z.string().max(2_000),
+  rationale: z.string().min(1).max(2_000),
+  status: z.enum(["pending", "approved", "rejected"]).default("pending")
+}).superRefine((value, context) => {
+  const memoryDestination = value.destination === "project_memory" || value.destination === "long_term_memory" || value.destination === "merge_condense";
+  if (memoryDestination && value.learning === undefined) context.addIssue({ code: "custom", message: "Dream Memory proposal requires a learning draft" });
+  if (value.destination === "merge_condense" && value.memoryAction !== "merge_condense") context.addIssue({ code: "custom", message: "Merge / Condense destination requires merge_condense semantics" });
+  if (value.destination === "long_term_memory" && value.memoryAction === undefined) context.addIssue({ code: "custom", message: "Long-term Memory proposal requires an evolution action" });
+  if (value.destination === "project_memory" && value.memoryAction !== undefined) context.addIssue({ code: "custom", message: "Project Memory proposal does not use Long-term evolution actions" });
+});
+export type DreamSynthesisProposal = z.infer<typeof dreamSynthesisProposalSchema>;
+
+export const dreamGlobalSynthesisSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().uuid(),
+  status: z.enum(["review_pending", "reviewed", "stale"]),
+  inputHash: z.string().regex(/^[a-f0-9]{64}$/),
+  longTermMemoryHash: z.string().regex(/^[a-f0-9]{64}$/),
+  summary: z.string().min(1).max(4_000),
+  uncertainty: z.string().max(1_000),
+  partialCoverageScopeReferences: z.array(z.string().min(6).max(80)),
+  scopeMap: z.array(z.object({ scopeReference: z.string().min(6).max(80), scopeId: z.string().min(1).max(120) })),
+  proposals: z.array(dreamSynthesisProposalSchema).max(50),
+  createdAt: z.string().datetime(),
+  reviewedAt: z.string().datetime().optional(),
+  staleAt: z.string().datetime().optional()
+});
+export type DreamGlobalSynthesis = z.infer<typeof dreamGlobalSynthesisSchema>;
+
+export const dreamPreparedPatchSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().uuid(),
+  status: z.enum(["prepared", "stale", "committed", "discarded"]),
+  synthesisId: z.string().uuid(),
+  synthesisInputHash: z.string().regex(/^[a-f0-9]{64}$/),
+  longTermPatchId: z.string().min(8).max(80),
+  proposalIds: z.array(z.string().min(6).max(80)),
+  partialCoverageScopeReferences: z.array(z.string().min(6).max(80)),
+  files: z.array(z.object({
+    kind: z.enum(["project_memory", "long_term_memory", "condensation_archive", "cognitive_evolution_history", "local_provenance", "recall_index", "dream_state", "candidate_store"]),
+    path: z.string().min(1),
+    baseHash: z.string().min(1),
+    resultHash: z.string().min(1),
+    changed: z.boolean(),
+    diff: z.string()
+  })),
+  confirmationRequired: z.literal(true),
+  createdAt: z.string().datetime(),
+  committedAt: z.string().datetime().optional(),
+  staleAt: z.string().datetime().optional()
+});
+export type DreamPreparedPatch = z.infer<typeof dreamPreparedPatchSchema>;
+
 export const dreamBatchSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().uuid(),
@@ -95,6 +238,11 @@ export const dreamBatchSchema = z.object({
   trajectoryInputs: z.array(dreamTrajectoryInputSchema),
   candidateInputs: z.array(dreamCandidateInputSchema),
   carryoverInputs: z.array(dreamCarryoverSchema),
+  extractionScopes: z.array(dreamExtractionScopeSchema).default([]),
+  partialCoverageScopeIds: z.array(z.string().min(1).max(120)).default([]),
+  synthesis: dreamGlobalSynthesisSchema.optional(),
+  synthesisFailure: dreamScopeFailureSchema.optional(),
+  preparedPatch: dreamPreparedPatchSchema.optional(),
   representedProjectIds: z.array(z.string().uuid()),
   representedScopeCount: z.number().int().nonnegative(),
   createdAt: z.string().datetime(),

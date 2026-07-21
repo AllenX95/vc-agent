@@ -51,6 +51,19 @@ export class ProjectMemoryStore {
   markdownPath(projectPath: string): string { return join(projectPath, "outputs", "system", "project-memory.md"); }
   indexPath(projectId: string): string { return join(this.#indexRoot, `${projectId}.json`); }
 
+  previewAppendMany(projectId: string, projectPath: string, drafts: readonly ProjectMemoryDraft[], now = new Date()): { path: string; baseHash: string; resultHash: string; before: string; content: string } {
+    if (drafts.length === 0) throw new Error("PROJECT_MEMORY_DRAFTS_REQUIRED");
+    const path = this.markdownPath(projectPath);
+    const existed = existsSync(path);
+    const before = existed ? readFileSync(path, "utf8") : PROJECT_MEMORY_HEADER;
+    const date = now.toISOString().slice(0, 10);
+    const additions = drafts.map((draft) => `\n## ${date} - ${draft.title.trim()}\nTags: ${draft.tags.map((tag) => tag.trim()).filter(Boolean).join(", ")}\nSource: user-confirmed\nScope: project\n\n${draft.body.trim()}\n\nRelated:\n- Thread: ${draft.threadId ?? ""}\n- Output: ${draft.outputPath ?? ""}\n`).join("");
+    const content = `${before.trimEnd()}\n${additions}`;
+    const parsed = parseProjectMemory(content);
+    if (parsed.warnings.length > 0 || parsed.entries.length < drafts.length) throw new Error("INVALID_PROJECT_MEMORY_PATCH_RESULT");
+    return { path, baseHash: existed ? hash(before) : "missing", resultHash: hash(content), before, content };
+  }
+
   load(projectId: string, projectPath: string, create: boolean): ProjectMemoryDocument | undefined {
     const path = this.markdownPath(projectPath);
     if (!existsSync(path)) {
@@ -182,6 +195,7 @@ export interface MemoryCandidate {
 export class MemoryCandidateStore {
   readonly #path: string;
   constructor(path: string) { this.#path = path; }
+  get path(): string { return this.#path; }
   capture(candidate: Omit<MemoryCandidate, "id" | "capturedAt" | "status" | "sourceKind" | "sourceReference"> & { readonly sourceKind?: MemoryCandidate["sourceKind"]; readonly sourceReference?: string }): MemoryCandidate {
     const record: MemoryCandidate = { ...candidate, sourceKind: candidate.sourceKind ?? "ordinary_user_signal", sourceReference: candidate.sourceReference ?? `thread:${candidate.threadId}/turn:${candidate.turnId}`, id: randomUUID(), capturedAt: new Date().toISOString(), status: "active" };
     this.#append({ operation: "capture", candidate: record });
@@ -221,6 +235,20 @@ export class MemoryCandidateStore {
     }
     atomicWrite(this.#path, retained.length === 0 ? "" : `${retained.join("\n")}\n`);
     return [...removed];
+  }
+  previewResolutions(resolutions: Readonly<Record<string, "dismissed" | "promoted">>, occurredAt = new Date().toISOString()): { path: string; baseHash: string; resultHash: string; content: string; resolvedIds: string[] } {
+    const before = existsSync(this.#path) ? readFileSync(this.#path, "utf8") : "";
+    const current = new Map(this.list().map((candidate) => [candidate.id, candidate]));
+    const events: string[] = [];
+    const resolvedIds: string[] = [];
+    for (const [id, status] of Object.entries(resolutions)) {
+      const candidate = current.get(id);
+      if (candidate === undefined || candidate.status !== "active") continue;
+      resolvedIds.push(id);
+      events.push(JSON.stringify({ schemaVersion: 1, operation: "resolve", candidate: { ...candidate, status }, occurredAt }));
+    }
+    const content = `${before.trimEnd()}${before.trim() && events.length ? "\n" : ""}${events.join("\n")}${events.length ? "\n" : ""}`;
+    return { path: this.#path, baseHash: existsSync(this.#path) ? hash(before) : "missing", resultHash: hash(content), content, resolvedIds };
   }
   #append(event: { operation: "capture" | "resolve"; candidate: MemoryCandidate }): void {
     mkdirSync(dirname(this.#path), { recursive: true });

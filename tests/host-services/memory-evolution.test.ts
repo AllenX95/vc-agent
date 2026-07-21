@@ -71,6 +71,16 @@ const draft: MemoryLearningDraft = {
 };
 
 describe("MemoryEvolutionStore", () => {
+  it("prepares multiple reviewed evolution actions as one atomic patch", () => {
+    const { evolution, memory } = fixture();
+    const patch = evolution.prepareMany([
+      { action: "add", targetEntryIds: [], proposed: { ...draft, id: "ltm-batch-one", title: "Batch one", maturity: "user-confirmed", sourceReferenceIds: [] }, rationale: "First reviewed Dream proposal." },
+      { action: "add", targetEntryIds: [], proposed: { ...draft, id: "ltm-batch-two", title: "Batch two", maturity: "user-confirmed", sourceReferenceIds: [] }, rationale: "Second reviewed Dream proposal." }
+    ]);
+    expect(patch.actions).toEqual(["add", "add"]);
+    evolution.commit(patch.id);
+    expect(memory.readCurrent().entries.map((entry) => entry.id)).toEqual(expect.arrayContaining(["ltm-batch-one", "ltm-batch-two"]));
+  });
   it("previews and commits Add across active Memory, provenance, and recall index", () => {
     const { memory, evolution } = fixture();
     const proposed = { ...draft, id: "ltm-new-market-rule", title: "Bottom-up market rule" };

@@ -226,16 +226,16 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] A Project extraction sees only that Project's candidates, relevant Project Memory, and bounded eligible trajectory excerpts.
-- [ ] An Unscoped extraction sees only one Unscoped Thread and has no Project Memory destination or inferred Project association.
-- [ ] Recovered candidates require attributable User signal or a confirmed Judgment Record; materials, web, OCR, tools, and ordinary assistant text cannot become personal Memory.
-- [ ] Each result includes source references, uncertainty, candidate origin, proposed destination, and a bounded Project or Unscoped summary without raw trajectory or full reasoning.
-- [ ] Project summaries are de-identified before leaving the scope-local review stage and carry opaque source references rather than Project identity.
-- [ ] The User can approve, retry, skip, or Keep Pending without manually editing summaries.
-- [ ] A failed scope remains Pending with its sanitized Provider Failure and never triggers automatic retry, fallback, or silent exclusion.
-- [ ] Global synthesis remains blocked until every scope succeeds or is explicitly skipped.
-- [ ] Explicit skip creates visible Partial Dream Coverage and Carryover for the missing scope.
-- [ ] Restart retains completed scopes and decisions; only stale scopes rerun after explicit resume.
+- [x] A Project extraction sees only that Project's candidates, relevant Project Memory, and bounded eligible trajectory excerpts.
+- [x] An Unscoped extraction sees only one Unscoped Thread and has no Project Memory destination or inferred Project association.
+- [x] Recovered candidates require attributable User signal or a confirmed Judgment Record; materials, web, OCR, tools, and ordinary assistant text cannot become personal Memory.
+- [x] Each result includes source references, uncertainty, candidate origin, proposed destination, and a bounded Project or Unscoped summary without raw trajectory or full reasoning.
+- [x] Project summaries are de-identified before leaving the scope-local review stage and carry opaque source references rather than Project identity.
+- [x] The User can approve, retry, skip, or Keep Pending without manually editing summaries.
+- [x] A failed scope remains Pending with its sanitized Provider Failure and never triggers automatic retry, fallback, or silent exclusion.
+- [x] Global synthesis remains blocked until every scope succeeds or is explicitly skipped.
+- [x] Explicit skip creates visible Partial Dream Coverage and Carryover for the missing scope.
+- [x] Restart retains completed scopes and decisions; only stale scopes rerun after explicit resume.
 
 ### L7. Synthesize Dream And Commit Reviewed Memory Patches
 
@@ -247,17 +247,17 @@ Rules:
 
 **Acceptance criteria:**
 
-- [ ] Global synthesis receives no Project names, paths, unnecessary deal facts, combined raw trajectory, or cross-Project source excerpts.
-- [ ] Proposed Long-term Memory remains no more specific than industry, financing stage, or comparable reusable investment situation.
-- [ ] Proposals distinguish Project Memory, Long-term Memory, Keep Pending, Discard, and Merge / Condense.
-- [ ] Project Memory is eligible only for a proposal with one unambiguous source Project and writes back to that Project.
-- [ ] Each Long-term proposal compares against active Memory and uses the L2 evolution semantics.
-- [ ] Frequency and confidence cannot silently replace a prior judgment or resolve a conflict.
-- [ ] The UI supports bulk proposal review while retaining per-item destination change and uncertainty inspection.
-- [ ] Run approval does not authorize writes; final Markdown patch preview and confirmation remain separate.
-- [ ] Partial Dream Coverage remains visible in synthesis, proposal, patch, and completed batch records.
-- [ ] Target Memory changes make synthesis or prepared patches stale and block commit until explicit regeneration and review.
-- [ ] Successful commit archives resolved candidates, records the committed cutoff, retains Carryover, and updates Memory, history, archive, provenance, and indexes atomically.
+- [x] Global synthesis receives no Project names, paths, unnecessary deal facts, combined raw trajectory, or cross-Project source excerpts.
+- [x] Proposed Long-term Memory remains no more specific than industry, financing stage, or comparable reusable investment situation.
+- [x] Proposals distinguish Project Memory, Long-term Memory, Keep Pending, Discard, and Merge / Condense.
+- [x] Project Memory is eligible only for a proposal with one unambiguous source Project and writes back to that Project.
+- [x] Each Long-term proposal compares against active Memory and uses the L2 evolution semantics.
+- [x] Frequency and confidence cannot silently replace a prior judgment or resolve a conflict.
+- [x] The UI supports bulk proposal review while retaining per-item destination change and uncertainty inspection.
+- [x] Run approval does not authorize writes; final Markdown patch preview and confirmation remain separate.
+- [x] Partial Dream Coverage remains visible in synthesis, proposal, patch, and completed batch records.
+- [x] Target Memory changes make synthesis or prepared patches stale and block commit until explicit regeneration and review.
+- [x] Successful commit archives resolved candidates, records the committed cutoff, retains Carryover, and updates Memory, history, archive, provenance, and indexes atomically.
 
 ### L8. Back Up And Restore Personal Cognition
 

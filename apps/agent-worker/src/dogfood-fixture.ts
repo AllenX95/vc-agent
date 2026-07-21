@@ -33,6 +33,33 @@ export function explicitLongTermMemoryFixtureResponses() {
   ];
 }
 
+export function dreamSynthesisFixtureResponses(prompt: string) {
+  const marker = "De-identified synthesis input:\n";
+  const start = prompt.indexOf(marker);
+  const end = prompt.indexOf("\n\nReturn JSON", start + marker.length);
+  if (start < 0 || end < 0) throw new Error("Dream synthesis fixture input is unavailable");
+  const input = JSON.parse(prompt.slice(start + marker.length, end)) as { scopes: Array<{ scopeReference: string; sourceReferences: string[]; candidates: Array<{ origin: "captured" | "recovered" | "carryover"; sourceReferences: string[] }> }> };
+  const scope = input.scopes[0]!;
+  const candidate = scope.candidates[0]!;
+  return [fauxAssistantMessage(JSON.stringify({
+    summary: "One reusable diligence proposal.",
+    uncertainty: "Medium",
+    proposals: [{
+      id: "proposal-staged-diligence",
+      sourceScopeReferences: [scope.scopeReference],
+      sourceReferences: candidate.sourceReferences.length > 0 ? candidate.sourceReferences : scope.sourceReferences,
+      candidateOrigins: [candidate.origin],
+      destination: "long_term_memory",
+      memoryAction: "add",
+      targetEntryIds: [],
+      learning: { title: "Stage diligence around uncertainty", date: "2026-07-19", tags: ["diligence"], applicability: ["early-stage investments"], maturity: "user-confirmed", recallPolicy: "automatic", limitations: "Adapt the stages to sector-specific evidence.", content: "Stage diligence so decision-changing uncertainties are tested before broad evidence collection." },
+      uncertainty: "Medium",
+      comparisonSummary: "No equivalent active Memory entry.",
+      rationale: "The User explicitly preferred staged diligence."
+    }]
+  }))];
+}
+
 export function reflectionFixtureResponses() {
   return [
     fauxAssistantMessage(fauxToolCall("material_recall", { disclosureLevel: "cards", maxItems: 8, maxChars: 4_000 }), { stopReason: "toolUse" }),

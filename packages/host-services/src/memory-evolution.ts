@@ -69,12 +69,19 @@ export interface PreparedMemoryPatch {
   readonly schemaVersion: 1;
   readonly id: string;
   readonly action: MemoryEvolutionAction;
+  readonly actions?: MemoryEvolutionAction[];
   readonly targetEntryIds: string[];
   readonly rationale: string;
   readonly createdAt: string;
   readonly confirmationRequired: true;
   readonly lineageDiff: string;
   readonly files: MemoryPatchFileDiff[];
+}
+
+export interface AtomicMemoryFileAddition {
+  readonly path: string;
+  readonly baseHash: string;
+  readonly resultContent: string;
 }
 
 export type CondensationRetention = 30 | 90 | 180 | 365 | "permanent";
@@ -157,20 +164,34 @@ export class MemoryEvolutionStore {
   get provenancePath(): string { return this.#provenancePath; }
 
   prepare(request: MemoryPatchRequest): PreparedMemoryPatch {
+    return this.prepareMany([request]);
+  }
+
+  prepareMany(requests: readonly MemoryPatchRequest[]): PreparedMemoryPatch {
+    if (requests.length === 0) throw new Error("MEMORY_PATCH_REQUESTS_REQUIRED");
     const document = this.#memory.load(true)!;
     const current = document.entries.filter((entry) => entry.status === "current");
-    const targets = request.targetEntryIds.map((id) => current.find((entry) => entry.id === id));
-    this.#validateRequest(request, targets);
 
     const now = this.#now().toISOString();
     const patchId = this.#createId();
     const before = this.#readState();
-    const evolved = evolveMemory(current, request, now, patchId);
-    const active = renderActivePatch(before.active, current, evolved.entries);
-    validateActiveEvolution(active, evolved.entries);
-    const archive = appendSection(before.condensation_archive, evolved.archiveSection);
-    const history = appendSection(before.cognitive_evolution_history, evolved.historySection);
-    const localProvenance = appendProvenance(before.local_provenance, request.provenanceRecords ?? [], evolved.entries);
+    let evolvedEntries = current;
+    let archive = before.condensation_archive;
+    let history = before.cognitive_evolution_history;
+    const lineage: string[] = [];
+    for (const [index, request] of requests.entries()) {
+      const targets = request.targetEntryIds.map((id) => evolvedEntries.find((entry) => entry.id === id));
+      this.#validateRequest(request, targets);
+      const evolved = evolveMemory(evolvedEntries, request, now, requests.length === 1 ? patchId : `${patchId}-${index + 1}`);
+      evolvedEntries = evolved.entries;
+      archive = appendSection(archive, evolved.archiveSection);
+      history = appendSection(history, evolved.historySection);
+      lineage.push(evolved.lineageDiff);
+    }
+    const active = renderActivePatch(before.active, current, evolvedEntries);
+    validateActiveEvolution(active, evolvedEntries);
+    const provenanceRecords = requests.flatMap((request) => request.provenanceRecords ?? []);
+    const localProvenance = appendProvenance(before.local_provenance, provenanceRecords, evolvedEntries);
     const recallIndex = createLongTermMemoryIndexContent(active);
     const resultContents = { active, condensation_archive: archive, cognitive_evolution_history: history, local_provenance: localProvenance, recall_index: recallIndex };
     const paths = this.#paths();
@@ -187,14 +208,35 @@ export class MemoryEvolutionStore {
     const patch: StoredMemoryPatch = {
       schemaVersion: 1,
       id: patchId,
-      action: request.action,
-      targetEntryIds: [...request.targetEntryIds],
-      rationale: request.rationale.trim(),
+      action: requests[0]!.action,
+      actions: requests.map((request) => request.action),
+      targetEntryIds: [...new Set(requests.flatMap((request) => request.targetEntryIds))],
+      rationale: requests.map((request) => request.rationale.trim()).join("\n\n"),
       createdAt: now,
       confirmationRequired: true,
-      lineageDiff: evolved.lineageDiff,
+      lineageDiff: lineage.join("\n"),
       files,
       resultContents
+    };
+    mkdirSync(this.#patchRoot, { recursive: true });
+    atomicWrite(this.#patchPath(patch.id), `${JSON.stringify(patch, null, 2)}\n`);
+    return publicPatch(patch);
+  }
+
+  prepareAtomicAnchor(rationale: string): PreparedMemoryPatch {
+    if (!rationale.trim()) throw new Error("MEMORY_PATCH_RATIONALE_REQUIRED");
+    const now = this.#now().toISOString();
+    const patchId = this.#createId();
+    const before = this.#readState();
+    const paths = this.#paths();
+    const kinds = Object.keys(before) as Array<keyof typeof before>;
+    const files = kinds.map((kind): MemoryPatchFileDiff => ({
+      kind, path: paths[kind], baseHash: stateHash(paths[kind], before[kind]), resultHash: stateHash(paths[kind], before[kind]), changed: false,
+      diff: textDiff(basename(paths[kind]), before[kind], before[kind])
+    }));
+    const patch: StoredMemoryPatch = {
+      schemaVersion: 1, id: patchId, action: "add", actions: [], targetEntryIds: [], rationale: rationale.trim(), createdAt: now,
+      confirmationRequired: true, lineageDiff: "No Long-term Memory change; atomic transaction anchor only.", files, resultContents: before
     };
     mkdirSync(this.#patchRoot, { recursive: true });
     atomicWrite(this.#patchPath(patch.id), `${JSON.stringify(patch, null, 2)}\n`);
@@ -271,6 +313,10 @@ export class MemoryEvolutionStore {
   }
 
   commit(id: string): ReturnType<LongTermMemoryStore["rebuild"]> {
+    return this.commitWithAdditionalFiles(id, []);
+  }
+
+  commitWithAdditionalFiles(id: string, additions: readonly AtomicMemoryFileAddition[]): ReturnType<LongTermMemoryStore["rebuild"]> {
     if (this.#committing) throw new Error("MEMORY_EVOLUTION_COMMIT_IN_PROGRESS");
     const patch = this.#readPatch(id);
     if (patch === undefined) throw new Error("MEMORY_PATCH_NOT_FOUND");
@@ -279,10 +325,15 @@ export class MemoryEvolutionStore {
     for (const file of patch.files) {
       if (stateHash(paths[file.kind], current[file.kind]) !== file.baseHash) throw new Error("STALE_MEMORY_PATCH");
     }
+    const memoryPaths = new Set(Object.values(paths));
+    for (const addition of additions) {
+      if (memoryPaths.has(addition.path) || additions.filter((item) => item.path === addition.path).length !== 1) throw new Error("DUPLICATE_ATOMIC_MEMORY_TARGET");
+      if (stateHash(addition.path, read(addition.path)) !== addition.baseHash) throw new Error("STALE_MEMORY_PATCH");
+    }
     validateResultState(patch.resultContents);
     this.#committing = true;
     try {
-      this.#commitTransaction(patch);
+      this.#commitTransaction(patch, additions);
       rmSync(this.#patchPath(id), { force: true });
       return this.#memory.readCurrent();
     } finally {
@@ -359,15 +410,19 @@ export class MemoryEvolutionStore {
     return parsed;
   }
 
-  #commitTransaction(patch: StoredMemoryPatch): void {
+  #commitTransaction(patch: StoredMemoryPatch, additions: readonly AtomicMemoryFileAddition[]): void {
     const root = join(this.#transactionRoot, patch.id);
     mkdirSync(root, { recursive: true });
     const paths = this.#paths();
-    const targets = patch.files.filter((file) => file.changed).map((file, index): TransactionTarget => {
+    const contents = [
+      ...patch.files.filter((file) => file.changed).map((file) => ({ path: paths[file.kind], content: patch.resultContents[file.kind] })),
+      ...additions.map((addition) => ({ path: addition.path, content: addition.resultContent }))
+    ];
+    const targets = contents.map((item, index): TransactionTarget => {
       const stagedPath = join(root, `${index}.staged`);
       const backupPath = join(root, `${index}.backup`);
-      writeFileSync(stagedPath, patch.resultContents[file.kind], "utf8");
-      return { targetPath: paths[file.kind], stagedPath, backupPath, existed: existsSync(paths[file.kind]) };
+      writeFileSync(stagedPath, item.content, "utf8");
+      return { targetPath: item.path, stagedPath, backupPath, existed: existsSync(item.path) };
     });
     let manifest: TransactionManifest = { schemaVersion: 1, id: patch.id, phase: "prepared", targets };
     const manifestPath = join(root, "manifest.json");

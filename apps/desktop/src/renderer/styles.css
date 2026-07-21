@@ -229,6 +229,38 @@ button { font: inherit; letter-spacing: 0; }
 .dream-batch-summary strong { font-size: 11px; }
 .dream-batch-summary span { overflow: hidden; color: #707870; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .dream-batch-summary > div:last-child { display: flex; gap: 6px; flex: none; }
+.dream-partial-coverage { margin: 10px 0 0; padding: 8px 10px; border: 1px solid #d4b96c; border-radius: 5px; background: #fff9e7; color: #6d571b; font-size: 10px; }
+.dream-scope-list { display: grid; gap: 8px; margin-top: 10px; }
+.dream-scope-card { padding: 10px; border: 1px solid #e1e4df; border-radius: 6px; background: #fbfcfa; }
+.dream-scope-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dream-scope-card header > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.dream-scope-card header > div:first-child { display: grid; }
+.dream-scope-card header span, .dream-scope-result span { color: #707870; font-size: 10px; }
+.dream-scope-card button { min-height: 29px; padding: 0 8px; border: 1px solid #c9cec7; border-radius: 5px; background: #fff; color: #38433b; font-size: 10px; }
+.dream-scope-card button.primary-button { border-color: #294a37; background: #294a37; color: #fff; }
+.dream-scope-failure { margin: 8px 0 0; color: #8a342d; font-size: 10px; }
+.dream-scope-result { display: grid; gap: 3px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #e1e4df; }
+.dream-scope-result p { margin: 0; font-size: 11px; }
+.dream-synthesis-action { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e1e4df; }
+.dream-synthesis-action span, .dream-synthesis-review > span, .dream-proposal-card span, .dream-completed-record span { color: #707870; font-size: 10px; }
+.dream-synthesis-review { display: grid; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 2px solid #cfd7d0; }
+.dream-synthesis-review > header, .dream-patch-preview > header, .dream-proposal-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dream-synthesis-review header > div, .dream-patch-preview header > div, .dream-proposal-card header > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.dream-synthesis-review header > div:first-child, .dream-patch-preview header > div:first-child, .dream-proposal-card header > div:first-child { display: grid; }
+.dream-synthesis-review button, .dream-proposal-card button, .dream-patch-preview button, .dream-synthesis-action button { min-height: 30px; padding: 0 9px; border: 1px solid #c9cec7; border-radius: 5px; background: #fff; color: #38433b; font-size: 10px; }
+.dream-synthesis-review button.primary-button, .dream-proposal-card button.primary-button, .dream-patch-preview button.primary-button, .dream-synthesis-action button.primary-button { border-color: #294a37; background: #294a37; color: #fff; }
+.dream-proposal-list { display: grid; gap: 8px; }
+.dream-proposal-card { display: grid; gap: 5px; padding: 10px; border: 1px solid #dfe4de; border-radius: 6px; background: #fff; }
+.dream-proposal-card p { margin: 3px 0; font-size: 11px; }
+.dream-proposal-card label { display: grid; gap: 3px; color: #707870; font-size: 9px; }
+.dream-proposal-card select { min-height: 29px; border: 1px solid #c9cec7; border-radius: 4px; background: #fff; font-size: 10px; }
+.dream-proposal-card > div:last-child { display: flex; justify-content: flex-end; gap: 6px; }
+.dream-prepare-patch { justify-self: start; }
+.dream-patch-preview { display: grid; gap: 8px; margin-top: 8px; padding: 12px; border: 1px solid #b7c4b9; border-radius: 6px; background: #f7faf7; }
+.dream-patch-preview details { border-top: 1px solid #dfe4de; padding-top: 6px; }
+.dream-patch-preview summary { cursor: pointer; font-size: 10px; }
+.dream-patch-preview pre { max-height: 280px; overflow: auto; padding: 8px; background: #202620; color: #eef4ee; font-size: 9px; white-space: pre-wrap; }
+.dream-completed-record { display: grid; gap: 3px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e1e4df; }
 .compact-button { display: flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 9px; border: 1px solid #ccd2cb; border-radius: 5px; background: #fff; color: #344239; font-size: 11px; white-space: nowrap; }
 .profile-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid #d8dcd6; border-radius: 7px; background: #f5f7f3; }
 .profile-form label { display: flex; flex-direction: column; gap: 5px; color: #59615a; font-size: 10px; font-weight: 650; }

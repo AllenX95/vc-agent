@@ -10,6 +10,7 @@ import {
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
   type DreamProfileSnapshot,
+  type DreamExtractionScope,
   type HostCommand,
   type HostEvent,
   type ReflectionRun,
@@ -27,7 +28,7 @@ import {
   type WorkerEvent
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
@@ -94,6 +95,26 @@ interface ReflectionExecutionContext {
   readonly promptRevision: SystemPromptRevision;
 }
 
+interface DreamExecutionContext {
+  readonly correlationId: string;
+  readonly batchId: string;
+  readonly scope: DreamExtractionScope;
+  readonly executionThreadId: string;
+  readonly turnId: string;
+  readonly profile: ModelProfile;
+  readonly allowedSourceReferences: readonly string[];
+}
+
+interface DreamSynthesisExecutionContext {
+  readonly correlationId: string;
+  readonly batchId: string;
+  readonly executionThreadId: string;
+  readonly turnId: string;
+  readonly profile: ModelProfile;
+  readonly input: DreamSynthesisInput;
+  readonly forbiddenTerms: readonly string[];
+}
+
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
@@ -108,11 +129,14 @@ let memoryEvolution: MemoryEvolutionStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
 let reflectionOutcomes: ReflectionOutcomeStore | null = null;
 let dreamReviews: DreamReviewStore | null = null;
+let dreamCommits: DreamCommitStore | null = null;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
 const reflectionContexts = new Map<string, ReflectionExecutionContext>();
+const dreamContexts = new Map<string, DreamExecutionContext>();
+const dreamSynthesisContexts = new Map<string, DreamSynthesisExecutionContext>();
 const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
@@ -216,6 +240,8 @@ function toDreamProfileSnapshot(profile: ModelProfile): DreamProfileSnapshot {
 
 function dreamStateEvent(correlationId: string): HostEvent {
   if (dreamReviews === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
+  if (stateStore?.isReadOnlyRecovery === false && projectMemories !== null) dreamReviews.revalidateProjectMemory(currentProjectMemoryHashes());
+  if (stateStore?.isReadOnlyRecovery === false) revalidateDreamSynthesis();
   const profile = resolveDreamProfile();
   const dueProposal = dreamReviews.dueCheck(profile === undefined ? undefined : toDreamProfileSnapshot(profile));
   const reminder = dreamReviews.pendingReminder();
@@ -228,6 +254,112 @@ function dreamStateEvent(correlationId: string): HostEvent {
       ...(reminder === undefined ? {} : { reminder })
     }
   };
+}
+
+function revalidateDreamSynthesis(): void {
+  if (dreamReviews === null || longTermMemories === null) return;
+  const state = dreamReviews.load();
+  const batch = state.batches.find((item) => item.id === state.schedule.activeBatchId);
+  if (batch?.synthesis === undefined || batch.synthesis.status === "stale" || (batch.status === "running" && batch.currentStage === "global_synthesis")) return;
+  const memory = longTermMemories.load(false);
+  if (memory === undefined) { dreamReviews.markSynthesisStale(batch.id); return; }
+  const input = buildDreamSynthesisInput(batch, memory);
+  if (dreamSynthesisInputHash(input) !== batch.synthesis.inputHash || memory.sourceHash !== batch.synthesis.longTermMemoryHash) dreamReviews.markSynthesisStale(batch.id);
+}
+
+function currentProjectMemoryHashes(): Record<string, string | undefined> {
+  if (stateStore === null || projectMemories === null) return {};
+  return Object.fromEntries(stateStore.listProjects().map((project) => [project.id, projectMemories!.load(project.id, project.path, false)?.sourceHash]));
+}
+
+function startDreamScopeExtraction(correlationId: string, batchId: string, scopeId: string): HostEvent {
+  if (dreamReviews === null || projectMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+  const batch = dreamReviews.load().batches.find((item) => item.id === batchId);
+  const existingScope = batch?.extractionScopes.find((item) => item.id === scopeId);
+  if (batch === undefined || existingScope === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream extraction scope was not found.");
+  const profile = stateStore!.getModelProfile(batch.profileSnapshot.id);
+  if (profile === undefined || profile.provider !== batch.profileSnapshot.provider || profile.model !== batch.profileSnapshot.model) {
+    return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Model Profile is unavailable or changed. No fallback was selected.");
+  }
+  const promptRevision = stateStore!.getSystemPromptRevision(batch.promptSnapshot.revisionId);
+  if (promptRevision?.hash !== batch.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Prompt Snapshot is unavailable.");
+  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
+  if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream credential is unavailable.");
+  const project = existingScope.kind === "project" ? stateStore!.getProject(existingScope.projectId!) : undefined;
+  if (existingScope.kind === "project" && project === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The Dream Project scope is unavailable.");
+  const projectMemory = existingScope.kind === "project" ? projectMemories.load(existingScope.projectId!, project!.path, false) : undefined;
+  let scope: DreamExtractionScope;
+  try {
+    scope = dreamReviews.startScope(batch.id, existingScope.id, projectMemory?.sourceHash);
+  } catch (error) {
+    return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream extraction scope could not start.");
+  }
+  const currentBatch = dreamReviews.load().batches.find((item) => item.id === batch.id)!;
+  const extractionContext = buildDreamScopeExtractionContext(currentBatch, scope, projectMemory);
+  const prompt = buildDreamScopeExtractionPrompt(extractionContext);
+  const executionThreadId = `dream-${batch.id}-${scope.id.replace(/[^a-z0-9-]/giu, "-")}`;
+  const turnId = randomUUID();
+  const context: DreamExecutionContext = { correlationId, batchId: batch.id, scope, executionThreadId, turnId, profile, allowedSourceReferences: [...scope.sourceReferences, ...(extractionContext.projectMemory?.map((entry) => entry.sourceReference) ?? [])] };
+  dreamContexts.set(turnId, context);
+  if (scope.kind === "project") stateStore!.authorizeProjectProfile(scope.projectId!, profile.id, profile.provider);
+  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
+    cwd: project?.path ?? app.getPath("userData"),
+    threadDirectory: join(app.getPath("userData"), "memory", "dream", "scope-work", batch.id, scope.id.replace(/[^a-z0-9-]/giu, "-")),
+    contextHistory: [],
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_EXTRACTION_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
+    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_EXTRACTION_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
+    activeCapabilities: [], expectedStateVersion: 1,
+    executionScope: scope.kind === "project" ? { kind: "project", projectId: scope.projectId! } : { kind: "unscoped", threadId: executionThreadId },
+    prompt,
+    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_EXTRACTION_STAGE_INSTRUCTIONS] },
+    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+  };
+  void workerSupervisor!.execute(workerCommand).catch(() => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
+  return dreamStateEvent(correlationId);
+}
+
+function startDreamGlobalSynthesis(correlationId: string, batchId: string): HostEvent {
+  if (dreamReviews === null || longTermMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+  revalidateDreamSynthesis();
+  let batch = dreamReviews.load().batches.find((item) => item.id === batchId);
+  if (batch === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream batch was not found.");
+  if (batch.preparedPatch?.status === "stale") {
+    try { dreamCommits?.discard(batch.id, batch.preparedPatch.id); } catch { /* A missing stale preview cannot authorize a commit. */ }
+  }
+  const profile = stateStore!.getModelProfile(batch.profileSnapshot.id);
+  if (profile === undefined || profile.provider !== batch.profileSnapshot.provider || profile.model !== batch.profileSnapshot.model) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Model Profile is unavailable or changed. No fallback was selected.");
+  const promptRevision = stateStore!.getSystemPromptRevision(batch.promptSnapshot.revisionId);
+  if (promptRevision?.hash !== batch.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Prompt Snapshot is unavailable.");
+  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
+  if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream credential is unavailable.");
+  const memory = longTermMemories.load(true)!;
+  const input = buildDreamSynthesisInput(batch, memory);
+  const forbiddenTerms = batch.extractionScopes.flatMap((scope) => {
+    if (scope.kind !== "project") return [];
+    const project = stateStore!.getProject(scope.projectId!);
+    return project === undefined ? [] : [project.displayName, basename(project.path)];
+  });
+  try { batch = dreamReviews.beginSynthesis(batch.id); }
+  catch (error) { return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Global Dream Synthesis could not start."); }
+  const prompt = buildDreamGlobalSynthesisPrompt(input);
+  const executionThreadId = `dream-synthesis-${batch.id}`;
+  const turnId = randomUUID();
+  const context: DreamSynthesisExecutionContext = { correlationId, batchId: batch.id, executionThreadId, turnId, profile, input, forbiddenTerms };
+  dreamSynthesisContexts.set(turnId, context);
+  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
+    cwd: app.getPath("userData"), threadDirectory: join(app.getPath("userData"), "memory", "dream", "synthesis-work", batch.id), contextHistory: [],
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
+    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
+    activeCapabilities: [], expectedStateVersion: 1, executionScope: { kind: "unscoped", threadId: executionThreadId }, prompt,
+    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS] },
+    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+  };
+  void workerSupervisor!.execute(workerCommand).catch(() => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
+  return dreamStateEvent(correlationId);
 }
 
 async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Promise<HostEvent> {
@@ -480,6 +612,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const existed = existsSync(projectMemories.markdownPath(project.path));
         const document = projectMemories.load(project.id, project.path, true)!;
         if (!existed) ownProjectMemoryWrites.set(project.id, document.sourceHash);
+        emit(dreamStateEvent(randomUUID()));
         return { ...eventMetadata(command.correlationId), event: "project.memory.loaded", payload: { document, source: existed ? "load" : "lazy_create" } };
       }
       case "project.memory.save": {
@@ -488,6 +621,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const document = projectMemories.save(project.id, project.path, command.payload.content, command.payload.expectedSourceHash);
           ownProjectMemoryWrites.set(project.id, document.sourceHash);
+          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "user_save" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before saving." : "Project Memory could not be saved.");
@@ -504,6 +638,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const document = longTermMemories?.refreshIfExists();
         if (document === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Open the Long-term Memory view before refreshing it.");
         startLongTermMemoryWatcher();
+        emit(dreamStateEvent(randomUUID()));
         return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "manual_refresh" } };
       }
       case "long_term_memory.save": {
@@ -511,6 +646,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const document = longTermMemories.save(command.payload.content, command.payload.expectedSourceHash);
           ownLongTermMemoryWriteHash = document.sourceHash;
+          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "user_save" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_LONG_TERM_MEMORY_WRITE" ? "Long-term Memory changed externally. Refresh before saving." : "Long-term Memory could not be saved.");
@@ -542,6 +678,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
             const run = stateStore.getReflectionRun(proposal.runId);
             if (run !== undefined) emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
           }
+          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.committed", payload: { patchId: command.payload.patchId, document } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be committed."));
@@ -615,7 +752,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (promptRevision === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "An active System Prompt Revision is required before launching Dream.");
         synchronizeDreamSchedulingIndex();
         try {
-          dreamReviews.createBatch({ promptRevision, profile: toDreamProfileSnapshot(profile), trajectory: currentEligibleDreamTrajectory(), candidates: memoryCandidates.list() });
+          const projectMemoryHashes = currentProjectMemoryHashes();
+          dreamReviews.createBatch({ promptRevision, profile: toDreamProfileSnapshot(profile), trajectory: currentEligibleDreamTrajectory(), candidates: memoryCandidates.list(), projectMemoryHashes });
           return dreamStateEvent(command.correlationId);
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream batch could not be created.");
@@ -633,6 +771,70 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try { dreamReviews.discard(command.payload.batchId); return dreamStateEvent(command.correlationId); }
         catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream could not be discarded."); }
       }
+      case "dream.scope.start": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream extraction and retry require explicit User action.");
+        return startDreamScopeExtraction(command.correlationId, command.payload.batchId, command.payload.scopeId);
+      }
+      case "dream.scope.review": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream scope review requires explicit User action.");
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        try {
+          dreamReviews.reviewScope(command.payload.batchId, command.payload.scopeId, command.payload.decision);
+          return dreamStateEvent(command.correlationId);
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream scope could not be reviewed.");
+        }
+      }
+      case "dream.synthesis.start": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Global Dream Synthesis requires explicit User action.");
+        return startDreamGlobalSynthesis(command.correlationId, command.payload.batchId);
+      }
+      case "dream.proposal.review": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream proposal review requires explicit User action.");
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        try {
+          dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
+          return dreamStateEvent(command.correlationId);
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposal could not be reviewed."); }
+      }
+      case "dream.proposal.review_all": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Bulk Dream proposal review requires explicit User action.");
+        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+        try {
+          const batch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
+          if (batch?.synthesis === undefined) throw new Error("DREAM_SYNTHESIS_NOT_REVIEWABLE");
+          dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
+          return dreamStateEvent(command.correlationId);
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposals could not be reviewed."); }
+      }
+      case "dream.patch.prepare": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch preparation requires explicit User action.");
+        if (dreamCommits === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch preparation is unavailable.");
+        try {
+          revalidateDreamSynthesis();
+          dreamCommits.prepare(command.payload.batchId, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
+          return dreamStateEvent(command.correlationId);
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch could not be prepared."); }
+      }
+      case "dream.patch.commit": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream Memory commit requires explicit final confirmation.");
+        if (dreamCommits === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch commit is unavailable.");
+        try {
+          revalidateDreamSynthesis();
+          dreamCommits.commit(command.payload.batchId, command.payload.patchId);
+          synchronizeDreamSchedulingIndex();
+          return dreamStateEvent(command.correlationId);
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch commit failed without activating changes."); }
+      }
+      case "dream.patch.discard": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding a Dream patch requires explicit User action.");
+        if (dreamCommits === null || dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch discard is unavailable.");
+        try {
+          dreamCommits.discard(command.payload.batchId, command.payload.patchId);
+          dreamReviews.discardPreparedPatch(command.payload.batchId, command.payload.patchId);
+          return dreamStateEvent(command.correlationId);
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch could not be discarded."); }
+      }
       case "project.memory.append.confirm": {
         const candidate = memoryCandidates?.list().find((item) => item.id === command.payload.candidateId && item.status === "active");
         const project = stateStore.getProject(command.payload.projectId);
@@ -643,6 +845,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           const resolved = memoryCandidates!.resolve(candidate.id, "promoted")!;
           synchronizeDreamSchedulingIndex();
           emit({ ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate: resolved } });
+          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "confirmed_append" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before confirming this draft." : "Project Memory could not be updated.");
@@ -1058,6 +1261,7 @@ function startMaterialWatcher(projectId: string): void {
             if (document === undefined) return;
             if (ownProjectMemoryWrites.get(projectId) === document.sourceHash) { ownProjectMemoryWrites.delete(projectId); return; }
             emit({ ...eventMetadata(randomUUID()), event: "project.memory.updated", payload: { document, source: "external_edit" } });
+            emit(dreamStateEvent(randomUUID()));
           } catch { /* The next stable write or explicit load retries index rebuild. */ }
         }, 750);
       }
@@ -1088,6 +1292,7 @@ function startLongTermMemoryWatcher(): void {
             return;
           }
           emit({ ...eventMetadata(randomUUID()), event: "long_term_memory.updated", payload: { document, source: "external_edit" } });
+          emit(dreamStateEvent(randomUUID()));
         } catch {
           // Manual refresh retries deterministic parsing after an unstable external write.
         }
@@ -1550,6 +1755,16 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
   }
+  const synthesisContext = dreamSynthesisContexts.get(workerEvent.turnId);
+  if (synthesisContext !== undefined) {
+    handleDreamSynthesisWorkerEvent(synthesisContext, workerEvent);
+    return;
+  }
+  const dreamContext = dreamContexts.get(workerEvent.turnId);
+  if (dreamContext !== undefined) {
+    handleDreamWorkerEvent(dreamContext, workerEvent);
+    return;
+  }
   const reflectionContext = reflectionContexts.get(workerEvent.turnId);
   if (reflectionContext !== undefined) {
     void handleReflectionWorkerEvent(reflectionContext, workerEvent);
@@ -1673,6 +1888,85 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   finishTurn(context);
   acknowledgeTrajectory(context, record);
   emit({ ...ipcMetadata(record), event: "turn.failed", payload: { threadId: context.threadId, turnId: context.turnId, text: context.text, ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }), profile: context.profile, failure: workerEvent.failure } });
+}
+
+function handleDreamSynthesisWorkerEvent(context: DreamSynthesisExecutionContext, workerEvent: WorkerEvent): void {
+  if (workerEvent.event === "capability.execution.requested") {
+    workerSupervisor?.resolveCapability({ schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId, threadId: context.executionThreadId, turnId: context.turnId, result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "DREAM_SYNTHESIS_CAPABILITY_NOT_ALLOWED", content: "Global Dream Synthesis receives only approved de-identified summaries and cannot use tools." } });
+    return;
+  }
+  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "turn.completed") {
+    try {
+      const batch = dreamReviews!.load().batches.find((item) => item.id === context.batchId);
+      if (batch === undefined) throw new Error("DREAM_BATCH_NOT_FOUND");
+      const synthesis = parseDreamGlobalSynthesis(workerEvent.message, batch, context.input, context.forbiddenTerms);
+      dreamReviews!.completeSynthesis(context.batchId, synthesis);
+      finishDreamSynthesisExecution(context);
+      emit(dreamStateEvent(context.correlationId));
+    } catch {
+      failDreamSynthesisExecution(context, { kind: "worker", code: "INVALID_DREAM_SYNTHESIS_RESULT", message: "The model response did not match the de-identified Global Dream Synthesis contract.", provider: context.profile.provider, model: context.profile.model });
+    }
+    return;
+  }
+  if (workerEvent.event === "turn.interrupted") {
+    failDreamSynthesisExecution(context, { kind: "worker", code: "DREAM_SYNTHESIS_INTERRUPTED", message: "Global Dream Synthesis was interrupted and requires explicit retry.", provider: context.profile.provider, model: context.profile.model });
+    return;
+  }
+  if (workerEvent.event === "turn.failed") failDreamSynthesisExecution(context, workerEvent.failure);
+}
+
+function failDreamSynthesisExecution(context: DreamSynthesisExecutionContext, failure: ProviderFailure): void {
+  if (!dreamSynthesisContexts.has(context.turnId)) return;
+  try { dreamReviews?.failSynthesis(context.batchId, failure); }
+  finally { finishDreamSynthesisExecution(context); emit(dreamStateEvent(context.correlationId)); }
+}
+
+function finishDreamSynthesisExecution(context: DreamSynthesisExecutionContext): void {
+  dreamSynthesisContexts.delete(context.turnId);
+  workerSupervisor?.retire(context.executionThreadId);
+}
+
+function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: WorkerEvent): void {
+  if (workerEvent.event === "capability.execution.requested") {
+    workerSupervisor?.resolveCapability({
+      schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId,
+      threadId: context.executionThreadId, turnId: context.turnId,
+      result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "DREAM_EXTRACTION_CAPABILITY_NOT_ALLOWED", content: "Dream extraction receives only its frozen scope-local input and cannot use tools." }
+    });
+    return;
+  }
+  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "turn.completed") {
+    try {
+      const result = parseDreamScopeSummary(workerEvent.message, context.scope, context.allowedSourceReferences);
+      dreamReviews!.completeScope(context.batchId, context.scope.id, result);
+      finishDreamExecution(context);
+      emit(dreamStateEvent(context.correlationId));
+    } catch {
+      failDreamExecution(context, { kind: "worker", code: "INVALID_DREAM_SCOPE_RESULT", message: "The model response did not match the bounded, de-identified Dream scope contract.", provider: context.profile.provider, model: context.profile.model });
+    }
+    return;
+  }
+  if (workerEvent.event === "turn.interrupted") {
+    failDreamExecution(context, { kind: "worker", code: "DREAM_SCOPE_INTERRUPTED", message: "Dream scope extraction was interrupted and remains Pending for explicit retry.", provider: context.profile.provider, model: context.profile.model });
+    return;
+  }
+  if (workerEvent.event === "turn.failed") failDreamExecution(context, workerEvent.failure);
+}
+
+function failDreamExecution(context: DreamExecutionContext, failure: ProviderFailure): void {
+  if (!dreamContexts.has(context.turnId)) return;
+  try { dreamReviews?.failScope(context.batchId, context.scope.id, failure); }
+  finally {
+    finishDreamExecution(context);
+    emit(dreamStateEvent(context.correlationId));
+  }
+}
+
+function finishDreamExecution(context: DreamExecutionContext): void {
+  dreamContexts.delete(context.turnId);
+  workerSupervisor?.retire(context.executionThreadId);
 }
 
 async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, workerEvent: WorkerEvent): Promise<void> {
@@ -2198,6 +2492,8 @@ app.whenReady().then(() => {
   reflectionOutcomes = new ReflectionOutcomeStore(join(app.getPath("userData"), "memory", "reflection", "outcomes.jsonl"));
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"), { createRoot: !readOnlyRecovery });
   dreamReviews = new DreamReviewStore(join(app.getPath("userData"), "memory", "dream"), { createRoot: !readOnlyRecovery });
+  if (!readOnlyRecovery && memoryEvolution !== null && projectMemories !== null && memoryCandidates !== null) dreamCommits = new DreamCommitStore(join(app.getPath("userData"), "memory", "dream"), { reviews: dreamReviews, evolution: memoryEvolution, memory: longTermMemories, projectMemory: projectMemories, candidates: memoryCandidates });
+  if (!readOnlyRecovery) dreamReviews.recoverInterruptedScopes();
   for (const thread of stateStore.listThreads()) {
     if (!readOnlyRecovery) trajectoryStore.recoverInterruptedTurns(thread.id);
     const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
@@ -2376,6 +2672,16 @@ app.on("before-quit", () => {
     const run = stateStore?.getReflectionRun(context.runId);
     if (run?.status === "independent_running") stateStore?.interruptIndependentAssessment(context.runId);
     reflectionContexts.delete(context.turnId);
+  }
+  for (const context of [...dreamContexts.values()]) {
+    try { dreamReviews?.failScope(context.batchId, context.scope.id, { kind: "worker", code: "APPLICATION_RESTART", message: "Dream scope extraction was interrupted by application restart and remains Pending for explicit retry.", provider: context.profile.provider, model: context.profile.model }); }
+    catch { /* Preserve already completed scope state. */ }
+    dreamContexts.delete(context.turnId);
+  }
+  for (const context of [...dreamSynthesisContexts.values()]) {
+    try { dreamReviews?.failSynthesis(context.batchId, { kind: "worker", code: "APPLICATION_RESTART", message: "Global Dream Synthesis was interrupted by application restart and requires explicit retry.", provider: context.profile.provider, model: context.profile.model }); }
+    catch { /* Preserve already completed synthesis state. */ }
+    dreamSynthesisContexts.delete(context.turnId);
   }
   ipcMain.removeHandler(COMMAND_CHANNEL);
   workerSupervisor?.closeAll();

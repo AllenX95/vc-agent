@@ -431,6 +431,14 @@ const deferDreamReminderCommandSchema = commandMetadataSchema.extend({ command: 
 const launchDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.launch"), payload: z.object({ profileId: z.string().min(1).optional() }) });
 const resumeDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.resume"), payload: z.object({ batchId: z.string().uuid() }) });
 const discardDreamCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.discard"), payload: z.object({ batchId: z.string().uuid() }) });
+const startDreamScopeCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.scope.start"), payload: z.object({ batchId: z.string().uuid(), scopeId: z.string().min(1).max(120) }) });
+const reviewDreamScopeCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.scope.review"), payload: z.object({ batchId: z.string().uuid(), scopeId: z.string().min(1).max(120), decision: z.enum(["approve", "skip", "keep_pending"]) }) });
+const startDreamSynthesisCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.synthesis.start"), payload: z.object({ batchId: z.string().uuid() }) });
+const reviewDreamProposalCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.proposal.review"), payload: z.object({ batchId: z.string().uuid(), proposalId: z.string().min(6).max(80), decision: z.enum(["approve", "reject"]), destination: z.enum(["project_memory", "long_term_memory", "keep_pending", "discard", "merge_condense"]).optional() }) });
+const reviewAllDreamProposalsCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.proposal.review_all"), payload: z.object({ batchId: z.string().uuid(), decision: z.enum(["approve", "reject"]) }) });
+const prepareDreamPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.patch.prepare"), payload: z.object({ batchId: z.string().uuid() }) });
+const commitDreamPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.patch.commit"), payload: z.object({ batchId: z.string().uuid(), patchId: z.string().uuid() }) });
+const discardDreamPatchCommandSchema = commandMetadataSchema.extend({ command: z.literal("dream.patch.discard"), payload: z.object({ batchId: z.string().uuid(), patchId: z.string().uuid() }) });
 const confirmProjectMemoryAppendCommandSchema = commandMetadataSchema.extend({
   command: z.literal("project.memory.append.confirm"),
   payload: z.object({ candidateId: z.string().uuid(), projectId: z.string().uuid(), title: z.string().trim().min(1).max(160), tags: z.array(z.string().trim().min(1).max(80)).max(12), body: z.string().trim().min(1).max(20_000), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
@@ -550,6 +558,14 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   launchDreamCommandSchema,
   resumeDreamCommandSchema,
   discardDreamCommandSchema,
+  startDreamScopeCommandSchema,
+  reviewDreamScopeCommandSchema,
+  startDreamSynthesisCommandSchema,
+  reviewDreamProposalCommandSchema,
+  reviewAllDreamProposalsCommandSchema,
+  prepareDreamPatchCommandSchema,
+  commitDreamPatchCommandSchema,
+  discardDreamPatchCommandSchema,
   confirmProjectMemoryAppendCommandSchema,
   listProjectOutputsCommandSchema,
   openProjectOutputCommandSchema,
