@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
+import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
 
 export const IPC_SCHEMA_VERSION = 1 as const;
 
@@ -32,6 +33,124 @@ export const modelProfileSchema = z.object({
   updatedAt: z.string().datetime()
 });
 export type ModelProfile = z.infer<typeof modelProfileSchema>;
+
+export const skillFindingSchema = z.object({
+  code: z.enum(["SKILL_REFERENCE_MISSING", "SKILL_METADATA_INVALID", "SKILL_DIRECTIVE_UNSUPPORTED", "SKILL_DEPENDENCY_UNDECLARED", "SKILL_PATH_ESCAPE", "SKILL_COPY_FAILED", "SKILL_RESOURCE_LIMIT_EXCEEDED", "SKILL_HASH_MISMATCH"]),
+  severity: z.enum(["info", "warning", "block"]),
+  path: z.string().optional(),
+  message: z.string().min(1)
+});
+export type SkillFinding = z.infer<typeof skillFindingSchema>;
+
+export const skillInventoryItemSchema = z.object({
+  schemaVersion: z.literal(1), packageId: z.string().min(1), revisionId: z.string().uuid(), importId: z.string().uuid(),
+  sourceKind: z.enum(["local_directory", "creator_draft"]), importedAt: z.string().datetime(), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  overlayHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), compatibility: z.enum(["unknown", "compatible", "incompatible", "blocked"]),
+  declaredDependencies: z.array(z.string()), overlayRevision: z.string().uuid().optional(), enabled: z.boolean(), licensePresent: z.boolean(),
+  state: z.enum(["copying", "copied", "inspecting", "compatible", "incompatible", "blocked", "awaiting_activation", "active", "disabled", "invalidated", "failed"]),
+  files: z.array(z.string()), activeHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), failureCode: z.string().optional(),
+  findings: z.array(skillFindingSchema), metadata: z.record(z.string(), z.string())
+});
+export type SkillInventoryItem = z.infer<typeof skillInventoryItemSchema>;
+
+export const skillCompatibilityReportSchema = z.object({
+  package: skillInventoryItemSchema, status: z.enum(["compatible", "incompatible", "blocked"]), files: z.array(z.string()),
+  missingReferences: z.array(z.string()), unsupportedDirectives: z.array(z.string()), undeclaredExecutables: z.array(z.string()),
+  overlayRevision: z.string().uuid().optional(), exactHash: z.string().regex(/^[a-f0-9]{64}$/), findings: z.array(skillFindingSchema)
+});
+export type SkillCompatibilityReport = z.infer<typeof skillCompatibilityReportSchema>;
+
+export const integrationLifecycleStateSchema = z.enum(["pending", "queued", "running", "completed", "failed", "interrupted", "unknown_outcome"]);
+export type IntegrationLifecycleState = z.infer<typeof integrationLifecycleStateSchema>;
+
+const integrationStatusSchema = z.object({
+  status: z.enum(["ready", "attention", "unavailable"]),
+  message: z.string().min(1).max(400)
+});
+
+const integrationJobSummarySchema = z.object({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+  state: integrationLifecycleStateSchema,
+  message: z.string().min(1).max(400),
+  updatedAt: z.string().datetime(),
+  resultId: z.string().min(1).optional(),
+  sourcePath: z.string().min(1).optional(),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  editedCopyHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  changeSummaryPath: z.string().min(1).optional(),
+  sourceReferences: z.array(z.string().min(1)).max(100).optional()
+});
+export type IntegrationJobSummary = z.infer<typeof integrationJobSummarySchema>;
+
+const officeIntegrationStateSchema = z.object({
+  status: integrationStatusSchema,
+  activeSkillCount: z.number().int().nonnegative(),
+  supportedFormats: z.array(z.enum(["docx", "pptx", "xlsx", "pdf"])),
+  jobs: z.array(integrationJobSummarySchema)
+});
+
+const skillCreatorIntegrationStateSchema = z.object({
+  status: integrationStatusSchema,
+  drafts: z.array(z.object({
+    draftId: z.string().uuid(), packageId: z.string().min(1), operation: z.enum(["create", "update"]),
+    state: z.string().min(1), files: z.array(z.string()), dependencies: z.array(z.string()),
+    updatedAt: z.string().datetime(), failureCode: z.string().optional()
+  }))
+});
+
+const pageRecoveryIntegrationStateSchema = z.object({
+  status: integrationStatusSchema,
+  availability: z.object({
+    native: integrationStatusSchema, paddle: integrationStatusSchema, ovis: integrationStatusSchema,
+    policyRevision: z.string().min(1)
+  }),
+  telemetry: z.object({
+    policyRevision: z.string().min(1), pageCount: z.number().int().nonnegative(), nativePages: z.number().int().nonnegative(),
+    paddlePages: z.number().int().nonnegative(), ovisPages: z.number().int().nonnegative(), retainedEarlierPages: z.number().int().nonnegative(),
+    failures: z.number().int().nonnegative(), durationMs: z.number().int().nonnegative(), lastStatus: z.enum(["completed", "completed_with_warnings", "failed", "cancelled"])
+  }),
+  parses: z.array(integrationJobSummarySchema),
+  lastParse: z.object({
+    parseId: z.string().uuid(),
+    pages: z.array(z.object({ pageNumber: z.number().int().positive(), selectedStage: z.enum(["native", "paddle", "ovis", "unavailable"]), retainedEarlier: z.boolean(), warningCodes: z.array(z.string().min(1)) }))
+  }).optional()
+});
+
+const mcpIntegrationStateSchema = z.object({
+  status: integrationStatusSchema,
+  adapterVersion: z.string().min(1),
+  servers: z.array(z.object({
+    serverId: z.string().uuid(), name: z.string().min(1), enabled: z.boolean(), adapterVersion: z.string().min(1),
+    credentialReferencePresent: z.boolean(), connectionStatus: z.enum(["disconnected", "testing", "connecting", "connected", "unavailable", "failed"]),
+    schemaState: z.enum(["unknown", "cached", "current_for_connection", "mismatched"]), schemaRevision: z.string().min(1),
+    enabledToolIds: z.array(z.string()), lastStatusMessage: z.string().optional(), failureCount: z.number().int().nonnegative()
+  })),
+  connectedServers: z.number().int().nonnegative(), activeTools: z.number().int().nonnegative(), failureCount: z.number().int().nonnegative(),
+  activeActivation: z.object({ activationId: z.string().uuid(), serverId: z.string().uuid(), schemaRevision: z.string().min(1), toolIds: z.array(z.string().min(1)), scope: z.enum(["project", "unscoped"]) }).optional()
+});
+
+const extensionIntegrationStateSchema = z.object({
+  status: integrationStatusSchema,
+  stagedCount: z.number().int().nonnegative(), inspectionCount: z.number().int().nonnegative(), auditCount: z.number().int().nonnegative(),
+  approvedCount: z.number().int().nonnegative(), effectiveRevisionId: z.string().min(1), enabledCount: z.number().int().nonnegative(),
+  pendingRevisionId: z.string().uuid().optional(), invalidatedRevisionIds: z.array(z.string().uuid()),
+  staged: z.array(z.object({ stagedRevisionId: z.string().uuid(), extensionId: z.string(), name: z.string(), state: z.string(), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime() })),
+  reports: z.array(z.object({ reportId: z.string().uuid(), stagedRevisionId: z.string().uuid(), status: z.enum(["reviewable", "blocked"]), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), findingCount: z.number().int().nonnegative(), blockerCount: z.number().int().nonnegative(), generatedAt: z.string().datetime() })),
+  audits: z.array(z.object({ auditRunId: z.string().uuid(), stagedRevisionId: z.string().uuid(), status: z.string(), updatedAt: z.string().datetime(), failureCode: z.string().optional() })),
+  approved: z.array(z.object({ approvedRevisionId: z.string().uuid(), extensionId: z.string(), name: z.string(), version: z.string(), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), enabled: z.boolean(), invalidated: z.boolean(), approvedAt: z.string().datetime() }))
+});
+
+export const integrationStateSchema = z.object({
+  schemaVersion: z.literal(1), generatedAt: z.string().datetime(),
+  office: officeIntegrationStateSchema,
+  skillCreator: skillCreatorIntegrationStateSchema,
+  pageRecovery: pageRecoveryIntegrationStateSchema,
+  mcp: mcpIntegrationStateSchema,
+  extensions: extensionIntegrationStateSchema,
+  runtime: z.object({ runningJobs: z.number().int().nonnegative(), queuedJobs: z.number().int().nonnegative(), failures: z.number().int().nonnegative() })
+});
+export type IntegrationState = z.infer<typeof integrationStateSchema>;
 
 export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "extension_audit", "visual_material_analysis"]);
 export type TaskModelType = z.infer<typeof taskModelTypeSchema>;
@@ -98,6 +217,35 @@ export const projectThreadSchema = z.object({
 export type ProjectThread = z.infer<typeof projectThreadSchema>;
 export const threadSchema = z.discriminatedUnion("scope", [unscopedThreadSchema, projectThreadSchema]);
 export type Thread = z.infer<typeof threadSchema>;
+
+export const MODEL_EXECUTION_KINDS = [
+  "ordinary_turn",
+  "compaction",
+  "independent_evidence",
+  "memory_aware_reflection",
+  "dream_scope",
+  "dream_synthesis",
+  "extension_audit",
+  "internal_model_stage"
+] as const;
+export const modelExecutionKindSchema = z.enum(MODEL_EXECUTION_KINDS);
+export type ModelExecutionKind = z.infer<typeof modelExecutionKindSchema>;
+
+export const executionQueueItemSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().uuid(),
+  threadId: z.string().min(1),
+  kind: z.literal("ordinary_turn"),
+  status: z.enum(["queued", "draft"]),
+  reason: z.enum(["thread_active", "capacity"]),
+  text: z.string().trim().min(1).max(200_000),
+  retryOfTurnId: z.string().min(1).optional(),
+  requestedProfileId: z.string().min(1).optional(),
+  position: z.number().int().nonnegative(),
+  submittedAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+export type ExecutionQueueItem = z.infer<typeof executionQueueItemSchema>;
 
 export const systemPromptRevisionSchema = z.object({
   id: z.string().uuid(),
@@ -345,7 +493,9 @@ const commandMetadataSchema = z.object({
   commandId: z.string().min(1),
   correlationId: z.string().min(1),
   actor: actorRefSchema,
-  sentAt: z.string().datetime()
+  sentAt: z.string().datetime(),
+  expectedStateVersion: z.number().int().positive().default(1),
+  scope: z.enum(["project", "unscoped"]).default("unscoped")
 });
 
 const bootstrapCommandSchema = commandMetadataSchema.extend({ command: z.literal("app.bootstrap") });
@@ -353,6 +503,61 @@ const exportRecoveryStateCommandSchema = commandMetadataSchema.extend({ command:
 const createPersonalCognitionBackupCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.backup.create") });
 const restorePersonalCognitionCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.restore") });
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
+const listSkillsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.list") });
+const importSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.import") });
+const inspectSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.inspect"), payload: z.object({ revisionId: z.string().uuid() }) });
+const activateSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.activate"), payload: z.object({ revisionId: z.string().uuid() }) });
+const disableSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.disable"), payload: z.object({ packageId: z.string().min(1) }) });
+const loadIntegrationStateCommandSchema = commandMetadataSchema.extend({ command: z.literal("integration.state.load") });
+const prepareOfficeTaskCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("office.task.prepare"),
+  payload: z.object({
+    kind: z.enum(["create", "edit"]), format: z.enum(["docx", "pptx", "xlsx", "pdf"]), projectId: z.string().min(1), projectPath: z.string().min(1),
+    threadId: z.string().min(1), turnId: z.string().min(1), profile: modelProfileSchema.pick({ id: true, provider: true, model: true }),
+    skillRevisionId: z.string().uuid(), outputDirectory: z.string().min(1), outputFileName: z.string().min(1).optional(), sourcePath: z.string().min(1).optional(),
+    sourceReferences: z.array(z.string().min(1)).max(100).optional(), renderPreview: z.boolean().optional(), explicitIntent: z.literal(true)
+  })
+});
+const runOfficeTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.task.run"), payload: z.object({ planId: z.string().uuid() }) });
+const cancelOfficeTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.task.cancel"), payload: z.object({ jobId: z.string().min(1) }) });
+const commitOfficeResultCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.result.commit"), payload: z.object({ resultId: z.string().uuid() }) });
+const replaceOfficeOriginalCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("office.source.replace"),
+  payload: z.object({ resultId: z.string().uuid(), sourcePath: z.string().min(1), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/), accessMode: z.enum(["standard", "full"]), confirmed: z.boolean(), duplicateRiskAcknowledged: z.boolean().optional(), simulateUnknownOutcome: z.boolean().optional() })
+});
+const listSkillCreatorDraftsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.list") });
+const prepareSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("skill_creator.prepare"),
+  payload: z.object({ operation: z.enum(["create", "update"]), explicitIntent: z.literal(true), packageId: z.string().min(1), files: z.record(z.string().min(1), z.string().max(200_000)), dependencies: z.array(z.string().min(1)).max(100).optional(), draftId: z.string().uuid().optional(), targetRevisionId: z.string().uuid().optional() })
+});
+const reviewSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.review"), payload: z.object({ draftId: z.string().uuid() }) });
+const acceptSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.handoff"), payload: z.object({ draftId: z.string().uuid(), confirmed: z.literal(true), accessMode: z.enum(["standard", "full"]).optional() }) });
+const discardSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.discard"), payload: z.object({ draftId: z.string().uuid() }) });
+const inspectPageRecoveryCommandSchema = commandMetadataSchema.extend({ command: z.literal("page_recovery.inspect") });
+const runPageRecoveryCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("page_recovery.run"),
+  payload: z.object({ materialId: z.string().uuid(), projectId: z.string().uuid(), relativePath: z.string().min(1), mediaType: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), pageCount: z.number().int().positive().optional() })
+});
+const cancelPageRecoveryCommandSchema = commandMetadataSchema.extend({ command: z.literal("page_recovery.cancel"), payload: z.object({ parseId: z.string().uuid() }) });
+const listMcpServersCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.server.list") });
+const saveMcpServerCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("mcp.server.save"),
+  payload: z.object({ serverId: z.string().uuid().optional(), name: z.string().trim().min(1).max(120), transport: z.enum(["stdio", "http", "fixture"]), endpoint: z.string().min(1).optional(), command: z.string().min(1).optional(), args: z.array(z.string().max(400)).max(50).optional(), credentialRef: z.string().min(1).optional(), enabled: z.boolean(), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), enabledToolIds: z.array(z.string().min(1)).optional(), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })).optional() })
+});
+const activateMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.activate"), payload: z.object({ serverId: z.string().uuid(), toolIds: z.array(z.string().min(1)).max(100), scope: z.enum(["project", "unscoped"]), connect: z.boolean().optional() }) });
+const disconnectMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.disconnect"), payload: z.object({ serverId: z.string().uuid() }) });
+const executeMcpToolCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("mcp.permission.resolve"),
+  payload: z.object({ activationId: z.string().uuid(), serverId: z.string().uuid(), toolName: z.string().min(1), arguments: z.record(z.string(), z.unknown()), threadId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(["project", "unscoped"]), accessMode: z.enum(["standard", "full"]), confirmed: z.boolean().optional(), expectedSchemaRevision: z.string().min(1) })
+});
+const listExtensionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.list") });
+const stageExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.stage") });
+const inspectExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.inspect"), payload: z.object({ stagedRevisionId: z.string().uuid() }) });
+const auditExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.audit"), payload: z.object({ stagedRevisionId: z.string().uuid(), profileId: z.string().min(1).optional(), providerAvailable: z.boolean().optional() }) });
+const approveExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.approve"), payload: z.object({ stagedRevisionId: z.string().uuid(), reportId: z.string().uuid(), expectedArtifactHash: z.string().regex(/^[a-f0-9]{64}$/), acceptedFindingIds: z.array(z.string().min(1)).optional(), userConfirmed: z.literal(true) }) });
+const prepareExtensionRevisionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.revision.prepare"), payload: z.object({ action: z.enum(["enable", "update", "disable"]), extensionId: z.string().min(1), approvedRevisionId: z.string().uuid().optional() }) });
+const activateExtensionRevisionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.revision.activate"), payload: z.object({ revisionId: z.string().uuid(), mode: z.enum(["idle", "immediate"]).optional() }) });
+const rollbackExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.rollback"), payload: z.object({ approvedRevisionId: z.string().uuid() }) });
 const setAccessModeCommandSchema = commandMetadataSchema.extend({
   command: z.literal("access.mode.set"),
   payload: z.object({ mode: z.enum(["standard", "full"]) })
@@ -496,6 +701,21 @@ const submitTurnCommandSchema = commandMetadataSchema.extend({
     retryOfTurnId: z.string().min(1).optional()
   })
 });
+const listExecutionQueueCommandSchema = commandMetadataSchema.extend({ command: z.literal("execution_queue.list") });
+const updateExecutionQueueItemCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("execution_queue.update"),
+  payload: z.object({ itemId: z.string().uuid(), text: z.string().trim().min(1).max(200_000) })
+});
+const cancelExecutionQueueItemCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("execution_queue.cancel"), payload: z.object({ itemId: z.string().uuid() })
+});
+const activateExecutionQueueItemCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("execution_queue.activate"), payload: z.object({ itemId: z.string().uuid() })
+});
+const reorderExecutionQueueItemCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("execution_queue.reorder"),
+  payload: z.object({ itemId: z.string().uuid(), beforeItemId: z.string().uuid().optional() })
+});
 const stopTurnCommandSchema = commandMetadataSchema.extend({
   command: z.literal("turn.stop"),
   payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1) })
@@ -508,6 +728,23 @@ const resolveCapabilityConfirmationCommandSchema = commandMetadataSchema.extend(
   command: z.literal("capability.confirmation.resolve"),
   payload: z.object({ requestId: z.string().min(1), approved: z.boolean() })
 });
+const authorizeSubAgentRunCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("sub_agent.run.authorize"),
+  payload: z.object({
+    parentThreadId: z.string().min(1),
+    parentTurnId: z.string().min(1),
+    explicitIntentEvidence: subAgentExplicitIntentEvidenceSchema,
+    taskLimit: z.number().int().positive().max(32).optional(),
+    sharedTokenBudget: z.number().int().positive().max(2_000_000).optional(),
+    tasks: z.array(subAgentTaskInputSchema).min(1).max(32)
+  })
+});
+const listSubAgentRunsCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.list") });
+const inspectSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.inspect"), payload: z.object({ runId: z.string().uuid() }) });
+const stopSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.stop"), payload: z.object({ runId: z.string().uuid(), reason: z.string().trim().max(200).optional() }) });
+const retrySubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.retry"), payload: z.object({ taskId: z.string().uuid() }) });
+const skipSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.skip"), payload: z.object({ taskId: z.string().uuid() }) });
+const deleteSubAgentRecordCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.record.delete"), payload: z.object({ runId: z.string().uuid(), taskId: z.string().uuid().optional(), confirmed: z.literal(true) }) });
 
 export const hostCommandSchema = z.discriminatedUnion("command", [
   bootstrapCommandSchema,
@@ -516,6 +753,38 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   restorePersonalCognitionCommandSchema,
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
+  listSkillsCommandSchema,
+  importSkillCommandSchema,
+  inspectSkillCommandSchema,
+  activateSkillCommandSchema,
+  disableSkillCommandSchema,
+  loadIntegrationStateCommandSchema,
+  prepareOfficeTaskCommandSchema,
+  runOfficeTaskCommandSchema,
+  cancelOfficeTaskCommandSchema,
+  commitOfficeResultCommandSchema,
+  replaceOfficeOriginalCommandSchema,
+  listSkillCreatorDraftsCommandSchema,
+  prepareSkillCreatorDraftCommandSchema,
+  reviewSkillCreatorDraftCommandSchema,
+  acceptSkillCreatorDraftCommandSchema,
+  discardSkillCreatorDraftCommandSchema,
+  inspectPageRecoveryCommandSchema,
+  runPageRecoveryCommandSchema,
+  cancelPageRecoveryCommandSchema,
+  listMcpServersCommandSchema,
+  saveMcpServerCommandSchema,
+  activateMcpServerCommandSchema,
+  disconnectMcpServerCommandSchema,
+  executeMcpToolCommandSchema,
+  listExtensionsCommandSchema,
+  stageExtensionCommandSchema,
+  inspectExtensionCommandSchema,
+  auditExtensionCommandSchema,
+  approveExtensionCommandSchema,
+  prepareExtensionRevisionCommandSchema,
+  activateExtensionRevisionCommandSchema,
+  rollbackExtensionCommandSchema,
   createProfileCommandSchema,
   setProfileCredentialCommandSchema,
   listPromptRevisionsCommandSchema,
@@ -588,9 +857,21 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   resolveThreadProfileChangeCommandSchema,
   chooseOutputLocationCommandSchema,
   submitTurnCommandSchema,
+  listExecutionQueueCommandSchema,
+  updateExecutionQueueItemCommandSchema,
+  cancelExecutionQueueItemCommandSchema,
+  activateExecutionQueueItemCommandSchema,
+  reorderExecutionQueueItemCommandSchema,
   stopTurnCommandSchema,
   compactThreadCommandSchema,
-  resolveCapabilityConfirmationCommandSchema
+  resolveCapabilityConfirmationCommandSchema,
+  authorizeSubAgentRunCommandSchema,
+  listSubAgentRunsCommandSchema,
+  inspectSubAgentRunCommandSchema,
+  stopSubAgentRunCommandSchema,
+  retrySubAgentTaskCommandSchema,
+  skipSubAgentTaskCommandSchema,
+  deleteSubAgentRecordCommandSchema
 ]);
 export type HostCommand = z.infer<typeof hostCommandSchema>;
 
@@ -602,6 +883,17 @@ const eventMetadataSchema = z.object({
   actor: actorRefSchema,
   provenance: provenanceRefSchema,
   occurredAt: z.string().datetime()
+});
+
+export const executionSchedulerTelemetrySchema = z.object({
+  capacity: z.number().int().positive(),
+  runningCount: z.number().int().nonnegative(),
+  queuedCount: z.number().int().nonnegative(),
+  draftCount: z.number().int().nonnegative(),
+  averageQueueDelayMs: z.number().int().nonnegative(),
+  longestRunningMs: z.number().int().nonnegative(),
+  failureCount: z.number().int().nonnegative(),
+  oldestQueuedAt: z.string().datetime().optional()
 });
 
 export const bootstrapStateSchema = z.object({
@@ -630,7 +922,8 @@ export const bootstrapStateSchema = z.object({
     providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
   }),
-  environmentDoctor: z.record(z.enum(["pi", "provider", "parser", "credentialReference", "storage", "migration", "bundledExtensions"]), z.object({
+  executionScheduler: executionSchedulerTelemetrySchema,
+  environmentDoctor: z.record(z.string().min(1).max(80), z.object({
     status: z.enum(["ready", "attention", "unavailable"]),
     message: z.string().min(1).max(200)
   })).optional()
@@ -673,6 +966,28 @@ const profilesListedEventSchema = eventMetadataSchema.extend({
 const profileCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("profile.created"),
   payload: z.object({ profile: modelProfileSchema })
+});
+const skillsUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("skills.updated"),
+  payload: z.object({
+    root: z.string().min(1),
+    packages: z.array(skillInventoryItemSchema),
+    action: z.enum(["listed", "imported", "inspected", "activated", "disabled"]),
+    selectedRevisionId: z.string().uuid().optional(),
+    report: skillCompatibilityReportSchema.optional()
+  })
+});
+const integrationStateUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("integration.state.updated"),
+  payload: z.object({ state: integrationStateSchema, action: z.enum(["loaded", "changed", "recovered"]) })
+});
+const integrationJobUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("integration.job.updated"),
+  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery", "mcp", "extension"]), job: integrationJobSummarySchema })
+});
+const integrationDiagnosticEventSchema = eventMetadataSchema.extend({
+  event: z.literal("integration.diagnostic"),
+  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery", "mcp", "extension"]), code: z.string().min(1), message: z.string().min(1).max(1_200), recoverable: z.boolean() })
 });
 const profileCredentialUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("profile.credential.updated"), payload: z.object({ profile: modelProfileSchema }) });
 const promptRevisionsListedEventSchema = eventMetadataSchema.extend({
@@ -793,6 +1108,13 @@ const turnAcceptedEventSchema = eventMetadataSchema.extend({
     profile: modelProfileSchema,
     prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema })
   })
+});
+const turnQueuedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("turn.queued"), payload: z.object({ item: executionQueueItemSchema })
+});
+const executionQueueUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("execution_queue.updated"),
+  payload: z.object({ items: z.array(executionQueueItemSchema), runningCount: z.number().int().nonnegative(), capacity: z.number().int().positive(), telemetry: executionSchedulerTelemetrySchema })
 });
 const turnStartedEventSchema = eventMetadataSchema.extend({
   event: z.literal("turn.started"),
@@ -923,6 +1245,37 @@ const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
     artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
   })
 });
+const subAgentProjectionEventSchema = eventMetadataSchema.extend({
+  event: z.enum([
+    "sub_agent.run.authorized",
+    "sub_agent.run.inspected",
+    "sub_agent.run.stopped",
+    "sub_agent.run.completed",
+    "sub_agent.run.interrupted",
+    "sub_agent.task.created",
+    "sub_agent.task.queued",
+    "sub_agent.task.started",
+    "sub_agent.task.updated",
+    "sub_agent.task.completed",
+    "sub_agent.task.failed",
+    "sub_agent.task.retry",
+    "sub_agent.task.skipped",
+    "sub_agent.record.deleted"
+  ]),
+  payload: z.object({ projection: subAgentProjectionSchema, task: subAgentTaskSchema.optional(), attempt: subAgentAttemptSchema.optional() })
+});
+const subAgentAttemptCreatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("sub_agent.attempt.created"),
+  payload: z.object({ projection: subAgentProjectionSchema, attempt: subAgentAttemptSchema })
+});
+const subAgentRunsListedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("sub_agent.runs.listed"),
+  payload: z.object({ projections: z.array(subAgentProjectionSchema).max(32) })
+});
+const subAgentBudgetExhaustedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("sub_agent.budget.exhausted"),
+  payload: z.object({ projection: subAgentProjectionSchema, remainingTokens: z.number().int().nonnegative() })
+});
 
 export const hostEventSchema = z.discriminatedUnion("event", [
   bootstrapCompletedEventSchema,
@@ -932,6 +1285,10 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
+  skillsUpdatedEventSchema,
+  integrationStateUpdatedEventSchema,
+  integrationJobUpdatedEventSchema,
+  integrationDiagnosticEventSchema,
   profileCredentialUpdatedEventSchema,
   promptRevisionsListedEventSchema,
   promptRevisionCreatedEventSchema,
@@ -961,6 +1318,8 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   threadProfileChangeResolvedEventSchema,
   threadOutputLocationSelectedEventSchema,
   turnAcceptedEventSchema,
+  turnQueuedEventSchema,
+  executionQueueUpdatedEventSchema,
   turnStartedEventSchema,
   messageDeltaEventSchema,
   turnCompletedEventSchema,
@@ -985,7 +1344,11 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   projectOutputOpenedEventSchema,
   threadCompactionEventSchema,
   capabilityConfirmationRequiredEventSchema,
-  capabilityExecutionUpdatedEventSchema
+  capabilityExecutionUpdatedEventSchema,
+  subAgentProjectionEventSchema,
+  subAgentRunsListedEventSchema,
+  subAgentAttemptCreatedEventSchema,
+  subAgentBudgetExhaustedEventSchema
 ]);
 
 export type HostEvent = z.infer<typeof hostEventSchema>;
@@ -1000,18 +1363,22 @@ type HostCommandName = HostCommand["command"];
 type HostCommandFor<TName extends HostCommandName> = Extract<HostCommand, { command: TName }>;
 type HostCommandInput<TName extends HostCommandName> = Omit<
   HostCommandFor<TName>,
-  "schemaVersion" | "commandId" | "correlationId" | "actor" | "sentAt"
+  "schemaVersion" | "commandId" | "correlationId" | "actor" | "sentAt" | "expectedStateVersion" | "scope"
 >;
 type AnyHostCommandInput = { [TName in HostCommandName]: HostCommandInput<TName> }[HostCommandName];
 
 export function createCommand(command: AnyHostCommandInput): HostCommand {
+  const payload = "payload" in command && command.payload !== undefined && typeof command.payload === "object" && command.payload !== null ? command.payload as Record<string, unknown> : undefined;
+  const scope = payload?.scope === "project" || typeof payload?.projectId === "string" || command.command.startsWith("project.") || command.command === "thread.create.project" ? "project" : "unscoped";
   return {
     ...command,
     schemaVersion: IPC_SCHEMA_VERSION,
     commandId: crypto.randomUUID(),
     correlationId: crypto.randomUUID(),
     actor: { actorType: "user", actorId: "local-user" },
-    sentAt: new Date().toISOString()
+    sentAt: new Date().toISOString(),
+    expectedStateVersion: 1,
+    scope
   } as HostCommand;
 }
 

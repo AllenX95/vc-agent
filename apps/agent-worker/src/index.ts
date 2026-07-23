@@ -15,27 +15,45 @@ if (parentPort === undefined) throw new Error("Agent Worker requires an Electron
 
 type ExecuteCommand = Extract<WorkerCommand, { command: "turn.execute" }>;
 
-let session: PiSessionHandle | null = null;
-let sessionProfileKey: string | null = null;
-let activeCommand: ExecuteCommand | null = null;
-let stopRequested = false;
-let interruptionSent = false;
-let retrievalUsed = false;
-let compactionUsed = false;
-let retireSessionBeforeNextTurn = false;
-let retirementRequiresRebuild = false;
-const sequenceByTurn = new Map<string, number>();
-const capabilityResolvers = new Map<string, (result: CapabilityExecutionResult) => void>();
+interface WorkerSession {
+  session: PiSessionHandle | null;
+  sessionProfileKey: string | null;
+  activeCommand: ExecuteCommand | null;
+  stopRequested: boolean;
+  interruptionSent: boolean;
+  retrievalUsed: boolean;
+  compactionUsed: boolean;
+  retireSessionBeforeNextTurn: boolean;
+  retirementRequiresRebuild: boolean;
+  sequenceByTurn: Map<string, number>;
+  capabilityResolvers: Map<string, (result: CapabilityExecutionResult) => void>;
+}
+
+const sessions = new Map<string, WorkerSession>();
+
+function emptySession(): WorkerSession {
+  return {
+    session: null,
+    sessionProfileKey: null,
+    activeCommand: null,
+    stopRequested: false,
+    interruptionSent: false,
+    retrievalUsed: false,
+    compactionUsed: false,
+    retireSessionBeforeNextTurn: false,
+    retirementRequiresRebuild: false,
+    sequenceByTurn: new Map(),
+    capabilityResolvers: new Map()
+  };
+}
 
 type WorkerEventWithoutSequence = WorkerEvent extends infer T
-  ? T extends WorkerEvent
-    ? Omit<T, "workerSequence">
-    : never
+  ? T extends WorkerEvent ? Omit<T, "workerSequence"> : never
   : never;
 
-function send(event: WorkerEventWithoutSequence): void {
-  const workerSequence = (sequenceByTurn.get(event.turnId) ?? 0) + 1;
-  sequenceByTurn.set(event.turnId, workerSequence);
+function send(runtime: WorkerSession, event: WorkerEventWithoutSequence): void {
+  const workerSequence = (runtime.sequenceByTurn.get(event.turnId) ?? 0) + 1;
+  runtime.sequenceByTurn.set(event.turnId, workerSequence);
   parentPort.postMessage({ ...event, workerSequence });
 }
 
@@ -49,13 +67,15 @@ parentPort.on("message", (messageEvent) => {
 });
 
 async function executeTurn(command: ExecuteCommand): Promise<void> {
-  if (activeCommand !== null) {
-    send({
+  const runtime = sessions.get(command.threadId) ?? emptySession();
+  sessions.set(command.threadId, runtime);
+  if (runtime.activeCommand !== null) {
+    send(runtime, {
       ...workerMetadata(command),
       event: "turn.failed",
       failure: {
         kind: "worker",
-        code: "THREAD_TURN_ALREADY_ACTIVE",
+        code: "THREAD_SESSION_ALREADY_ACTIVE",
         message: "This Thread already has an active Turn.",
         provider: command.profile.provider,
         model: command.profile.model
@@ -63,234 +83,194 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
     });
     return;
   }
-  if (retireSessionBeforeNextTurn && session !== null) {
-    session.dispose();
-    session = null;
-    sessionProfileKey = null;
-    retireSessionBeforeNextTurn = false;
-    retirementRequiresRebuild = false;
+  if (runtime.retireSessionBeforeNextTurn && runtime.session !== null) {
+    runtime.session.dispose();
+    runtime.session = null;
+    runtime.sessionProfileKey = null;
+    runtime.retireSessionBeforeNextTurn = false;
+    runtime.retirementRequiresRebuild = false;
   }
-  activeCommand = command;
-  stopRequested = false;
-  interruptionSent = false;
-  retrievalUsed = false;
-  compactionUsed = false;
+  runtime.activeCommand = command;
+  runtime.stopRequested = false;
+  runtime.interruptionSent = false;
+  runtime.retrievalUsed = false;
+  runtime.compactionUsed = false;
   let failureSent = false;
   try {
     if (process.env.NODE_ENV === "test" && command.profile.provider === "vc-agent-reflection-provider-failure-faux") {
-      throw new Error(JSON.stringify({ error: { code: "FIXTURE_PROVIDER_REJECTED", message: `Provider rejected credential ${command.profile.apiKey}`, request_id: "req-reflection-fixture" } }));
+      throw new Error(JSON.stringify({ error: { code: "FIXTURE_PROVIDER_REJECTED", message: "Provider rejected credential " + command.profile.apiKey, request_id: "req-reflection-fixture" } }));
     }
-    const profileKey = `${command.profile.provider}\u0000${command.profile.model}`;
-    if (session !== null && sessionProfileKey !== profileKey) {
-      session.dispose();
-      session = null;
+    const profileKey = command.profile.provider + "\u0000" + command.profile.model;
+    if (runtime.session !== null && runtime.sessionProfileKey !== profileKey) {
+      runtime.session.dispose();
+      runtime.session = null;
     }
-    if (session === null) {
+    if (runtime.session === null) {
       const sessionConfig = {
-          cwd: command.cwd,
-          threadDirectory: command.threadDirectory,
-          ...(command.previousSessionFile === undefined ? {} : { previousSessionFile: command.previousSessionFile }),
-          ...(command.hostHighWater === undefined ? {} : { hostHighWater: command.hostHighWater }),
-          contextHistory: command.contextHistory,
-          resources: command.resources,
-          extensions: command.extensions,
-          capabilityProxy: requestCapability
+        cwd: command.cwd,
+        threadDirectory: command.threadDirectory,
+        ...(command.previousSessionFile === undefined ? {} : { previousSessionFile: command.previousSessionFile }),
+        ...(command.hostHighWater === undefined ? {} : { hostHighWater: command.hostHighWater }),
+        contextHistory: command.contextHistory,
+        resources: command.resources,
+        extensions: command.extensions,
+        capabilityProxy: (toolCallId: string, capabilityId: string, arguments_: Record<string, unknown>, signal?: AbortSignal) => requestCapability(runtime, toolCallId, capabilityId, arguments_, signal)
       };
       const onSessionEvent = (event: PiSessionEvent) => {
-          if (event.type === "text_delta") {
-            send({ ...workerMetadata(command), event: "message.delta", delta: event.delta });
-          } else if (event.type === "completed") {
-            send({
-              ...workerMetadata(command),
-              event: "turn.completed",
-              message: event.message,
-              usage: mapUsage(event.usage),
-              ...(event.responseId === undefined ? {} : { responseId: event.responseId }),
-              ...(event.piEntryId === undefined ? {} : { piEntryId: event.piEntryId })
-            });
-          } else if (event.type === "compaction_started") {
-            send({ ...workerMetadata(command), event: "thread.compaction.started", reason: event.reason });
-          } else if (event.type === "compaction_completed") {
-            compactionUsed = true;
-            send({
-              ...workerMetadata(command),
-              event: "thread.compaction.completed",
-              reason: event.reason,
-              tokensBefore: event.tokensBefore,
-              ...(event.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.estimatedTokensAfter })
-            });
-          } else if (event.type === "compaction_failed") {
-            send({
-              ...workerMetadata(command),
-              event: "thread.compaction.failed",
-              reason: event.reason,
-              failure: sanitizeProviderFailure(new Error(event.message), command.profile)
-            });
-          } else if (!stopRequested) {
-            failureSent = true;
-            send({
-              ...workerMetadata(command),
-              event: "turn.failed",
-              failure: sanitizeProviderFailure(event.error, command.profile)
-            });
-          }
+        // A Pi session may be reused for multiple turns. Resolve the command
+        // at event time so the callback cannot keep tagging later events with
+        // the first turn that created the session.
+        const activeCommand = runtime.activeCommand;
+        if (activeCommand === null) return;
+        if (event.type === "text_delta") {
+          send(runtime, { ...workerMetadata(activeCommand), event: "message.delta", delta: event.delta });
+        } else if (event.type === "completed") {
+          send(runtime, {
+            ...workerMetadata(activeCommand), event: "turn.completed", message: event.message, usage: mapUsage(event.usage),
+            ...(event.responseId === undefined ? {} : { responseId: event.responseId }),
+            ...(event.piEntryId === undefined ? {} : { piEntryId: event.piEntryId })
+          });
+        } else if (event.type === "compaction_started") {
+          send(runtime, { ...workerMetadata(activeCommand), event: "thread.compaction.started", reason: event.reason });
+        } else if (event.type === "compaction_completed") {
+          runtime.compactionUsed = true;
+          send(runtime, {
+            ...workerMetadata(activeCommand), event: "thread.compaction.completed", reason: event.reason, tokensBefore: event.tokensBefore,
+            ...(event.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.estimatedTokensAfter })
+          });
+        } else if (event.type === "compaction_failed") {
+          send(runtime, { ...workerMetadata(activeCommand), event: "thread.compaction.failed", reason: event.reason, failure: sanitizeProviderFailure(new Error(event.message), activeCommand.profile) });
+        } else if (!runtime.stopRequested) {
+          failureSent = true;
+          send(runtime, { ...workerMetadata(activeCommand), event: "turn.failed", failure: sanitizeProviderFailure(event.error, activeCommand.profile) });
+        }
       };
-      session = (["vc-agent-faux", "vc-agent-memory-faux", "vc-agent-explicit-memory-faux", "vc-agent-learning-recall-faux", "vc-agent-reflection-faux", "vc-agent-reflection-memory-faux", "vc-agent-unscoped-evidence-faux", "vc-agent-unscoped-memory-faux", "vc-agent-dream-synthesis-faux"].includes(command.profile.provider)) && process.env.NODE_ENV === "test"
-        ? await createFauxPiSession({ config: sessionConfig, responses: command.profile.provider === "vc-agent-memory-faux" ? longTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-explicit-memory-faux" ? explicitLongTermMemoryFixtureResponses() : command.profile.provider === "vc-agent-learning-recall-faux" ? learningGateRecallFixtureResponses() : command.profile.provider === "vc-agent-reflection-faux" ? reflectionFixtureResponses() : command.profile.provider === "vc-agent-reflection-memory-faux" ? command.contextHistory.length > 0 ? memoryAwareReflectionContinuationFixtureResponses() : memoryAwareReflectionFixtureResponses() : command.profile.provider === "vc-agent-unscoped-evidence-faux" ? unscopedReflectionFixtureResponses() : command.profile.provider === "vc-agent-unscoped-memory-faux" ? command.contextHistory.length > 0 ? unscopedMemoryAwareReflectionContinuationFixtureResponses() : unscopedMemoryAwareReflectionFixtureResponses() : command.profile.provider === "vc-agent-dream-synthesis-faux" ? dreamSynthesisFixtureResponses(command.prompt) : dogfoodFixtureResponses(), onEvent: onSessionEvent })
+      runtime.session = ([
+        "vc-agent-faux", "vc-agent-memory-faux", "vc-agent-explicit-memory-faux", "vc-agent-learning-recall-faux",
+        "vc-agent-reflection-faux", "vc-agent-reflection-memory-faux", "vc-agent-unscoped-evidence-faux", "vc-agent-unscoped-memory-faux", "vc-agent-dream-synthesis-faux"
+      ].includes(command.profile.provider)) && process.env.NODE_ENV === "test"
+        ? await createFauxPiSession({
+            config: sessionConfig,
+            responses: command.profile.provider === "vc-agent-memory-faux" ? longTermMemoryFixtureResponses()
+              : command.profile.provider === "vc-agent-explicit-memory-faux" ? explicitLongTermMemoryFixtureResponses()
+              : command.profile.provider === "vc-agent-learning-recall-faux" ? learningGateRecallFixtureResponses()
+              : command.profile.provider === "vc-agent-reflection-faux" ? reflectionFixtureResponses()
+              : command.profile.provider === "vc-agent-reflection-memory-faux" ? command.contextHistory.length > 0 ? memoryAwareReflectionContinuationFixtureResponses() : memoryAwareReflectionFixtureResponses()
+              : command.profile.provider === "vc-agent-unscoped-evidence-faux" ? unscopedReflectionFixtureResponses()
+              : command.profile.provider === "vc-agent-unscoped-memory-faux" ? command.contextHistory.length > 0 ? unscopedMemoryAwareReflectionContinuationFixtureResponses() : unscopedMemoryAwareReflectionFixtureResponses()
+              : command.profile.provider === "vc-agent-dream-synthesis-faux" ? dreamSynthesisFixtureResponses(command.prompt)
+              : dogfoodFixtureResponses(),
+            onEvent: onSessionEvent
+          })
         : await createPiSession({ ...sessionConfig, profile: command.profile }, onSessionEvent);
-      sessionProfileKey = profileKey;
-      send({
-        ...workerMetadata(command),
-        event: "physical_context.ready",
-        sessionFile: session.sessionFile,
-        reconciliation: session.reconciliation,
-        retainedTurnCount: session.retainedTurnCount
+      runtime.sessionProfileKey = profileKey;
+      send(runtime, {
+        ...workerMetadata(command), event: "physical_context.ready", sessionFile: runtime.session.sessionFile,
+        reconciliation: runtime.session.reconciliation, retainedTurnCount: runtime.session.retainedTurnCount
       });
     }
-    if (stopRequested) {
-      sendInterrupted(command, "user_stop");
-      return;
-    }
-    if (command.compactOnly === true) {
-      await session.compact("manual");
-      return;
-    }
-    const usableContextTokens = Math.max(0, session.contextWindow - session.maxOutputTokens - 2_048);
+    if (runtime.stopRequested) { sendInterrupted(runtime, command, "user_stop"); return; }
+    if (command.compactOnly === true) { await runtime.session!.compact("manual"); return; }
+    const usableContextTokens = Math.max(0, runtime.session!.contextWindow - runtime.session!.maxOutputTokens - 2_048);
     if (command.currentInputTokens > usableContextTokens) {
       failureSent = true;
-      send({
-        ...workerMetadata(command),
-        event: "turn.failed",
+      send(runtime, {
+        ...workerMetadata(command), event: "turn.failed",
         failure: {
-          kind: "worker",
-          code: "CURRENT_INPUT_EXCEEDS_CONTEXT_BUDGET",
+          kind: "worker", code: "CURRENT_INPUT_EXCEEDS_CONTEXT_BUDGET",
           message: "The current explicit input exceeds this Model Profile's usable context. Narrow the requested material range or choose a larger-context Profile.",
-          provider: command.profile.provider,
-          model: command.profile.model
+          provider: command.profile.provider, model: command.profile.model
         }
       });
       return;
     }
-    if (command.estimatedInputTokens > usableContextTokens && command.contextHistory.length > 0) {
-      await session.compact("threshold");
+    if (command.estimatedInputTokens > usableContextTokens && command.contextHistory.length > 0) await runtime.session!.compact("threshold");
+    send(runtime, { ...workerMetadata(command), event: "turn.started" });
+    const testDelayMs = process.env.NODE_ENV === "test" ? Number.parseInt(process.env.VC_AGENT_TEST_FAUX_DELAY_MS ?? "0", 10) : 0;
+    if (Number.isInteger(testDelayMs) && testDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, testDelayMs));
+      if (runtime.stopRequested) { sendInterrupted(runtime, command, "user_stop"); return; }
     }
-    send({ ...workerMetadata(command), event: "turn.started" });
-    await session.submit(command.prompt, { activeCapabilities: command.activeCapabilities });
-    if (stopRequested) sendInterrupted(command, "user_stop");
+    await runtime.session!.submit(command.prompt, { activeCapabilities: command.activeCapabilities });
+    if (runtime.stopRequested) sendInterrupted(runtime, command, "user_stop");
   } catch (error) {
-    if (stopRequested) sendInterrupted(command, "user_stop");
-    else if (!failureSent) {
-      send({
-        ...workerMetadata(command),
-        event: "turn.failed",
-        failure: sanitizeProviderFailure(error, command.profile)
-      });
-    }
+    if (runtime.stopRequested) sendInterrupted(runtime, command, "user_stop");
+    else if (!failureSent) send(runtime, { ...workerMetadata(command), event: "turn.failed", failure: sanitizeProviderFailure(error, command.profile) });
   } finally {
-    if (retrievalUsed || compactionUsed) {
-      retireSessionBeforeNextTurn = true;
-      retirementRequiresRebuild = retrievalUsed;
+    if (runtime.retrievalUsed || runtime.compactionUsed) {
+      runtime.retireSessionBeforeNextTurn = true;
+      runtime.retirementRequiresRebuild = runtime.retrievalUsed;
     }
-    activeCommand = null;
-    stopRequested = false;
+    runtime.activeCommand = null;
+    runtime.stopRequested = false;
   }
 }
 
 async function stopTurn(command: Extract<WorkerCommand, { command: "turn.stop" }>): Promise<void> {
-  if (activeCommand?.turnId !== command.turnId) return;
-  stopRequested = true;
-  if (session === null) return;
-  await session.abort();
-  sendInterrupted(activeCommand, "user_stop");
+  const runtime = sessions.get(command.threadId);
+  if (runtime?.activeCommand?.turnId !== command.turnId) return;
+  runtime.stopRequested = true;
+  if (runtime.session === null) return;
+  await runtime.session.abort();
+  sendInterrupted(runtime, runtime.activeCommand, "user_stop");
 }
 
-function sendInterrupted(command: ExecuteCommand, reason: "user_stop" | "provider_interrupted"): void {
-  if (interruptionSent) return;
-  interruptionSent = true;
-  send({ ...workerMetadata(command), event: "turn.interrupted", reason });
+function sendInterrupted(runtime: WorkerSession, command: ExecuteCommand, reason: "user_stop" | "provider_interrupted"): void {
+  if (runtime.interruptionSent) return;
+  runtime.interruptionSent = true;
+  send(runtime, { ...workerMetadata(command), event: "turn.interrupted", reason });
 }
 
 function acknowledgeTrajectory(command: Extract<WorkerCommand, { command: "trajectory.acknowledge" }>): void {
-  if (session === null) return;
-  if (retirementRequiresRebuild) return;
-  session.acknowledge(command.eventId, command.sequence);
-  send({ ...workerMetadata(command), event: "trajectory.acknowledged", eventId: command.eventId, sequence: command.sequence });
+  const runtime = sessions.get(command.threadId);
+  if (runtime?.session === null || runtime === undefined || runtime.retirementRequiresRebuild) return;
+  runtime.session.acknowledge(command.eventId, command.sequence);
+  send(runtime, { ...workerMetadata(command), event: "trajectory.acknowledged", eventId: command.eventId, sequence: command.sequence });
 }
 
 function resolveCapabilityExecution(command: Extract<WorkerCommand, { command: "capability.execution.resolve" }>): void {
-  const resolve = capabilityResolvers.get(command.result.requestId);
-  if (resolve === undefined) return;
-  capabilityResolvers.delete(command.result.requestId);
+  const runtime = sessions.get(command.threadId);
+  const resolve = runtime?.capabilityResolvers.get(command.result.requestId);
+  if (resolve === undefined || runtime === undefined) return;
+  runtime.capabilityResolvers.delete(command.result.requestId);
   resolve(command.result);
 }
 
-function requestCapability(
-  toolCallId: string,
-  capabilityId: string,
-  arguments_: Record<string, unknown>,
-  signal?: AbortSignal
-): Promise<CapabilityExecutionResult> {
-  const command = activeCommand;
-  if (command === null) {
-    return Promise.resolve({ schemaVersion: 1, requestId: crypto.randomUUID(), status: "rejected", code: "TURN_NOT_ACTIVE", content: "The Turn is no longer active." });
-  }
+function requestCapability(runtime: WorkerSession, toolCallId: string, capabilityId: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<CapabilityExecutionResult> {
+  const command = runtime.activeCommand;
+  if (command === null) return Promise.resolve({ schemaVersion: 1, requestId: crypto.randomUUID(), status: "rejected", code: "TURN_NOT_ACTIVE", content: "The Turn is no longer active." });
   const requestId = crypto.randomUUID();
   const request = {
-    schemaVersion: 1 as const,
-    requestId,
-    correlationId: command.correlationId,
-    threadId: command.threadId,
-    turnId: command.turnId,
-    toolCallId,
-    capabilityId,
-    scope: command.executionScope,
-    arguments: arguments_,
-    expectedStateVersion: command.expectedStateVersion,
-    actor: { actorType: "agent" as const, actorId: "primary-agent" },
-    provenance: { producerType: "agent" as const, producerId: "primary-agent" }
+    schemaVersion: 1 as const, requestId, correlationId: command.correlationId, threadId: command.threadId, turnId: command.turnId,
+    toolCallId, capabilityId, scope: command.executionScope, arguments: arguments_, expectedStateVersion: command.expectedStateVersion,
+    actor: { actorType: "agent" as const, actorId: "primary-agent" }, provenance: { producerType: "agent" as const, producerId: "primary-agent" }
   };
-  send({ ...workerMetadata(command), event: "capability.execution.requested", request });
+  send(runtime, { ...workerMetadata(command), event: "capability.execution.requested", request });
   return new Promise((resolve) => {
-    const finish = (result: CapabilityExecutionResult) => {
-      if (result.retrieval !== undefined) retrievalUsed = true;
-      resolve(result);
-    };
-    capabilityResolvers.set(requestId, finish);
+    const finish = (result: CapabilityExecutionResult) => { if (result.retrieval !== undefined) runtime.retrievalUsed = true; resolve(result); };
+    runtime.capabilityResolvers.set(requestId, finish);
     const abort = () => {
-      if (!capabilityResolvers.delete(requestId)) return;
+      if (!runtime.capabilityResolvers.delete(requestId)) return;
       finish({ schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "Capability execution was interrupted." });
     };
-    if (signal?.aborted) abort();
-    else signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
   });
 }
 
-function workerMetadata(command: { correlationId: string; threadId: string; turnId: string }) {
+function workerMetadata(command: { correlationId: string; threadId: string; turnId: string; ownerKey?: string | undefined; workerRevision?: string | undefined; sessionKey?: string | undefined }) {
   return {
-    schemaVersion: IPC_SCHEMA_VERSION,
-    correlationId: command.correlationId,
-    threadId: command.threadId,
-    turnId: command.turnId
+    schemaVersion: IPC_SCHEMA_VERSION, correlationId: command.correlationId, threadId: command.threadId, turnId: command.turnId,
+    ...(command.ownerKey === undefined ? {} : { ownerKey: command.ownerKey }),
+    ...(command.workerRevision === undefined ? {} : { workerRevision: command.workerRevision }),
+    ...(command.sessionKey === undefined ? {} : { sessionKey: command.sessionKey })
   } as const;
 }
 
-function mapUsage(usage: {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-}): TokenUsage {
-  return {
-    input: usage.input,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-    totalTokens: usage.totalTokens
-  };
+function mapUsage(usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number }): TokenUsage {
+  return { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, totalTokens: usage.totalTokens };
 }
 
 process.on("disconnect", () => {
-  session?.dispose();
+  for (const runtime of sessions.values()) runtime.session?.dispose();
   process.exit(0);
 });

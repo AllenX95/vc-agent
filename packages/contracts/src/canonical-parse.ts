@@ -31,6 +31,7 @@ export const parseWarningSchema = z.object({
   message: z.string().min(1),
   source: sourceReferenceSchema.optional()
 });
+export type ParseWarning = z.infer<typeof parseWarningSchema>;
 
 export const canonicalParseSchema = z.object({
   schemaVersion: z.literal(1),
@@ -71,7 +72,7 @@ const utilityJobBaseSchema = z.object({
   jobId: z.string().uuid()
 });
 
-export const utilityJobCommandSchema = utilityJobBaseSchema.extend({
+const materialParseJobCommandSchema = utilityJobBaseSchema.extend({
   command: z.literal("material.parse"),
   material: z.object({
     id: z.string().uuid(), projectId: z.string().uuid(), relativePath: z.string().min(1),
@@ -81,10 +82,39 @@ export const utilityJobCommandSchema = utilityJobBaseSchema.extend({
   timeoutMs: z.number().int().min(1_000).max(300_000),
   maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
 });
+
+export const localOcrDeviceSchema = z.enum(["auto", "cpu", "cuda"]);
+export type LocalOcrDevice = z.infer<typeof localOcrDeviceSchema>;
+
+const pageRecoveryOcrJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("page_recovery.ocr"),
+  stage: z.enum(["paddle", "ovis"]),
+  absolutePath: z.string().min(1),
+  pageNumber: z.number().int().positive(),
+  device: localOcrDeviceSchema,
+  runtimeRoot: z.string().min(1),
+  timeoutMs: z.number().int().min(1_000).max(1_800_000),
+  maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
+});
+
+export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema]);
 export type UtilityJobCommand = z.infer<typeof utilityJobCommandSchema>;
 
 export const utilityJobEventSchema = z.discriminatedUnion("event", [
   utilityJobBaseSchema.extend({ event: z.literal("material.parse.completed"), artifactPath: z.string().min(1), parse: canonicalParseSchema }),
-  utilityJobBaseSchema.extend({ event: z.literal("material.parse.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
+  utilityJobBaseSchema.extend({ event: z.literal("material.parse.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({
+    event: z.literal("page_recovery.ocr.completed"),
+    stage: z.enum(["paddle", "ovis"]),
+    text: z.string(),
+    confidence: z.number().min(0).max(1),
+    structurallyInsufficient: z.boolean(),
+    adapterId: z.string().min(1),
+    adapterVersion: z.string().min(1),
+    runtimeRevision: z.string().min(1),
+    device: z.enum(["cpu", "cuda"]),
+    warnings: z.array(z.string().min(1)).default([])
+  }),
+  utilityJobBaseSchema.extend({ event: z.literal("page_recovery.ocr.failed"), stage: z.enum(["paddle", "ovis"]), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
 ]);
 export type UtilityJobEvent = z.infer<typeof utilityJobEventSchema>;

@@ -8,3 +8,5 @@ test-results/
 *.db-shm
 *.db-wal
 .vite/
+__pycache__/
+*.pyc

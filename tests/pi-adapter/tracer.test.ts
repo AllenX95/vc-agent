@@ -81,6 +81,36 @@ describe("real Pi SDK tracer", () => {
     expect(Object.isFrozen(loader.snapshot)).toBe(true);
   });
 
+  it("projects task-scoped Skill instructions into the real Pi resource loader", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-loader-"));
+    temporaryDirectories.push(cwd);
+    const skillPath = join(cwd, "active", "docx", "SKILL.md");
+    const skillResources: RuntimeResourceSnapshot = {
+      ...resources,
+      skills: {
+        schemaVersion: 1,
+        revisionId: "skill-snapshot-1",
+        decisions: [{ packageId: "docx", revisionId: "docx-rev-1", reason: "task_match", resources: ["SKILL.md"], capabilities: [] }],
+        instructions: [{
+          packageId: "docx",
+          revisionId: "docx-rev-1",
+          name: "docx",
+          description: "Create Word documents",
+          filePath: skillPath,
+          baseDir: join(cwd, "active", "docx"),
+          content: "---\nname: docx\ndescription: Create Word documents\n---\nUse the imported Word workflow."
+        }],
+        resources: []
+      }
+    };
+    const loader = new SnapshotResourceLoader({ cwd, resources: skillResources, extensions });
+
+    expect(loader.getSkills().skills).toMatchObject([{ name: "docx", description: "Create Word documents", filePath: skillPath }]);
+    expect(loader.getAppendSystemPrompt().at(-1)).toContain("Use the imported Word workflow.");
+    expect(loader.getAppendSystemPrompt().at(-1)).toContain(`References are relative to ${join(cwd, "active", "docx")}.`);
+    expect(Object.isFrozen(loader.snapshot.resources.skills)).toBe(true);
+  });
+
   it("resumes only an exactly acknowledged Pi context and rebuilds when the Host is ahead", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "vc-agent-reconcile-"));
     temporaryDirectories.push(cwd);

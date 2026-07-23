@@ -1,23 +1,28 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalParseSchema, utilityJobCommandSchema, type UtilityJobEvent } from "@vc-agent/contracts";
+import { canonicalParseSchema, utilityJobCommandSchema, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Utility Worker requires an Electron Utility Process parent port");
 const children = new Set<ChildProcessWithoutNullStreams>();
+const ocrRuntimes = new Map<"paddle" | "ovis", OcrRuntimeClient>();
 
 parentPort.on("message", (message) => {
   const command = utilityJobCommandSchema.safeParse(message.data);
   if (command.success) void run(command.data);
 });
 
-async function run(command: ReturnType<typeof utilityJobCommandSchema.parse>): Promise<void> {
-  const python = process.env.VC_AGENT_PYTHON?.trim() || "python";
-  const script = join(dirname(fileURLToPath(import.meta.url)), "parser.py");
-  const child = spawn(python, [script], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: parserEnvironment() });
-  children.add(child);
+async function run(command: UtilityJobCommand): Promise<void> {
+  if (command.command === "material.parse") await runMaterialParse(command);
+  else await runOcr(command);
+}
+
+async function runMaterialParse(command: Extract<UtilityJobCommand, { command: "material.parse" }>): Promise<void> {
+  const child = spawnPython("parser.py");
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
   let exceeded = false;
@@ -29,16 +34,12 @@ async function run(command: ReturnType<typeof utilityJobCommandSchema.parse>): P
   });
   child.stderr.on("data", (chunk: Buffer) => { stderr = Buffer.concat([stderr, chunk]).subarray(-20_000); });
   child.stdin.end(JSON.stringify(command));
-  const result = await new Promise<{ code: number | null; error?: Error }>((resolve) => {
-    child.once("error", (error) => resolve({ code: null, error }));
-    child.once("close", (code) => resolve({ code }));
-  });
+  const result = await waitForExit(child);
   clearTimeout(timeout);
-  children.delete(child);
-  if (exceeded) return sendFailure(command.jobId, "OUTPUT_LIMIT_EXCEEDED", "Parser output exceeded its declared bound.", stderr);
-  if (timedOut) return sendFailure(command.jobId, "PARSER_TIMEOUT", "Parser exceeded its declared timeout.", stderr);
-  if (result.error !== undefined) return sendFailure(command.jobId, "PARSER_RUNTIME_UNAVAILABLE", result.error.message, stderr);
-  if (result.code !== 0) return sendFailure(command.jobId, "PARSER_FAILED", "The parser process failed.", stderr);
+  if (exceeded) return sendMaterialFailure(command.jobId, "OUTPUT_LIMIT_EXCEEDED", "Parser output exceeded its declared bound.", stderr);
+  if (timedOut) return sendMaterialFailure(command.jobId, "PARSER_TIMEOUT", "Parser exceeded its declared timeout.", stderr);
+  if (result.error !== undefined) return sendMaterialFailure(command.jobId, "PARSER_RUNTIME_UNAVAILABLE", result.error.message, stderr);
+  if (result.code !== 0) return sendMaterialFailure(command.jobId, "PARSER_FAILED", "The parser process failed.", stderr);
   try {
     const parse = canonicalParseSchema.parse(JSON.parse(stdout.toString("utf8")));
     mkdirSync(command.stagingDirectory, { recursive: true });
@@ -48,11 +49,97 @@ async function run(command: ReturnType<typeof utilityJobCommandSchema.parse>): P
     renameSync(partialPath, artifactPath);
     parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "material.parse.completed", artifactPath, parse } satisfies UtilityJobEvent);
   } catch (error) {
-    sendFailure(command.jobId, "MALFORMED_PARSER_OUTPUT", error instanceof Error ? error.message : "Parser output was invalid.", stderr);
+    sendMaterialFailure(command.jobId, "MALFORMED_PARSER_OUTPUT", error instanceof Error ? error.message : "Parser output was invalid.", stderr);
   }
 }
 
-function sendFailure(jobId: string, code: string, message: string, stderr: Buffer): void {
+async function runOcr(command: Extract<UtilityJobCommand, { command: "page_recovery.ocr" }>): Promise<void> {
+  try {
+    let runtime = ocrRuntimes.get(command.stage);
+    if (runtime === undefined) {
+      runtime = new OcrRuntimeClient(command.stage, command.runtimeRoot);
+      ocrRuntimes.set(command.stage, runtime);
+    }
+    const result = await runtime.run(command, command.timeoutMs, command.maxOutputBytes);
+    parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.completed", stage: command.stage, ...result } satisfies UtilityJobEvent);
+  } catch (error) {
+    parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code: error instanceof OcrRuntimeError ? error.code : "OCR_RUNTIME_FAILED", message: error instanceof Error ? error.message.slice(0, 2_000) : "OCR runtime failed.", stderr: error instanceof OcrRuntimeError ? error.stderr : "" } satisfies UtilityJobEvent);
+    if (error instanceof OcrRuntimeError && error.fatal) { ocrRuntimes.get(command.stage)?.close(); ocrRuntimes.delete(command.stage); }
+  }
+}
+
+class OcrRuntimeClient {
+  readonly #child: ChildProcessWithoutNullStreams;
+  readonly #pending = new Map<string, { resolve: (value: OcrResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; maxOutputBytes: number }>();
+  #stderr = Buffer.alloc(0);
+
+  constructor(stage: "paddle" | "ovis", runtimeRoot: string) {
+    const executable = join(runtimeRoot, `${stage}-venv`, "Scripts", "python.exe");
+    this.#child = spawnPython("ocr_runtime.py", executable);
+    this.#child.stderr.on("data", (chunk: Buffer) => { this.#stderr = Buffer.concat([this.#stderr, chunk]).subarray(-20_000); });
+    createInterface({ input: this.#child.stdout }).on("line", (line) => this.#receive(line));
+    this.#child.once("exit", () => this.#rejectAll(new OcrRuntimeError("OCR_RUNTIME_EXITED", "OCR runtime exited before completing the request.", this.#stderr.toString("utf8"), true)));
+    this.#child.once("error", (error) => this.#rejectAll(new OcrRuntimeError("OCR_RUNTIME_UNAVAILABLE", error.message, this.#stderr.toString("utf8"), true)));
+  }
+
+  run(command: Extract<UtilityJobCommand, { command: "page_recovery.ocr" }>, timeoutMs: number, maxOutputBytes: number): Promise<OcrResult> {
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(requestId);
+        reject(new OcrRuntimeError("PAGE_RECOVERY_TIMEOUT", `${command.stage} exceeded its declared timeout.`, this.#stderr.toString("utf8"), true));
+        this.close();
+      }, timeoutMs);
+      this.#pending.set(requestId, { resolve, reject, timer, maxOutputBytes });
+      this.#child.stdin.write(`${JSON.stringify({ requestId, stage: command.stage, absolutePath: command.absolutePath, pageNumber: command.pageNumber, device: command.device, runtimeRoot: command.runtimeRoot })}\n`);
+    });
+  }
+
+  close(): void { this.#child.kill(); }
+
+  #receive(line: string): void {
+    let response: OcrResponse;
+    try { response = JSON.parse(line) as OcrResponse; }
+    catch { return; }
+    const pending = this.#pending.get(response.requestId);
+    if (pending === undefined) return;
+    this.#pending.delete(response.requestId);
+    clearTimeout(pending.timer);
+    if (Buffer.byteLength(line, "utf8") > pending.maxOutputBytes) return pending.reject(new OcrRuntimeError("OUTPUT_LIMIT_EXCEEDED", "OCR output exceeded its declared bound.", this.#stderr.toString("utf8"), false));
+    if (!response.ok || response.result === undefined) return pending.reject(new OcrRuntimeError("OCR_FAILED", response.error?.message ?? "OCR runtime failed.", this.#stderr.toString("utf8"), false));
+    pending.resolve(response.result);
+  }
+
+  #rejectAll(error: Error): void {
+    for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    this.#pending.clear();
+  }
+}
+
+interface OcrResult { readonly text: string; readonly confidence: number; readonly structurallyInsufficient: boolean; readonly adapterId: string; readonly adapterVersion: string; readonly runtimeRevision: string; readonly device: "cpu" | "cuda"; readonly warnings: string[] }
+interface OcrResponse { readonly requestId: string; readonly ok: boolean; readonly result?: OcrResult; readonly error?: { readonly type?: string; readonly message?: string } }
+
+class OcrRuntimeError extends Error {
+  constructor(readonly code: string, message: string, readonly stderr: string, readonly fatal: boolean) { super(message); }
+}
+
+function spawnPython(scriptName: string, executable?: string): ChildProcessWithoutNullStreams {
+  const python = executable ?? process.env.VC_AGENT_PYTHON?.trim() ?? "python";
+  const script = join(dirname(fileURLToPath(import.meta.url)), scriptName);
+  const child = spawn(python, [script], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: parserEnvironment() });
+  children.add(child);
+  child.once("close", () => children.delete(child));
+  return child;
+}
+
+function waitForExit(child: ChildProcessWithoutNullStreams): Promise<{ code: number | null; error?: Error }> {
+  return new Promise((resolve) => {
+    child.once("error", (error) => resolve({ code: null, error }));
+    child.once("close", (code) => resolve({ code }));
+  });
+}
+
+function sendMaterialFailure(jobId: string, code: string, message: string, stderr: Buffer): void {
   parentPort.postMessage({ schemaVersion: 1, jobId, event: "material.parse.failed", code, message: message.slice(0, 2_000), stderr: stderr.toString("utf8") } satisfies UtilityJobEvent);
 }
 
@@ -62,8 +149,10 @@ function parserEnvironment(): NodeJS.ProcessEnv {
     SYSTEMROOT: process.env.SYSTEMROOT ?? "",
     TEMP: process.env.TEMP ?? "",
     TMP: process.env.TMP ?? "",
-    PYTHONUTF8: "1"
+    PYTHONUTF8: "1",
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True",
+    ...(process.env.VC_AGENT_OCR_MODELS_ROOT === undefined ? {} : { VC_AGENT_OCR_MODELS_ROOT: process.env.VC_AGENT_OCR_MODELS_ROOT })
   };
 }
 
-process.on("exit", () => { for (const child of children) child.kill(); });
+process.on("exit", () => { for (const runtime of ocrRuntimes.values()) runtime.close(); for (const child of children) child.kill(); });

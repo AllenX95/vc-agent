@@ -11,6 +11,9 @@
     "build": "pnpm --filter @vc-agent/agent-worker build && pnpm --filter @vc-agent/utility-worker build && pnpm --filter @vc-agent/desktop build",
     "dev": "pnpm build && electron apps/desktop/dist/main/main.js",
     "test": "vitest run",
+    "integration-gate": "pnpm exec esbuild scripts/run-integration-gate.ts --bundle --platform=node --format=cjs --outfile=test-results/run-integration-gate.cjs && pnpm vitest run tests/host-services/integration-gate.test.ts && node test-results/run-integration-gate.cjs",
+    "personal-build-gate": "pnpm exec esbuild scripts/run-personal-build-gate.ts --bundle --platform=node --format=cjs --outfile=test-results/run-personal-build-gate.cjs && node test-results/run-personal-build-gate.cjs",
+    "skills:provision:anthropic": "pnpm exec esbuild scripts/provision-anthropic-skills.ts --bundle --platform=node --format=cjs --outfile=test-results/provision-anthropic-skills.cjs && node test-results/provision-anthropic-skills.cjs",
     "test:e2e": "pnpm build && playwright test",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm test:e2e"

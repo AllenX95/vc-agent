@@ -2,9 +2,15 @@ import { utilityProcess, type UtilityProcess } from "electron";
 import { utilityJobEventSchema, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
 
 interface PendingJob {
+  readonly command: UtilityJobCommand;
   readonly resolve: (event: UtilityJobEvent) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 }
+
+type MaterialParseCommand = Extract<UtilityJobCommand, { command: "material.parse" }>;
+type OcrCommand = Extract<UtilityJobCommand, { command: "page_recovery.ocr" }>;
+type MaterialParseEvent = Extract<UtilityJobEvent, { event: "material.parse.completed" | "material.parse.failed" }>;
+type OcrEvent = Extract<UtilityJobEvent, { event: "page_recovery.ocr.completed" | "page_recovery.ocr.failed" }>;
 
 export class UtilityJobRunner {
   readonly #entryPath: string;
@@ -16,8 +22,10 @@ export class UtilityJobRunner {
 
   constructor(entryPath: string) { this.#entryPath = entryPath; }
 
+  run(command: MaterialParseCommand): Promise<MaterialParseEvent>;
+  run(command: OcrCommand): Promise<OcrEvent>;
   run(command: UtilityJobCommand): Promise<UtilityJobEvent> {
-    if (this.#closed) return Promise.resolve(failure(command.jobId, "UTILITY_WORKER_CLOSED", "Utility Worker is closed."));
+    if (this.#closed) return Promise.resolve(failure(command, "UTILITY_WORKER_CLOSED", "Utility Worker is closed."));
     const result = this.#tail.then(() => this.#execute(command));
     this.#tail = result.then(() => undefined, () => undefined);
     return result;
@@ -30,20 +38,20 @@ export class UtilityJobRunner {
     this.#spawned = null;
     for (const [jobId, pending] of this.#pending) {
       clearTimeout(pending.timer);
-      pending.resolve(failure(jobId, "UTILITY_WORKER_EXITED", "Utility Worker closed before the job completed."));
+      pending.resolve(failure(pending.command, "UTILITY_WORKER_EXITED", "Utility Worker closed before the job completed."));
     }
     this.#pending.clear();
   }
 
   async #execute(command: UtilityJobCommand): Promise<UtilityJobEvent> {
-    if (this.#closed) return failure(command.jobId, "UTILITY_WORKER_CLOSED", "Utility Worker is closed.");
+    if (this.#closed) return failure(command, "UTILITY_WORKER_CLOSED", "Utility Worker is closed.");
     this.#ensureWorker();
     try {
       await this.#spawned;
     } catch (error) {
       this.#process = null;
       this.#spawned = null;
-      return failure(command.jobId, "UTILITY_WORKER_UNAVAILABLE", error instanceof Error ? error.message : "Utility Worker could not start.");
+      return failure(command, "UTILITY_WORKER_UNAVAILABLE", error instanceof Error ? error.message : "Utility Worker could not start.");
     }
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -51,9 +59,9 @@ export class UtilityJobRunner {
         this.#process?.kill();
         this.#process = null;
         this.#spawned = null;
-        resolve(failure(command.jobId, "UTILITY_JOB_TIMEOUT", "Utility job exceeded its timeout."));
+        resolve(failure(command, "UTILITY_JOB_TIMEOUT", "Utility job exceeded its timeout."));
       }, command.timeoutMs + 1_000);
-      this.#pending.set(command.jobId, { resolve, timer });
+      this.#pending.set(command.jobId, { command, resolve, timer });
       this.#process!.postMessage(command);
     });
   }
@@ -81,7 +89,7 @@ export class UtilityJobRunner {
       this.#spawned = null;
       for (const [jobId, pending] of this.#pending) {
         clearTimeout(pending.timer);
-        pending.resolve(failure(jobId, "UTILITY_WORKER_EXITED", "Utility Worker exited before the job completed."));
+        pending.resolve(failure(pending.command, "UTILITY_WORKER_EXITED", "Utility Worker exited before the job completed."));
       }
       this.#pending.clear();
     });
@@ -95,10 +103,14 @@ function utilityEnvironment(): NodeJS.ProcessEnv {
     TEMP: process.env.TEMP ?? "",
     TMP: process.env.TMP ?? "",
     PYTHONUTF8: "1",
-    ...(process.env.VC_AGENT_PYTHON === undefined ? {} : { VC_AGENT_PYTHON: process.env.VC_AGENT_PYTHON })
+    ...(process.env.VC_AGENT_PYTHON === undefined ? {} : { VC_AGENT_PYTHON: process.env.VC_AGENT_PYTHON }),
+    ...(process.env.VC_AGENT_OCR_PYTHON === undefined ? {} : { VC_AGENT_OCR_PYTHON: process.env.VC_AGENT_OCR_PYTHON }),
+    ...(process.env.VC_AGENT_OCR_MODELS_ROOT === undefined ? {} : { VC_AGENT_OCR_MODELS_ROOT: process.env.VC_AGENT_OCR_MODELS_ROOT })
   };
 }
 
-function failure(jobId: string, code: string, message: string): UtilityJobEvent {
-  return { schemaVersion: 1, jobId, event: "material.parse.failed", code, message, stderr: "" };
+function failure(command: UtilityJobCommand, code: string, message: string): UtilityJobEvent {
+  return command.command === "material.parse"
+    ? { schemaVersion: 1, jobId: command.jobId, event: "material.parse.failed", code, message, stderr: "" }
+    : { schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code, message, stderr: "" };
 }

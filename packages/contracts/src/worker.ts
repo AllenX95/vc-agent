@@ -3,11 +3,46 @@ import { IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSc
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
 import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema } from "./capability.js";
 
+const runtimeSkillDecisionSchema = z.object({
+  packageId: z.string().min(1),
+  revisionId: z.string().min(1),
+  reason: z.enum(["task_match", "explicit"]),
+  resources: z.array(z.string().min(1)),
+  capabilities: z.array(z.string().min(1))
+});
+
+const runtimeSkillInstructionSchema = z.object({
+  packageId: z.string().min(1),
+  revisionId: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  filePath: z.string().min(1),
+  baseDir: z.string().min(1),
+  content: z.string()
+});
+
+const runtimeSkillResourceSchema = z.object({
+  packageId: z.string().min(1),
+  relativePath: z.string().min(1),
+  content: z.string()
+});
+
+export const runtimeSkillSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  revisionId: z.string().min(1),
+  decisions: z.array(runtimeSkillDecisionSchema),
+  instructions: z.array(runtimeSkillInstructionSchema),
+  resources: z.array(runtimeSkillResourceSchema)
+});
+export type RuntimeSkillSnapshot = z.infer<typeof runtimeSkillSnapshotSchema>;
+
 export const runtimeResourceSnapshotSchema = z.object({
   schemaVersion: z.literal(1),
   revisionId: z.string().min(1),
   systemPrompt: z.string(),
-  appendSystemPrompt: z.array(z.string())
+  appendSystemPrompt: z.array(z.string()),
+  /** Task-scoped, Host-owned Skill projection. Older replay commands may omit it. */
+  skills: runtimeSkillSnapshotSchema.optional()
 });
 export type RuntimeResourceSnapshot = z.infer<typeof runtimeResourceSnapshotSchema>;
 
@@ -20,7 +55,7 @@ export const extensionInventorySnapshotSchema = z.object({
       version: z.string().min(1),
       entryPath: z.string().min(1),
       integrity: z.string().min(1),
-      trust: z.literal("bundled-reviewed")
+      trust: z.enum(["bundled-reviewed", "approved-trusted"])
     })
   )
 });
@@ -31,7 +66,11 @@ const workerCommandBase = z.object({
   commandId: z.string().min(1),
   correlationId: z.string().min(1),
   threadId: z.string().min(1),
-  turnId: z.string().min(1)
+  turnId: z.string().min(1),
+  /** Added by the Host runtime boundary before dispatch. Optional for old persisted/replay-safe commands. */
+  ownerKey: z.string().min(1).optional(),
+  workerRevision: z.string().min(1).optional(),
+  sessionKey: z.string().min(1).optional()
 });
 const executeTurn = workerCommandBase.extend({
   command: z.literal("turn.execute"),
@@ -78,7 +117,10 @@ const workerEventBase = z.object({
   correlationId: z.string().min(1),
   threadId: z.string().min(1),
   turnId: z.string().min(1),
-  workerSequence: z.number().int().positive()
+  workerSequence: z.number().int().positive(),
+  ownerKey: z.string().min(1).optional(),
+  workerRevision: z.string().min(1).optional(),
+  sessionKey: z.string().min(1).optional()
 });
 const contextReady = workerEventBase.extend({
   event: z.literal("physical_context.ready"),

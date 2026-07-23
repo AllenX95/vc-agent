@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 12,
+      stateSchemaVersion: 14,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -33,7 +33,7 @@ describe("HostStateStore", () => {
     const database = new DatabaseSync(databasePath, { readOnly: true });
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
     database.close();
-    expect(tables).toEqual(["application_settings", "artifacts", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "reflection_runs", "schema_migrations", "system_prompt_revisions", "task_model_assignments", "threads"]);
+    expect(tables).toEqual(["application_settings", "artifacts", "execution_leases", "execution_queue", "materials", "model_profiles", "parse_refresh_requests", "parsed_material_versions", "physical_contexts", "project_provider_authorizations", "projects", "protected_credentials", "reflection_runs", "schema_migrations", "system_prompt_revisions", "task_model_assignments", "threads"]);
     expect(() => readFileSync(databasePath)).not.toThrow();
   });
 
@@ -41,17 +41,20 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 12").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version = 14").run();
+    old.exec("DROP TABLE execution_leases; CREATE TABLE execution_leases (id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis')), acquired_at TEXT NOT NULL) STRICT;");
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 12, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(12);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 14, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(14);
+    expect(migrated.acquireExecutionLease({ id: "extension-audit", scopeKey: "global", kind: "extension_audit" }).kind).toBe("extension_audit");
+    migrated.releaseExecutionLease("extension-audit");
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 12 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 14 });
     verified.close();
   });
 
@@ -59,7 +62,7 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12)").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14)").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
@@ -83,13 +86,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 12 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 14 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 12 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 14 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -130,6 +133,34 @@ describe("HostStateStore", () => {
     expect(store.listArtifacts(thread.id)).toMatchObject([{ id: "artifact-1", mediaType: "text/plain; charset=utf-8", source: { turnId: "turn-1" } }]);
     expect(store.getPhysicalContext(thread.id)).toMatchObject({ highWaterEventId: "event-7", highWaterSequence: 7 });
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ threads: 1, modelProfiles: 1 });
+    store.close();
+  });
+
+  it("persists editable per-Thread execution queue drafts without automatically admitting them after restart", () => {
+    const { store } = createStore();
+    const profile = store.createModelProfile({ name: "Queue", provider: "fixture", model: "fixture", thinkingLevel: "off", encryptedCredential: new Uint8Array([1]) });
+    const firstThread = store.createUnscopedThread("First");
+    const secondThread = store.createUnscopedThread("Second");
+    store.selectThreadProfile(firstThread.id, profile.id);
+    const first = store.enqueueOrdinaryTurn({ threadId: firstThread.id, text: "First follow-up", reason: "thread_active", requestedProfileId: profile.id });
+    const second = store.enqueueOrdinaryTurn({ threadId: secondThread.id, text: "Capacity follow-up", reason: "capacity" });
+    const third = store.enqueueOrdinaryTurn({ threadId: firstThread.id, text: "Second follow-up", reason: "thread_active", retryOfTurnId: "turn-old", requestedProfileId: profile.id });
+
+    expect(store.listExecutionQueue().map((item) => item.id)).toEqual([first.id, second.id, third.id]);
+    expect(store.updateExecutionQueueItem(first.id, "Edited follow-up")).toMatchObject({ text: "Edited follow-up", requestedProfileId: profile.id });
+    expect(store.reorderExecutionQueueItem(third.id, first.id).position).toBeLessThan(store.getExecutionQueueItem(first.id)!.position);
+    expect(store.listExecutionQueue().filter((item) => item.threadId === firstThread.id).map((item) => item.id)).toEqual([third.id, first.id]);
+    expect(store.recoverQueuedExecutionAsDrafts().every((item) => item.status === "draft")).toBe(true);
+    expect(store.reactivateExecutionQueueItem(first.id).status).toBe("queued");
+    expect(store.acquireExecutionLease({ id: "turn-running", scopeKey: firstThread.id, kind: "ordinary_turn" })).toMatchObject({ id: "turn-running", kind: "ordinary_turn" });
+    expect(store.listExecutionLeases()).toHaveLength(1);
+    expect(store.clearStaleExecutionLeases()).toBe(1);
+    expect(store.listExecutionLeases()).toEqual([]);
+    expect(store.cancelExecutionQueueItem(second.id)).toBe(true);
+    expect(store.listExecutionQueue()).toMatchObject([
+      { id: third.id, status: "draft", retryOfTurnId: "turn-old" },
+      { id: first.id, status: "queued", text: "Edited follow-up" }
+    ]);
     store.close();
   });
 

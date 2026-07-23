@@ -31,6 +31,141 @@ export { DreamCommitStore, type DreamCommitProject } from "./dream-commit.js";
 export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutcomeStoreOptions } from "./reflection-outcomes.js";
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
+export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";
+export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, createSubAgentProfileResolver, zeroSubAgentUsage, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
+export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, type PersonalBuildDependency, type PersonalBuildExecutionMode, type PersonalBuildGateArtifacts, type PersonalBuildGateInput, type PersonalBuildGateReport, type PersonalBuildGateStatus, type PersonalBuildScenarioResult } from "./personal-build-gate.js";
+export {
+  AgentRuntimeSupervisor,
+  LocalJobSupervisor,
+  RuntimeSupervisorError,
+  createIsolatedExecutionRequest,
+  projectWorkerOwner,
+  workerOwnerKey,
+  type AgentExecutionRequest,
+  type AgentRuntimeEvent,
+  type AgentWorkerProcess,
+  type AgentWorkerProcessFactory,
+  type LocalJobAdapter,
+  type LocalJobManifest,
+  type LocalJobResult,
+  type LocalJobRuntimeSnapshot,
+  type RuntimeOwnershipSnapshot,
+  type RuntimeShutdownReport,
+  type WorkerOwner
+} from "./agent-runtime-supervisor.js";
+export {
+  SkillPackageManager,
+  SkillResourceProjector,
+  type LocalSkillImport,
+  type RuntimeSkillSnapshot,
+  type SkillActivationDecision,
+  type SkillCompatibilityFinding,
+  type SkillCompatibilityReport,
+  type SkillDirectoryLimits,
+  type SkillImportResult,
+  type SkillInventoryItem,
+  type SkillPackageState,
+  type SkillSourceKind
+} from "./skills-directory.js";
+export {
+  ANTHROPIC_SKILLS_SOURCE,
+  provisionAnthropicSkills,
+  type AnthropicSkillPackageId,
+  type ProvisionAnthropicSkillsInput,
+  type ProvisionedAnthropicSkill
+} from "./claude-skills.js";
+export {
+  OfficeSkillOrchestrator,
+  type OfficeExecutionPlan,
+  type OfficeFormat,
+  type OfficeSkillJobAdapter,
+  type OfficeStagedResult,
+  type OfficeTaskKind,
+  type OfficeTaskRequest,
+  type OriginalReplacementRequest,
+  type ProjectOfficeOutput,
+  type ReplacementResult
+} from "./office-skill-orchestrator.js";
+export {
+  SkillCreationWorkflow,
+  type CreateSkillDraftRequest,
+  type SkillCreatorAdapter,
+  type SkillDraft,
+  type SkillDraftReview,
+  type SkillDraftState,
+  type UpdateSkillDraftRequest
+} from "./skill-creator-workflow.js";
+export {
+  PageRecoveryError,
+  PageRecoveryPipeline,
+  pageTextBlock,
+  sourceHashForText,
+  type MaterialParseRequest,
+  type NativePdfAdapter,
+  type OvisOcrAdapter,
+  type PageCandidate,
+  type PageQualityPolicy,
+  type PageQualitySignals,
+  type PageRecoveryAvailability,
+  type PageRecoveryOptions,
+  type PageRecoveryTelemetry,
+  type PageStage,
+  type PaddleOcrAdapter
+} from "./page-recovery-pipeline.js";
+export {
+  McpIntegrationError,
+  McpIntegrationManager,
+  PINNED_PI_MCP_ADAPTER_VERSION,
+  type McpActionClass,
+  type McpActivationDecision,
+  type McpActivationRequest,
+  type McpAdapterConnection,
+  type McpCredentialResolver,
+  type McpIntegrationManager as McpIntegrationManagerType,
+  type McpProxyExecutionRequest,
+  type McpServerConfigurationRequest,
+  type McpServerRecord,
+  type McpServerStatus,
+  type McpToolSchema,
+  type PinnedPiMcpAdapter
+} from "./mcp-integration-manager.js";
+export {
+  ExtensionAdmissionError,
+  ExtensionAdmissionManager,
+  GlobalExtensionRevisionManager,
+  hashExtensionDirectory,
+  type ApprovedExtensionRevision,
+  type DeterministicInspectionReport,
+  type ExtensionAdmissionErrorCode,
+  type ExtensionAdmissionSnapshot,
+  type ExtensionAuditAdapter,
+  type ExtensionAuditInput,
+  type ExtensionAuditRequest,
+  type ExtensionAuditResult,
+  type ExtensionAuditRun,
+  type ExtensionEnablementChange,
+  type ExtensionFileInventory,
+  type ExtensionFinding,
+  type GlobalExtensionEntry,
+  type GlobalExtensionRevisionState,
+  type LocalExtensionStageRequest,
+  type PendingGlobalExtensionRevision,
+  type StagedExtension
+} from "./extension-admission.js";
+export {
+  doctorIsActivationFree,
+  inspectEnvironmentDoctor,
+  writeIntegrationGateReport,
+  type DoctorComponent,
+  type DoctorStatus,
+  type EnvironmentDoctorEntry,
+  type EnvironmentDoctorInput,
+  type EnvironmentDoctorInventory,
+  type GateScenarioResult,
+  type IntegrationGateArtifacts,
+  type IntegrationGateReport,
+  type IntegrationGateReportInput
+} from "./integration-gate.js";
 
 export interface CapabilityAuthorizationSnapshot {
   readonly accessMode: AccessMode;

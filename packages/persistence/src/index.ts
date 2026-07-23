@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import { independentAssessmentSchema, providerFailureSchema, reflectionBriefSchema, reflectionRunSchema, type AccessMode, type ArtifactRecord, type BootstrapState, type IndependentAssessment, type MaterialInventoryItem, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
+import { independentAssessmentSchema, providerFailureSchema, reflectionBriefSchema, reflectionRunSchema, type AccessMode, type ArtifactRecord, type BootstrapState, type ExecutionQueueItem, type IndependentAssessment, type MaterialInventoryItem, type ModelExecutionKind, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
 import { immutableDatabaseUrl, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
@@ -33,6 +33,27 @@ interface ThreadRow {
   project_id: string | null;
   archived_at: string | null;
   created_at: string;
+}
+
+interface ExecutionQueueRow {
+  id: string;
+  thread_id: string;
+  kind: "ordinary_turn";
+  status: "queued" | "draft";
+  reason: "thread_active" | "capacity";
+  text: string;
+  retry_of_turn_id: string | null;
+  requested_profile_id: string | null;
+  position: number;
+  submitted_at: string;
+  updated_at: string;
+}
+
+export interface ExecutionLease {
+  readonly id: string;
+  readonly scopeKey: string;
+  readonly kind: ModelExecutionKind;
+  readonly acquiredAt: string;
 }
 
 interface ProjectRow {
@@ -354,6 +375,48 @@ export class HostStateStore {
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (12, ?)")
         .run(new Date().toISOString());
+      this.#database.exec(`
+        CREATE TABLE IF NOT EXISTS execution_queue (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind = 'ordinary_turn'),
+          status TEXT NOT NULL CHECK(status IN ('queued', 'draft')),
+          reason TEXT NOT NULL CHECK(reason IN ('thread_active', 'capacity')),
+          text TEXT NOT NULL,
+          retry_of_turn_id TEXT,
+          requested_profile_id TEXT REFERENCES model_profiles(id),
+          position INTEGER NOT NULL,
+          submitted_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS execution_leases (
+          id TEXT PRIMARY KEY,
+          scope_key TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'extension_audit', 'internal_model_stage')),
+          acquired_at TEXT NOT NULL
+        ) STRICT;
+      `);
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (13, ?)")
+        .run(new Date().toISOString());
+      const executionLeaseTable = this.#database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'execution_leases'").get() as { sql?: string } | undefined;
+      if (executionLeaseTable?.sql?.includes("extension_audit") !== true) {
+        this.#database.exec(`
+          ALTER TABLE execution_leases RENAME TO execution_leases_v13;
+          CREATE TABLE execution_leases (
+            id TEXT PRIMARY KEY,
+            scope_key TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'extension_audit', 'internal_model_stage')),
+            acquired_at TEXT NOT NULL
+          ) STRICT;
+          INSERT INTO execution_leases(id, scope_key, kind, acquired_at)
+            SELECT id, scope_key, kind, acquired_at FROM execution_leases_v13;
+          DROP TABLE execution_leases_v13;
+        `);
+      }
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (14, ?)")
+        .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
       const integrity = this.#database.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
@@ -471,7 +534,7 @@ export class HostStateStore {
     return rows.some((row) => row.name === column);
   }
 
-  getBootstrapState(applicationVersion: string, activity: RuntimeActivitySnapshot): BootstrapState {
+  getBootstrapState(applicationVersion: string, activity: RuntimeActivitySnapshot): Omit<BootstrapState, "executionScheduler"> {
     return {
       applicationVersion,
       stateSchemaVersion: this.#preparation.storedVersion,
@@ -590,6 +653,103 @@ export class HostStateStore {
 
   clearTaskModelAssignment(taskType: TaskModelType): boolean {
     return this.#database.prepare("DELETE FROM task_model_assignments WHERE task_type = ?").run(taskType).changes === 1;
+  }
+
+  listExecutionQueue(): ExecutionQueueItem[] {
+    return (this.#database.prepare("SELECT * FROM execution_queue ORDER BY position, submitted_at, id").all() as unknown as ExecutionQueueRow[]).map(mapExecutionQueueItem);
+  }
+
+  listExecutionLeases(): ExecutionLease[] {
+    return (this.#database.prepare("SELECT * FROM execution_leases ORDER BY acquired_at, id").all() as Array<{ id: string; scope_key: string; kind: ExecutionLease["kind"]; acquired_at: string }>).map((row) => ({ id: row.id, scopeKey: row.scope_key, kind: row.kind, acquiredAt: row.acquired_at }));
+  }
+
+  acquireExecutionLease(input: Omit<ExecutionLease, "acquiredAt">): ExecutionLease {
+    const acquiredAt = new Date().toISOString();
+    this.#database.prepare("INSERT INTO execution_leases(id, scope_key, kind, acquired_at) VALUES (?, ?, ?, ?)").run(input.id, input.scopeKey, input.kind, acquiredAt);
+    return { ...input, acquiredAt };
+  }
+
+  releaseExecutionLease(id: string): boolean {
+    return this.#database.prepare("DELETE FROM execution_leases WHERE id = ?").run(id).changes === 1;
+  }
+
+  clearStaleExecutionLeases(): number {
+    return Number(this.#database.prepare("DELETE FROM execution_leases").run().changes);
+  }
+
+  enqueueOrdinaryTurn(input: {
+    readonly threadId: string;
+    readonly text: string;
+    readonly reason: "thread_active" | "capacity";
+    readonly retryOfTurnId?: string | undefined;
+    readonly requestedProfileId?: string | undefined;
+  }): ExecutionQueueItem {
+    if (this.getThread(input.threadId) === undefined) throw new Error("Thread not found");
+    if (input.requestedProfileId !== undefined && this.getModelProfile(input.requestedProfileId) === undefined) throw new Error("Model Profile not found");
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const row = this.#database.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM execution_queue").get() as { position: number };
+    this.#database.prepare(`
+      INSERT INTO execution_queue(id, thread_id, kind, status, reason, text, retry_of_turn_id, requested_profile_id, position, submitted_at, updated_at)
+      VALUES (?, ?, 'ordinary_turn', 'queued', ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.threadId, input.reason, input.text.trim(), input.retryOfTurnId ?? null, input.requestedProfileId ?? null, Number(row.position), now, now);
+    return this.getExecutionQueueItem(id)!;
+  }
+
+  getExecutionQueueItem(id: string): ExecutionQueueItem | undefined {
+    const row = this.#database.prepare("SELECT * FROM execution_queue WHERE id = ?").get(id) as ExecutionQueueRow | undefined;
+    return row === undefined ? undefined : mapExecutionQueueItem(row);
+  }
+
+  updateExecutionQueueItem(id: string, text: string): ExecutionQueueItem {
+    const result = this.#database.prepare("UPDATE execution_queue SET text = ?, updated_at = ? WHERE id = ?").run(text.trim(), new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Execution Queue item not found");
+    return this.getExecutionQueueItem(id)!;
+  }
+
+  cancelExecutionQueueItem(id: string): boolean {
+    return this.#database.prepare("DELETE FROM execution_queue WHERE id = ?").run(id).changes === 1;
+  }
+
+  reorderExecutionQueueItem(id: string, beforeItemId?: string): ExecutionQueueItem {
+    const item = this.getExecutionQueueItem(id);
+    if (item === undefined) throw new Error("Execution Queue item not found");
+    const sameThread = this.listExecutionQueue().filter((candidate) => candidate.threadId === item.threadId);
+    const positions = sameThread.map((candidate) => candidate.position).sort((a, b) => a - b);
+    const reordered = sameThread.filter((candidate) => candidate.id !== id);
+    if (beforeItemId === undefined) reordered.push(item);
+    else {
+      const index = reordered.findIndex((candidate) => candidate.id === beforeItemId);
+      if (index < 0) throw new Error("Queue reorder target must be in the same Thread");
+      reordered.splice(index, 0, item);
+    }
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.#database.prepare("UPDATE execution_queue SET position = ?, updated_at = ? WHERE id = ?");
+      const now = new Date().toISOString();
+      reordered.forEach((candidate, index) => update.run(positions[index]!, now, candidate.id));
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getExecutionQueueItem(id)!;
+  }
+
+  recoverQueuedExecutionAsDrafts(): ExecutionQueueItem[] {
+    this.#database.prepare("UPDATE execution_queue SET status = 'draft', updated_at = ? WHERE status = 'queued'").run(new Date().toISOString());
+    return this.listExecutionQueue();
+  }
+
+  pauseThreadExecutionQueue(threadId: string): ExecutionQueueItem[] {
+    this.#database.prepare("UPDATE execution_queue SET status = 'draft', updated_at = ? WHERE thread_id = ? AND status = 'queued'").run(new Date().toISOString(), threadId);
+    return this.listExecutionQueue().filter((item) => item.threadId === threadId);
+  }
+
+  reactivateExecutionQueueItem(id: string): ExecutionQueueItem {
+    const result = this.#database.prepare("UPDATE execution_queue SET status = 'queued', updated_at = ? WHERE id = ? AND status = 'draft'").run(new Date().toISOString(), id);
+    if (result.changes !== 1) throw new Error("Execution Queue draft not found");
+    return this.getExecutionQueueItem(id)!;
   }
 
   createUnscopedThread(title: string): UnscopedThread {
@@ -1236,6 +1396,23 @@ function mapThread(row: ThreadRow): Thread {
     return { ...common, scope: "project", projectId: row.project_id };
   }
   return { ...common, scope: "unscoped", ...(row.output_location === null ? {} : { outputLocation: row.output_location }) };
+}
+
+function mapExecutionQueueItem(row: ExecutionQueueRow): ExecutionQueueItem {
+  return {
+    schemaVersion: 1,
+    id: row.id,
+    threadId: row.thread_id,
+    kind: row.kind,
+    status: row.status,
+    reason: row.reason,
+    text: row.text,
+    ...(row.retry_of_turn_id === null ? {} : { retryOfTurnId: row.retry_of_turn_id }),
+    ...(row.requested_profile_id === null ? {} : { requestedProfileId: row.requested_profile_id }),
+    position: row.position,
+    submittedAt: row.submitted_at,
+    updatedAt: row.updated_at
+  };
 }
 
 function mapProject(row: ProjectRow): Project {

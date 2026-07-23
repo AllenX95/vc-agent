@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, type IpcMainInvokeEvent } from "electron";
 import {
@@ -25,15 +25,24 @@ import {
   type TrajectoryEvent,
   type TrajectoryProfile,
   type WorkerCommand,
-  type WorkerEvent
+  type WorkerEvent,
+  type ExtensionInventorySnapshot,
+  type RuntimeSkillSnapshot as ContractRuntimeSkillSnapshot,
+  type SkillCompatibilityReport as ContractSkillCompatibilityReport,
+  type SkillInventoryItem as ContractSkillInventoryItem,
+  type IntegrationState,
+  type IntegrationJobSummary,
+  type SubAgentProfileSnapshot
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
 import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, FixtureSubAgentAdapter, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentRuntime, UnavailableSubAgentAdapter, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
+import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
 const EVENT_CHANNEL = "vc-agent:event";
@@ -43,10 +52,19 @@ const USER_ACTOR = { actorType: "user", actorId: "local-user" } as const;
 const USER_PROVENANCE = { producerType: "user", producerId: "local-user" } as const;
 const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
+const configuredExecutionCapacity = Number.parseInt(process.env.VC_AGENT_EXECUTION_CAPACITY ?? "2", 10);
+const EXECUTION_CAPACITY = Number.isInteger(configuredExecutionCapacity) && configuredExecutionCapacity > 0 ? configuredExecutionCapacity : 2;
 const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "app.bootstrap",
   "state.recovery.export",
   "profile.list",
+  "skills.list",
+  "skills.inspect",
+  "integration.state.load",
+  "skill_creator.list",
+  "page_recovery.inspect",
+  "mcp.server.list",
+  "extension.list",
   "prompt.revision.list",
   "task_model_assignment.list",
   "reflection.list",
@@ -56,7 +74,10 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "project.material.list",
   "project.output.list",
   "thread.list",
-  "thread.trajectory.load"
+  "thread.trajectory.load",
+  "execution_queue.list",
+  "sub_agent.run.list",
+  "sub_agent.run.inspect"
 ]);
 
 interface TurnContext {
@@ -131,6 +152,17 @@ let reflectionOutcomes: ReflectionOutcomeStore | null = null;
 let dreamReviews: DreamReviewStore | null = null;
 let dreamCommits: DreamCommitStore | null = null;
 let personalCognition: PersonalCognitionBackupService | null = null;
+let executionScheduler: BoundedExecutionScheduler | null = null;
+let extensionAdmission: ExtensionAdmissionManager | null = null;
+let globalExtensionRevisions: GlobalExtensionRevisionManager | null = null;
+let skillsDirectory: SkillPackageManager | null = null;
+let skillProjector: SkillResourceProjector | null = null;
+let officeOrchestrator: OfficeSkillOrchestrator | null = null;
+let skillCreatorWorkflow: SkillCreationWorkflow | null = null;
+let pageRecoveryPipeline: PageRecoveryPipeline | null = null;
+let mcpIntegration: McpIntegrationManager | null = null;
+let subAgentRuntime: SubAgentRuntime | null = null;
+let lastPageRecoveryParse: IntegrationState["pageRecovery"]["lastParse"] | undefined;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
 const sequenceByThread = new Map<string, number>();
@@ -138,6 +170,9 @@ const turnContexts = new Map<string, TurnContext>();
 const reflectionContexts = new Map<string, ReflectionExecutionContext>();
 const dreamContexts = new Map<string, DreamExecutionContext>();
 const dreamSynthesisContexts = new Map<string, DreamSynthesisExecutionContext>();
+const integrationJobs = new Map<string, IntegrationJobSummary>();
+const mcpActivations = new Map<string, { readonly activationId: string; readonly serverId: string; readonly schemaRevision: string; readonly toolIds: readonly string[]; readonly scope: "project" | "unscoped" }>();
+let integrationJobsPath: string | undefined;
 const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
@@ -152,6 +187,166 @@ let ownLongTermMemoryWriteHash: string | undefined;
 let longTermMemoryWatcher: FSWatcher | null = null;
 let longTermMemoryWatchTimer: ReturnType<typeof setTimeout> | undefined;
 const projectOutputs = new ProjectOutputRegistry();
+
+const EMPTY_RUNTIME_SKILLS: RuntimeSkillSnapshot = {
+  schemaVersion: 1,
+  revisionId: "skills-empty-v1",
+  decisions: [],
+  instructions: [],
+  resources: []
+};
+
+function runtimeSkillsForTask(task: string, scope: "project" | "unscoped"): ContractRuntimeSkillSnapshot {
+  const snapshot = skillProjector === null ? EMPTY_RUNTIME_SKILLS : skillProjector.project(skillProjector.resolve({ task, scope }));
+  return {
+    schemaVersion: 1,
+    revisionId: snapshot.revisionId,
+    decisions: snapshot.decisions.map((decision) => ({ ...decision, resources: [...decision.resources], capabilities: [...decision.capabilities] })),
+    instructions: snapshot.instructions.map((instruction) => ({ ...instruction })),
+    resources: snapshot.resources.map((resource) => ({ ...resource }))
+  };
+}
+
+function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
+  const inventory = skillsDirectory?.inventory() ?? [];
+  const active = inventory.filter((item) => item.enabled && item.state === "active");
+  const office = active.filter((item) => (ANTHROPIC_SKILLS_SOURCE.skills as readonly { packageId: string }[]).some((definition) => definition.packageId === item.packageId));
+  if (inventory.length === 0) return { status: "attention", message: "No imported Skill package is configured; the app-owned directory remains dormant." };
+  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} Anthropic Office/Creator package(s); no package was activated by Doctor.` };
+}
+
+function skillPackageProjection(item: SkillInventoryItem): ContractSkillInventoryItem {
+  return {
+    ...item,
+    declaredDependencies: [...item.declaredDependencies],
+    files: [...item.files],
+    findings: item.findings.map((finding) => ({ ...finding })),
+    metadata: { ...item.metadata }
+  };
+}
+
+function skillReportProjection(report: SkillCompatibilityReport): ContractSkillCompatibilityReport {
+  return {
+    ...report,
+    package: skillPackageProjection(report.package),
+    files: [...report.files],
+    missingReferences: [...report.missingReferences],
+    unsupportedDirectives: [...report.unsupportedDirectives],
+    undeclaredExecutables: [...report.undeclaredExecutables],
+    findings: report.findings.map((finding) => ({ ...finding }))
+  };
+}
+
+function skillsStateEvent(correlationId: string, action: "listed" | "imported" | "inspected" | "activated" | "disabled", selectedRevisionId?: string, report?: SkillCompatibilityReport): HostEvent {
+  if (skillsDirectory === null) return diagnostic(correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
+  return {
+    ...eventMetadata(correlationId),
+    event: "skills.updated",
+    payload: {
+      root: skillsDirectory.root,
+      packages: skillsDirectory.inventory().map(skillPackageProjection),
+      action,
+      ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
+      ...(report === undefined ? {} : { report: skillReportProjection(report) })
+    }
+  };
+}
+
+function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
+  const inventory = skillsDirectory?.inventory() ?? [];
+  const imported = ANTHROPIC_SKILLS_SOURCE.skills.filter((definition) => inventory.some((item) => item.packageId === definition.packageId));
+  const active = imported.filter((definition) => inventory.some((item) => item.packageId === definition.packageId && item.enabled && item.state === "active"));
+  if (imported.length === 0) return { status: "attention", message: "Anthropic docx/pptx/xlsx/skill-creator packages are not imported; run the explicit provisioning command." };
+  return { status: active.length === imported.length ? "ready" : "attention", message: `${active.length}/${imported.length} imported Anthropic package(s) are active. Runtime dependencies are checked only at explicit Skill job admission; no fallback is used.` };
+}
+
+function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
+  return globalExtensionRevisions?.runtimeSnapshot() ?? { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] };
+}
+
+function integrationStateSnapshot(): IntegrationState {
+  const officeStatus = officeSkillsDoctorMessage();
+  const officeJobs = [...integrationJobs.values()].filter((job) => job.kind.startsWith("office:"));
+  const creatorStatus = skillsDirectory === null ? { status: "unavailable" as const, message: "Skill Creator is unavailable in Read-only Recovery or before Host initialization." } : { status: "ready" as const, message: "Explicit Creator drafts are staged, reviewed, and handed off disabled." };
+  const page = pageRecoveryPipeline?.inspectAvailability() ?? { native: { status: "unavailable" as const, message: "Native page recovery is not initialized." }, paddle: { status: "unavailable" as const, message: "PaddleOCR local runtime is not configured." }, ovis: { status: "unavailable" as const, message: "OvisOCR2 local runtime is not configured." }, policyRevision: "page-quality-v1" };
+  const pageTelemetry = pageRecoveryPipeline?.telemetry() ?? { policyRevision: page.policyRevision, pageCount: 0, nativePages: 0, paddlePages: 0, ovisPages: 0, retainedEarlierPages: 0, failures: 0, durationMs: 0, lastStatus: "failed" as const };
+  const mcpTelemetry = mcpIntegration?.telemetry() ?? { adapterVersion: "not-initialized", connectedServers: 0, activeTools: 0, failureCount: 0, retiredTurns: 0 };
+  const activeMcpActivation = mcpActivations.values().next().value as { readonly activationId: string; readonly serverId: string; readonly schemaRevision: string; readonly toolIds: readonly string[]; readonly scope: "project" | "unscoped" } | undefined;
+  const extensionState = globalExtensionRevisions?.snapshot();
+  const admissionState = extensionAdmission?.snapshot();
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    office: { status: officeStatus, activeSkillCount: (skillsDirectory?.inventory() ?? []).filter((item) => item.enabled && item.state === "active").length, supportedFormats: ["docx", "pptx", "xlsx", "pdf"], jobs: officeJobs },
+    skillCreator: { status: creatorStatus, drafts: (skillCreatorWorkflow?.listDrafts() ?? []).map((draft) => ({ draftId: draft.draftId, packageId: draft.packageId, operation: draft.operation, state: draft.state, files: [...draft.files], dependencies: [...draft.dependencies], updatedAt: draft.updatedAt, ...(draft.failureCode === undefined ? {} : { failureCode: draft.failureCode }) })) },
+    pageRecovery: { status: page.native.status === "ready" ? { status: "ready", message: "Native parsing is available; OCR stages remain explicit and local." } : { status: "attention", message: page.native.message }, availability: page, telemetry: pageTelemetry, parses: [...integrationJobs.values()].filter((job) => job.kind.startsWith("page_recovery:")), ...(lastPageRecoveryParse === undefined ? {} : { lastParse: lastPageRecoveryParse }) },
+    mcp: { status: { status: "ready", message: mcpTelemetry.connectedServers === 0 ? "Pinned MCP adapter is dormant; no server connection is open." : `${mcpTelemetry.connectedServers} MCP server connection(s) are active for an explicit task.` }, adapterVersion: mcpTelemetry.adapterVersion, servers: (mcpIntegration?.inventory() ?? []).map((server) => ({ ...server, enabledToolIds: [...server.enabledToolIds] })), connectedServers: mcpTelemetry.connectedServers, activeTools: mcpTelemetry.activeTools, failureCount: mcpTelemetry.failureCount, ...(activeMcpActivation === undefined ? {} : { activeActivation: { ...activeMcpActivation, toolIds: [...activeMcpActivation.toolIds] } }) },
+    extensions: {
+      status: { status: "ready", message: "Extension staging, inspection, audit, approval, and enablement remain separate Host actions." },
+      stagedCount: admissionState?.staged.length ?? 0, inspectionCount: admissionState?.reports.length ?? 0, auditCount: admissionState?.audits.length ?? 0, approvedCount: admissionState?.approved.length ?? 0,
+      effectiveRevisionId: extensionState?.effectiveRevisionId ?? "global-extension-r0", enabledCount: extensionState?.effectiveExtensions.length ?? 0,
+      ...(extensionState?.pending === undefined ? {} : { pendingRevisionId: extensionState.pending.revisionId }),
+      invalidatedRevisionIds: (admissionState?.approved ?? []).filter((item) => item.invalidated).map((item) => item.approvedRevisionId),
+      staged: (admissionState?.staged ?? []).map((item) => ({ stagedRevisionId: item.stagedRevisionId, extensionId: item.extensionId, name: item.name, state: item.state, artifactHash: item.artifactHash, createdAt: item.createdAt })),
+      reports: (admissionState?.reports ?? []).map((item) => ({ reportId: item.reportId, stagedRevisionId: item.stagedRevisionId, status: item.status, artifactHash: item.artifactHash, findingCount: item.findings.length, blockerCount: item.blockers.length, generatedAt: item.generatedAt })),
+      audits: (admissionState?.audits ?? []).map((item) => ({ auditRunId: item.auditRunId, stagedRevisionId: item.stagedRevisionId, status: item.status, updatedAt: item.updatedAt, ...(item.failureCode === undefined ? {} : { failureCode: item.failureCode }) })),
+      approved: (admissionState?.approved ?? []).map((item) => ({ approvedRevisionId: item.approvedRevisionId, extensionId: item.extensionId, name: item.name, version: item.version, artifactHash: item.artifactHash, enabled: item.enabled, invalidated: item.invalidated, approvedAt: item.approvedAt }))
+    },
+    runtime: { runningJobs: [...integrationJobs.values()].filter((job) => ["running", "queued"].includes(job.state)).length, queuedJobs: [...integrationJobs.values()].filter((job) => job.state === "queued").length, failures: [...integrationJobs.values()].filter((job) => ["failed", "unknown_outcome"].includes(job.state)).length }
+  };
+}
+
+function integrationStateEvent(correlationId: string, action: "loaded" | "changed" | "recovered" = "loaded"): HostEvent {
+  return { ...eventMetadata(correlationId), event: "integration.state.updated", payload: { state: integrationStateSnapshot(), action } };
+}
+
+function integrationJobEvent(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery" | "mcp" | "extension", job: IntegrationJobSummary): HostEvent {
+  integrationJobs.set(job.id, job);
+  persistIntegrationJobs();
+  return { ...eventMetadata(correlationId), event: "integration.job.updated", payload: { workflow, job } };
+}
+
+function integrationDiagnostic(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery" | "mcp" | "extension", error: unknown): HostEvent {
+  const code = error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : error instanceof Error ? error.message : "INTEGRATION_FAILURE";
+  return { ...eventMetadata(correlationId), event: "integration.diagnostic", payload: { workflow, code: code.slice(0, 120), message: error instanceof Error ? error.message.slice(0, 1_200) : "Integration workflow failed.", recoverable: true } };
+}
+
+function officeJobProjection(planId: string, state: IntegrationJobSummary["state"], message: string, updatedAt: string): IntegrationJobSummary {
+  const task = officeOrchestrator?.getTask(planId);
+  const result = task?.result;
+  return {
+    id: planId,
+    kind: `office:${task?.plan.task.kind ?? "task"}`,
+    state,
+    message,
+    updatedAt,
+    ...(result?.resultId === undefined ? {} : { resultId: result.resultId }),
+    ...(task?.plan.task.sourcePath === undefined ? {} : { sourcePath: task.plan.task.sourcePath }),
+    ...(result?.sourceHash === undefined && task?.plan.expectedSourceHash === undefined ? {} : { sourceHash: result?.sourceHash ?? task?.plan.expectedSourceHash! }),
+    ...(result?.editedCopyHash === undefined ? {} : { editedCopyHash: result.editedCopyHash }),
+    ...(result?.changeSummaryPath === undefined ? {} : { changeSummaryPath: result.changeSummaryPath }),
+    ...(task?.plan.task.sourceReferences === undefined ? {} : { sourceReferences: [...task.plan.task.sourceReferences] })
+  };
+}
+
+function loadIntegrationJobs(path: string): void {
+  integrationJobsPath = path;
+  if (!existsSync(path)) return;
+  try {
+    const records = JSON.parse(readFileSync(path, "utf8")) as IntegrationJobSummary[];
+    for (const record of records) if (record?.id !== undefined && record.updatedAt !== undefined) integrationJobs.set(record.id, record.state === "running" ? { ...record, state: "interrupted", message: "Application restarted before this Integration job completed; retry is explicit." } : record);
+  } catch {
+    integrationJobs.clear();
+  }
+}
+
+function persistIntegrationJobs(): void {
+  if (integrationJobsPath === undefined) return;
+  mkdirSync(dirname(integrationJobsPath), { recursive: true });
+  const partial = integrationJobsPath + ".partial";
+  writeFileSync(partial, JSON.stringify([...integrationJobs.values()], null, 2) + "\n", "utf8");
+  renameSync(partial, integrationJobsPath);
+}
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
 
@@ -235,6 +430,37 @@ function resolveDreamProfile(profileId?: string): ModelProfile | undefined {
   return effectiveId === undefined ? undefined : stateStore.getModelProfile(effectiveId);
 }
 
+function resolveSubAgentProfile(input: { readonly role: "researcher" | "critic" | "synthesizer" | "writer" | "custom"; readonly requestedProfileId?: string }): SubAgentProfileSnapshot | undefined {
+  if (stateStore === null) return undefined;
+  const profiles = stateStore.listModelProfiles();
+  const roleTask: Record<typeof input.role, "independent_evidence" | "memory_aware_reflection" | "document_generation" | "ordinary_conversation"> = {
+    researcher: "independent_evidence",
+    critic: "independent_evidence",
+    synthesizer: "memory_aware_reflection",
+    writer: "document_generation",
+    custom: "ordinary_conversation"
+  };
+  const requested = input.requestedProfileId;
+  const roleAssignment = stateStore.getTaskModelAssignment(roleTask[input.role])?.profileId;
+  const selectedId = requested ?? roleAssignment ?? profiles[0]?.id;
+  const selected = selectedId === undefined ? undefined : stateStore.getModelProfile(selectedId);
+  return selected === undefined ? undefined : { profileId: selected.id, name: selected.name, provider: selected.provider, model: selected.model, thinkingLevel: selected.thinkingLevel };
+}
+
+function subAgentHostEvent(event: SubAgentRuntimeEvent): HostEvent {
+  const correlationId = event.projection.run.parentTurnId;
+  const metadata = eventMetadata(correlationId, event.projection.run.parentThreadId);
+  if (event.event === "sub_agent.attempt.created") {
+    if (event.attempt === undefined) throw new Error("SUB_AGENT_ATTEMPT_EVENT_INVALID");
+    return { ...metadata, event: "sub_agent.attempt.created", payload: { projection: event.projection, attempt: event.attempt } };
+  }
+  if (event.event === "sub_agent.budget.exhausted") {
+    return { ...metadata, event: "sub_agent.budget.exhausted", payload: { projection: event.projection, remainingTokens: event.remainingTokens ?? 0 } };
+  }
+  const { task, attempt } = event;
+  return { ...metadata, event: event.event, payload: { projection: event.projection, ...(task === undefined ? {} : { task }), ...(attempt === undefined ? {} : { attempt }) } } as HostEvent;
+}
+
 function toDreamProfileSnapshot(profile: ModelProfile): DreamProfileSnapshot {
   return { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel };
 }
@@ -275,6 +501,7 @@ function currentProjectMemoryHashes(): Record<string, string | undefined> {
 
 function startDreamScopeExtraction(correlationId: string, batchId: string, scopeId: string): HostEvent {
   if (dreamReviews === null || projectMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Dream scope extraction");
   const batch = dreamReviews.load().batches.find((item) => item.id === batchId);
   const existingScope = batch?.extractionScopes.find((item) => item.id === scopeId);
   if (batch === undefined || existingScope === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream extraction scope was not found.");
@@ -289,17 +516,20 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
   const project = existingScope.kind === "project" ? stateStore!.getProject(existingScope.projectId!) : undefined;
   if (existingScope.kind === "project" && project === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The Dream Project scope is unavailable.");
   const projectMemory = existingScope.kind === "project" ? projectMemories.load(existingScope.projectId!, project!.path, false) : undefined;
+  const executionThreadId = `dream-${batch.id}-${existingScope.id.replace(/[^a-z0-9-]/giu, "-")}`;
+  const turnId = randomUUID();
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: executionThreadId, kind: "dream_scope" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Dream scope extraction");
   let scope: DreamExtractionScope;
   try {
     scope = dreamReviews.startScope(batch.id, existingScope.id, projectMemory?.sourceHash);
   } catch (error) {
+    executionScheduler!.release(turnId);
     return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream extraction scope could not start.");
   }
   const currentBatch = dreamReviews.load().batches.find((item) => item.id === batch.id)!;
   const extractionContext = buildDreamScopeExtractionContext(currentBatch, scope, projectMemory);
   const prompt = buildDreamScopeExtractionPrompt(extractionContext);
-  const executionThreadId = `dream-${batch.id}-${scope.id.replace(/[^a-z0-9-]/giu, "-")}`;
-  const turnId = randomUUID();
   const context: DreamExecutionContext = { correlationId, batchId: batch.id, scope, executionThreadId, turnId, profile, allowedSourceReferences: [...scope.sourceReferences, ...(extractionContext.projectMemory?.map((entry) => entry.sourceReference) ?? [])] };
   dreamContexts.set(turnId, context);
   if (scope.kind === "project") stateStore!.authorizeProjectProfile(scope.projectId!, profile.id, profile.provider);
@@ -315,7 +545,7 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
     prompt,
     profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_EXTRACTION_STAGE_INSTRUCTIONS] },
-    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+    extensions: extensionRuntimeSnapshot()
   };
   void workerSupervisor!.execute(workerCommand).catch(() => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
@@ -323,6 +553,7 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
 
 function startDreamGlobalSynthesis(correlationId: string, batchId: string): HostEvent {
   if (dreamReviews === null || longTermMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Global Dream Synthesis");
   revalidateDreamSynthesis();
   let batch = dreamReviews.load().batches.find((item) => item.id === batchId);
   if (batch === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream batch was not found.");
@@ -342,11 +573,16 @@ function startDreamGlobalSynthesis(correlationId: string, batchId: string): Host
     const project = stateStore!.getProject(scope.projectId!);
     return project === undefined ? [] : [project.displayName, basename(project.path)];
   });
-  try { batch = dreamReviews.beginSynthesis(batch.id); }
-  catch (error) { return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Global Dream Synthesis could not start."); }
-  const prompt = buildDreamGlobalSynthesisPrompt(input);
   const executionThreadId = `dream-synthesis-${batch.id}`;
   const turnId = randomUUID();
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: executionThreadId, kind: "dream_synthesis" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Global Dream Synthesis");
+  try { batch = dreamReviews.beginSynthesis(batch.id); }
+  catch (error) {
+    executionScheduler!.release(turnId);
+    return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Global Dream Synthesis could not start.");
+  }
+  const prompt = buildDreamGlobalSynthesisPrompt(input);
   const context: DreamSynthesisExecutionContext = { correlationId, batchId: batch.id, executionThreadId, turnId, profile, input, forbiddenTerms };
   dreamSynthesisContexts.set(turnId, context);
   const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
@@ -357,7 +593,7 @@ function startDreamGlobalSynthesis(correlationId: string, batchId: string): Host
     activeCapabilities: [], expectedStateVersion: 1, executionScope: { kind: "unscoped", threadId: executionThreadId }, prompt,
     profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS] },
-    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+    extensions: extensionRuntimeSnapshot()
   };
   void workerSupervisor!.execute(workerCommand).catch(() => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
@@ -399,6 +635,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           event: "app.bootstrap.completed",
           payload: {
             ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
+            executionScheduler: executionSchedulerTelemetry(),
             environmentDoctor: {
               pi: recovery ? { status: "unavailable", message: "Pi execution is disabled in Read-only Recovery." } : { status: "ready", message: "Bundled Pi SDK is available." },
               provider: profileCount > 0 ? { status: "ready", message: `${profileCount} Model Profile reference(s) configured.` } : { status: "attention", message: "No Model Profile is configured." },
@@ -409,7 +646,17 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
                 status: recovery ? "attention" : "ready",
                 message: `State ${preparation.storedVersion}; supported ${preparation.supportedVersion}; ${preparation.status}; rollback ${preparation.rollbackAvailable ? "available" : "unavailable"}.`
               },
-              bundledExtensions: { status: "ready", message: "Reviewed bundled Extension inventory loaded." }
+              bundledExtensions: { status: "ready", message: "Reviewed bundled Extension inventory loaded." },
+              scheduler: { status: "ready", message: `Bounded capacity ${EXECUTION_CAPACITY}; no integration resource was activated by Doctor.` },
+              agentRuntime: { status: recovery ? "unavailable" : "ready", message: recovery ? "Agent Workers are disabled in Read-only Recovery." : "Project and Unscoped Worker supervision is available." },
+              utilityRuntime: { status: recovery ? "unavailable" : "ready", message: recovery ? "Utility jobs are disabled in Read-only Recovery." : "Utility runtime is available for bounded local jobs." },
+              isolatedRuntime: { status: recovery ? "unavailable" : "ready", message: recovery ? "Isolated jobs are disabled in Read-only Recovery." : "Isolated runtime is dormant until an explicit task." },
+              skills: recovery ? { status: "attention", message: "Skills are disabled in Read-only Recovery." } : skillsDoctorMessage(),
+              office: recovery ? { status: "attention", message: "Office Skills are unavailable in Read-only Recovery." } : officeSkillsDoctorMessage(),
+              ocr: { status: "attention", message: "Local page recovery dependencies are checked only when configured." },
+              mcp: { status: "ready", message: "Pinned MCP adapter is lazy; no server connection was opened." },
+              extensionRevision: { status: "ready", message: "Global Extension revision is dormant; no code was loaded by Doctor." },
+              backup: { status: "ready", message: "Personal Cognition Backup is local and credential-free." }
             }
           }
         };
@@ -463,6 +710,179 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return { ...eventMetadata(command.correlationId), event: "access.mode.changed", payload: { mode: command.payload.mode } };
       case "profile.list":
         return { ...eventMetadata(command.correlationId), event: "profiles.listed", payload: { profiles: stateStore.listModelProfiles() } };
+      case "skills.list":
+        return skillsStateEvent(command.correlationId, "listed");
+      case "skills.import": {
+        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill import requires explicit User action and an initialized Skills Directory.");
+        let sourceDirectory = process.env.VC_AGENT_TEST_SKILL_SOURCE;
+        if (sourceDirectory === undefined) {
+          const selection = await dialog.showOpenDialog(mainWindow!, { title: "Import Skill Package", properties: ["openDirectory"] });
+          sourceDirectory = selection.canceled ? undefined : selection.filePaths[0];
+        }
+        if (sourceDirectory === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill import was canceled.");
+        const imported = await skillsDirectory.importLocalDirectory({ sourceDirectory });
+        return skillsStateEvent(command.correlationId, "imported", imported.package.revisionId);
+      }
+      case "skills.inspect": {
+        if (skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
+        const report = await skillsDirectory.inspect(command.payload.revisionId);
+        return skillsStateEvent(command.correlationId, "inspected", command.payload.revisionId, report);
+      }
+      case "skills.activate": {
+        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill activation requires explicit User action and an initialized Skills Directory.");
+        await skillsDirectory.activate(command.payload.revisionId);
+        return skillsStateEvent(command.correlationId, "activated", command.payload.revisionId);
+      }
+      case "skills.disable": {
+        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill disable requires explicit User action and an initialized Skills Directory.");
+        const disabled = await skillsDirectory.disable(command.payload.packageId);
+        return skillsStateEvent(command.correlationId, "disabled", disabled.revisionId);
+      }
+      case "integration.state.load":
+        return integrationStateEvent(command.correlationId, "loaded");
+      case "office.task.prepare": {
+        if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        try {
+          const { outputFileName, sourcePath, sourceReferences, renderPreview, ...officeFields } = command.payload;
+          const plan = await officeOrchestrator.prepare({ ...officeFields, ...(outputFileName === undefined ? {} : { outputFileName }), ...(sourcePath === undefined ? {} : { sourcePath }), ...(sourceReferences === undefined ? {} : { sourceReferences }), ...(renderPreview === undefined ? {} : { renderPreview }) });
+          emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(plan.planId, "pending", "Office task is prepared and awaits explicit Run.", new Date().toISOString())));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { return integrationDiagnostic(command.correlationId, "office", error); }
+      }
+      case "office.task.run": {
+        if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        const task = officeOrchestrator.getTask(command.payload.planId);
+        if (task === undefined) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_JOB_REJECTED"));
+        emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(task.plan.planId, "running", "Office Skill job is running in the isolated local adapter.", new Date().toISOString())));
+        try {
+          const result = await officeOrchestrator.execute(command.payload.planId);
+          const state = result.status === "validated" ? "completed" : result.status === "cancelled" ? "interrupted" : result.status === "timed_out" ? "failed" : "failed";
+          emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(task.plan.planId, state, result.status === "validated" ? "Validated staged Office result is ready for review." : `Office task ended as ${result.status}.`, new Date().toISOString())));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(task.plan.planId, "failed", error instanceof Error ? error.message : "Office task failed.", new Date().toISOString()))); return integrationDiagnostic(command.correlationId, "office", error); }
+      }
+      case "office.task.cancel": {
+        if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        try { await officeOrchestrator.cancel(command.payload.jobId); return integrationStateEvent(command.correlationId, "changed"); }
+        catch (error) { return integrationDiagnostic(command.correlationId, "office", error); }
+      }
+      case "office.result.commit": {
+        if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        try { const output = await officeOrchestrator.commit(command.payload.resultId); const result = officeOrchestrator.getResult(command.payload.resultId); if (result !== undefined) emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(result.plan.planId, "completed", `Output committed to ${output.relativePath}; provenance retained.`, new Date().toISOString()))); return integrationStateEvent(command.correlationId, "changed"); }
+        catch (error) { return integrationDiagnostic(command.correlationId, "office", error); }
+      }
+      case "office.source.replace": {
+        if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        try {
+          const result = await officeOrchestrator.replaceOriginal(command.payload as Parameters<OfficeSkillOrchestrator["replaceOriginal"]>[0]);
+          const state = result.status === "unknown_outcome" ? "unknown_outcome" : result.status === "replaced" ? "completed" : result.status === "confirmation_required" ? "pending" : "failed";
+          const stored = officeOrchestrator.getResult(command.payload.resultId);
+          emit(integrationJobEvent(command.correlationId, "office", stored === undefined ? { id: command.payload.resultId, kind: "office:replace", state, message: `Original replacement ${result.status}.`, updatedAt: new Date().toISOString() } : officeJobProjection(stored.plan.planId, state, `Original replacement ${result.status}.`, new Date().toISOString())));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { return integrationDiagnostic(command.correlationId, "office", error); }
+      }
+      case "skill_creator.list":
+        return integrationStateEvent(command.correlationId, "loaded");
+      case "skill_creator.prepare": {
+        if (command.actor.actorType !== "user" || skillCreatorWorkflow === null) return integrationDiagnostic(command.correlationId, "skill_creator", new Error("SKILL_CREATOR_UNAVAILABLE"));
+        try {
+          const draft = command.payload.operation === "create"
+            ? await skillCreatorWorkflow.createDraft({ explicitIntent: true, packageId: command.payload.packageId, files: command.payload.files, ...(command.payload.dependencies === undefined ? {} : { dependencies: command.payload.dependencies }) })
+            : command.payload.targetRevisionId === undefined
+              ? (() => { throw new Error("SKILL_DRAFT_STALE"); })()
+              : await skillCreatorWorkflow.updateDraft({ explicitIntent: true, packageId: command.payload.packageId, targetRevisionId: command.payload.targetRevisionId, files: command.payload.files, ...(command.payload.dependencies === undefined ? {} : { dependencies: command.payload.dependencies }), ...(command.payload.draftId === undefined ? {} : { draftId: command.payload.draftId }) });
+          emit(integrationJobEvent(command.correlationId, "skill_creator", { id: draft.draftId, kind: `skill_creator:${draft.operation}`, state: draft.state === "draft_ready" ? "completed" : draft.state === "running" ? "running" : "failed", message: `Skill Creator draft is ${draft.state}.`, updatedAt: draft.updatedAt }));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
+      }
+      case "skill_creator.review": {
+        if (skillCreatorWorkflow === null) return integrationDiagnostic(command.correlationId, "skill_creator", new Error("SKILL_CREATOR_UNAVAILABLE"));
+        try { const review = await skillCreatorWorkflow.review(command.payload.draftId); emit(integrationJobEvent(command.correlationId, "skill_creator", { id: review.draft.draftId, kind: `skill_creator:${review.draft.operation}`, state: review.status === "reviewable" ? "completed" : "failed", message: review.status === "reviewable" ? "Draft diff and compatibility review are ready." : "Draft is stale and needs explicit refresh.", updatedAt: review.draft.updatedAt })); return integrationStateEvent(command.correlationId, "changed"); }
+        catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
+      }
+      case "skill_creator.handoff": {
+        if (command.actor.actorType !== "user" || skillCreatorWorkflow === null) return integrationDiagnostic(command.correlationId, "skill_creator", new Error("SKILL_CREATOR_UNAVAILABLE"));
+        try { const result = await skillCreatorWorkflow.accept(command.payload.draftId, command.payload.accessMode === undefined ? { confirmed: true } : { confirmed: true, accessMode: command.payload.accessMode }); emit(integrationJobEvent(command.correlationId, "skill_creator", { id: command.payload.draftId, kind: "skill_creator:handoff", state: "completed", message: `Draft handed off to I1 as ${result.package.packageId}; activation remains disabled.`, updatedAt: new Date().toISOString(), resultId: result.package.revisionId })); emit(skillsStateEvent(command.correlationId, "imported", result.package.revisionId)); return integrationStateEvent(command.correlationId, "changed"); }
+        catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
+      }
+      case "skill_creator.discard": {
+        if (command.actor.actorType !== "user" || skillCreatorWorkflow === null) return integrationDiagnostic(command.correlationId, "skill_creator", new Error("SKILL_CREATOR_UNAVAILABLE"));
+        try { await skillCreatorWorkflow.discard(command.payload.draftId); return integrationStateEvent(command.correlationId, "changed"); }
+        catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
+      }
+      case "page_recovery.inspect":
+        return integrationStateEvent(command.correlationId, "loaded");
+      case "page_recovery.run": {
+        if (command.actor.actorType !== "user" || pageRecoveryPipeline === null) return integrationDiagnostic(command.correlationId, "page_recovery", new Error("PAGE_RECOVERY_UNAVAILABLE"));
+        const project = stateStore?.getProject(command.payload.projectId);
+        if (project === undefined) return integrationDiagnostic(command.correlationId, "page_recovery", new Error("PROJECT_NOT_FOUND"));
+        const absolutePath = resolve(project.path, command.payload.relativePath);
+        const projectRoot = resolve(project.path);
+        if (absolutePath !== projectRoot && !absolutePath.startsWith(projectRoot + sep) || !existsSync(absolutePath)) return integrationDiagnostic(command.correlationId, "page_recovery", new Error("PAGE_SOURCE_UNAVAILABLE"));
+        const parseId = randomUUID();
+        emit(integrationJobEvent(command.correlationId, "page_recovery", { id: parseId, kind: "page_recovery:parse", state: "running", message: "Page recovery is running through native -> Paddle -> Ovis quality gates.", updatedAt: new Date().toISOString() }));
+        try {
+          const parsed = await pageRecoveryPipeline.parse({ parseId, absolutePath, material: { id: command.payload.materialId, projectId: command.payload.projectId, relativePath: command.payload.relativePath, mediaType: command.payload.mediaType, sourceHash: command.payload.sourceHash }, ...(command.payload.pageCount === undefined ? {} : { pageCount: command.payload.pageCount }) });
+          lastPageRecoveryParse = { parseId, pages: parsed.structure.units.map((unit) => { const block = parsed.blocks.find((candidate) => unit.blockIds.includes(candidate.id)); const selectedStage = block?.id.startsWith("native-") ? "native" : block?.id.startsWith("paddle-") ? "paddle" : block?.id.startsWith("ovis-") ? "ovis" : "unavailable"; const warningCodes = parsed.warnings.filter((warning) => warning.source?.locator.index === unit.index).map((warning) => warning.code); return { pageNumber: unit.index, selectedStage, retainedEarlier: warningCodes.some((code) => ["NATIVE_PARSE_WARNING", "COMPLEX_PARSE_FAILED", "COMPLEX_PARSE_UNAVAILABLE", "OCR_FAILED"].includes(code)), warningCodes }; }) };
+          emit(integrationJobEvent(command.correlationId, "page_recovery", { id: parseId, kind: "page_recovery:parse", state: "completed", message: "Canonical Parse completed; per-page provenance and warnings remain local.", updatedAt: new Date().toISOString(), resultId: parseId }));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { emit(integrationJobEvent(command.correlationId, "page_recovery", { id: parseId, kind: "page_recovery:parse", state: error instanceof Error && error.message.includes("cancel") ? "interrupted" : "failed", message: error instanceof Error ? error.message : "Page recovery failed.", updatedAt: new Date().toISOString() })); return integrationDiagnostic(command.correlationId, "page_recovery", error); }
+      }
+      case "page_recovery.cancel": {
+        if (command.actor.actorType !== "user" || pageRecoveryPipeline === null) return integrationDiagnostic(command.correlationId, "page_recovery", new Error("PAGE_RECOVERY_UNAVAILABLE"));
+        try { await pageRecoveryPipeline.cancel(command.payload.parseId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "page_recovery", error); }
+      }
+      case "mcp.server.list":
+        return integrationStateEvent(command.correlationId, "loaded");
+      case "mcp.server.save": {
+        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        try { if (command.payload.serverId !== undefined) mcpActivations.delete(command.payload.serverId); const configured = mcpIntegration.configure(command.payload as Parameters<McpIntegrationManager["configure"]>[0]); mcpActivations.delete(configured.serverId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+      }
+      case "mcp.activate": {
+        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        try { const activation = await mcpIntegration.resolveActivation({ serverId: command.payload.serverId, toolIds: command.payload.toolIds, scope: command.payload.scope, reason: "task_preactivation", ...(command.payload.connect === undefined ? {} : { connect: command.payload.connect }) }); mcpActivations.set(activation.serverId, { activationId: activation.activationId, serverId: activation.serverId, schemaRevision: activation.schemaRevision, toolIds: activation.toolSchemas.map((schema) => schema.name), scope: command.payload.scope }); emit(integrationJobEvent(command.correlationId, "mcp", { id: activation.activationId, kind: "mcp:activation", state: "completed", message: `MCP activation admitted ${activation.toolSchemas.length} tool schema(s); provenance is pinned to ${activation.schemaRevision}.`, updatedAt: new Date().toISOString(), resultId: activation.activationId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+      }
+      case "mcp.disconnect": {
+        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        try { await mcpIntegration.disconnect(command.payload.serverId); mcpActivations.delete(command.payload.serverId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+      }
+      case "mcp.permission.resolve": {
+        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        try { const result = await mcpIntegration.execute(command.payload as Parameters<McpIntegrationManager["execute"]>[0]); const state = result.status === "completed" ? "completed" : result.status === "unknown_outcome" ? "unknown_outcome" : "failed"; emit(integrationJobEvent(command.correlationId, "mcp", { id: command.payload.activationId, kind: "mcp:tool", state, message: `MCP tool execution ${result.status}; response bodies remain bounded and task-scoped.`, updatedAt: new Date().toISOString() })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+      }
+      case "extension.list":
+        return integrationStateEvent(command.correlationId, "loaded");
+      case "extension.stage": {
+        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
+        let sourcePath = process.env.VC_AGENT_TEST_EXTENSION_SOURCE;
+        if (sourcePath === undefined) { const selection = await dialog.showOpenDialog(mainWindow!, { title: "Stage Extension", properties: ["openDirectory"] }); sourcePath = selection.canceled ? undefined : selection.filePaths[0]; }
+        if (sourcePath === undefined) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_STAGE_CANCELLED"));
+        try { const staged = await extensionAdmission.stage({ sourcePath }); emit(integrationJobEvent(command.correlationId, "extension", { id: staged.stagedRevisionId, kind: "extension:stage", state: "completed", message: "Extension bytes are staged for non-executing inspection.", updatedAt: staged.createdAt, resultId: staged.stagedRevisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.inspect": {
+        if (extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
+        try { const report = await extensionAdmission.inspect(command.payload.stagedRevisionId); emit(integrationJobEvent(command.correlationId, "extension", { id: report.reportId, kind: "extension:inspect", state: "completed", message: `Deterministic inspection is ${report.status}; approval remains a separate action.`, updatedAt: report.generatedAt, resultId: report.reportId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.audit": {
+        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
+        try { const audit = await extensionAdmission.startAudit({ stagedRevisionId: command.payload.stagedRevisionId, ...(command.payload.profileId === undefined ? {} : { profileId: command.payload.profileId }), ...(command.payload.providerAvailable === undefined ? {} : { providerAvailable: command.payload.providerAvailable }) }); emit(integrationJobEvent(command.correlationId, "extension", { id: audit.auditRunId, kind: "extension:audit", state: audit.status === "audit_complete" ? "completed" : audit.status === "audit_paused" ? "pending" : "failed", message: `Extension Audit is ${audit.status}; no approval was manufactured.`, updatedAt: audit.updatedAt, resultId: audit.auditRunId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.approve": {
+        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
+        try { const approved = await extensionAdmission.approve(command.payload as Parameters<ExtensionAdmissionManager["approve"]>[0]); emit(integrationJobEvent(command.correlationId, "extension", { id: approved.approvedRevisionId, kind: "extension:approve", state: "completed", message: "Extension is approved but remains disabled until a separate revision activation.", updatedAt: approved.approvedAt, resultId: approved.approvedRevisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.revision.prepare": {
+        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
+        try { const pending = command.payload.action === "disable" ? await globalExtensionRevisions.propose({ action: "disable", extensionId: command.payload.extensionId }) : command.payload.approvedRevisionId === undefined ? (() => { throw new Error("EXTENSION_NOT_APPROVED"); })() : await globalExtensionRevisions.propose({ action: command.payload.action, extensionId: command.payload.extensionId, approvedRevisionId: command.payload.approvedRevisionId }); emit(integrationJobEvent(command.correlationId, "extension", { id: pending.revisionId, kind: "extension:revision", state: "pending", message: "Global Extension Revision awaits explicit activation at an idle boundary.", updatedAt: pending.createdAt, resultId: pending.revisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.revision.activate": {
+        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
+        try { if ((command.payload.mode ?? "idle") === "immediate") await globalExtensionRevisions.activateImmediately(command.payload.revisionId); else await globalExtensionRevisions.activateWhenIdle(command.payload.revisionId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
+      case "extension.rollback": {
+        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
+        try { await globalExtensionRevisions.rollback(command.payload.approvedRevisionId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
+      }
       case "profile.create": {
         const profile = stateStore.createModelProfile({
           name: command.payload.name,
@@ -939,6 +1359,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
         const removedCandidateIds = memoryCandidates?.removeByThread(command.payload.threadId) ?? [];
         dreamReviews?.redactThreadSources(command.payload.threadId);
+        subAgentRuntime?.deleteForParentThread(command.payload.threadId);
         trajectoryStore.deleteThreadHistory(command.payload.threadId);
         loadedPromptByThread.delete(command.payload.threadId);
         sequenceByThread.set(command.payload.threadId, 0);
@@ -986,7 +1407,23 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.output.location.selected", payload: { thread: updated } };
       }
       case "turn.submit":
-        return submitTurn(command.correlationId, command.payload);
+        return submitOrQueueTurn(command.correlationId, command.payload);
+      case "execution_queue.list":
+        return executionQueueEvent(command.correlationId);
+      case "execution_queue.update":
+        stateStore.updateExecutionQueueItem(command.payload.itemId, command.payload.text);
+        return executionQueueEvent(command.correlationId);
+      case "execution_queue.cancel":
+        if (!stateStore.cancelExecutionQueueItem(command.payload.itemId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Execution Queue item not found.");
+        return executionQueueEvent(command.correlationId);
+      case "execution_queue.activate": {
+        stateStore.reactivateExecutionQueueItem(command.payload.itemId);
+        drainExecutionQueue(command.correlationId);
+        return executionQueueEvent(command.correlationId);
+      }
+      case "execution_queue.reorder":
+        stateStore.reorderExecutionQueueItem(command.payload.itemId, command.payload.beforeItemId);
+        return executionQueueEvent(command.correlationId);
       case "thread.compact":
         return compactThread(command.correlationId, command.payload.threadId);
       case "turn.stop": {
@@ -1004,6 +1441,52 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           turnId: context.turnId
         });
         return { ...eventMetadata(command.correlationId, context.threadId), event: "turn.stop.requested", payload: { threadId: context.threadId, turnId: context.turnId } };
+      }
+      case "sub_agent.run.authorize": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent delegation requires explicit User action and an initialized Host runtime.");
+        try {
+          const parentThread = stateStore.getThread(command.payload.parentThreadId);
+          if (parentThread === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent delegation requires an existing parent Thread.");
+          for (const task of command.payload.tasks) {
+            if (parentThread.scope === "project" && (task.contextBoundary.scope !== "project" || task.contextBoundary.projectId !== parentThread.projectId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Project Sub-Agent tasks must remain inside the parent Project scope.");
+            if (parentThread.scope === "unscoped" && task.contextBoundary.scope !== "unscoped") return diagnostic(command.correlationId, "HOST_FAILURE", "Unscoped Sub-Agent tasks cannot acquire Project scope.");
+          }
+          const projection = subAgentRuntime.authorize(command.payload);
+          return { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.authorized", payload: { projection } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Sub-Agent run could not be authorized.");
+        }
+      }
+      case "sub_agent.run.list": {
+        if (subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent runtime is unavailable.");
+        const runs = subAgentRuntime.listRuns();
+        return { ...eventMetadata(command.correlationId), event: "sub_agent.runs.listed", payload: { projections: runs.flatMap((run) => { const projection = subAgentRuntime!.inspect(run.id); return projection === undefined ? [] : [projection]; }) } };
+      }
+      case "sub_agent.run.inspect": {
+        const projection = subAgentRuntime?.inspect(command.payload.runId);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent run not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.inspected", payload: { projection } };
+      }
+      case "sub_agent.run.stop": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Stopping a Sub-Agent run requires explicit User action.");
+        const projection = subAgentRuntime.stop(command.payload.runId, command.payload.reason);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent run not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.stopped", payload: { projection } };
+      }
+      case "sub_agent.task.retry": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Retrying a Sub-Agent task requires explicit User action.");
+        try {
+          const projection = subAgentRuntime.retry(command.payload.taskId);
+          return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.task.retry", payload: { projection } };
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Sub-Agent task could not be retried."); }
+      }
+      case "sub_agent.task.skip": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skipping a Sub-Agent task requires explicit User action.");
+        const projection = subAgentRuntime.skip(command.payload.taskId);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.task.skipped", payload: { projection } };
+      }
+      case "sub_agent.record.delete": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Deleting Sub-Agent records requires explicit User confirmation.");
+        const projection = subAgentRuntime.deleteRecord(command.payload.runId, command.payload.taskId);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent run not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.record.deleted", payload: { projection } };
       }
       case "capability.confirmation.resolve":
         return resolveCapabilityConfirmation(command.correlationId, command.payload.requestId, command.payload.approved);
@@ -1157,6 +1640,7 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
   if (run.status === "independent_completed" || run.status === "independent_running") {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   }
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Independent Evidence Pass");
   if (profileId !== undefined) run = stateStore!.selectReflectionProfile(run.id, profileId, true);
   const profile = run.independentProfileId === undefined ? undefined : stateStore!.getModelProfile(run.independentProfileId);
   if (profile === undefined) {
@@ -1170,9 +1654,11 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
   }
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence credential is unavailable.");
+  const turnId = randomUUID();
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: run.threadId, kind: "independent_evidence" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Independent Evidence Pass");
   if (run.scope === "project") stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
   run = stateStore!.markReflectionRunning(run.id);
-  const turnId = randomUUID();
   const activeCapabilities = run.scope === "project" ? ["material_recall"] : ["web_search", "web_fetch"];
   const context: ReflectionExecutionContext = {
     correlationId,
@@ -1208,7 +1694,7 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
     prompt,
     profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [stageInstructions] },
-    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+    extensions: extensionRuntimeSnapshot()
   };
   void workerSupervisor!.execute(workerCommand).catch(() => failReflectionExecution(context, {
     kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before the Independent Evidence Pass completed.", provider: profile.provider, model: profile.model
@@ -1233,6 +1719,7 @@ function startMemoryAwareReflection(correlationId: string, runId: string, profil
   if (run.status === "dialogue_active" || run.status === "memory_aware_running") {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   }
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Memory-Aware Reflection");
   const effectiveProfileId = profileId ?? stateStore!.getTaskModelAssignment("memory_aware_reflection")?.profileId ?? run.memoryAwareProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   if (profile === undefined) return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
@@ -1526,6 +2013,7 @@ function submitTurn(
   if (activeTurnByThread.has(input.threadId)) {
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Turn");
   const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
   const outputIntent = reflectionRun === undefined && detectOutputIntent(input.text);
@@ -1657,6 +2145,8 @@ function submitTurn(
     ...((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).length === 0 ? {} : { appendSystemPrompt: options.appendSystemPrompt ?? [MEMORY_AWARE_REFLECTION_INSTRUCTIONS] }),
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
   turnContexts.set(turnId, context);
   activeTurnByThread.set(input.threadId, turnId);
   inflight!.begin({
@@ -1704,9 +2194,10 @@ function submitTurn(
       schemaVersion: 1,
       revisionId: promptRevision.id,
       systemPrompt: promptRevision.content,
-      appendSystemPrompt: [...(context.appendSystemPrompt ?? [])]
+      appendSystemPrompt: [...(context.appendSystemPrompt ?? [])],
+      skills: runtimeSkillsForTask(input.text, thread.scope)
     },
-    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+    extensions: extensionRuntimeSnapshot()
   };
   void workerSupervisor!.execute(workerCommand).catch(() => interruptTurn(context, "worker_exit", 0));
   return {
@@ -1716,10 +2207,80 @@ function submitTurn(
   };
 }
 
+function runningExecutionCount(): number {
+  return executionScheduler?.telemetry().runningCount ?? 0;
+}
+
+function executionCapacityDiagnostic(correlationId: string, task: string): HostEvent {
+  return diagnostic(correlationId, "HOST_FAILURE", `${task} is waiting for execution capacity (${runningExecutionCount()} / ${EXECUTION_CAPACITY}). Retry after running work completes.`);
+}
+
+function executionQueueEvent(correlationId: string): HostEvent {
+  return {
+    ...eventMetadata(correlationId),
+    event: "execution_queue.updated",
+    payload: { items: stateStore!.listExecutionQueue(), runningCount: runningExecutionCount(), capacity: EXECUTION_CAPACITY, telemetry: executionSchedulerTelemetry() }
+  };
+}
+
+function executionSchedulerTelemetry() {
+  return executionScheduler!.telemetry();
+}
+
+function submitOrQueueTurn(correlationId: string, input: { threadId: string; text: string; retryOfTurnId?: string | undefined }): HostEvent {
+  const thread = stateStore!.getThread(input.threadId);
+  if (thread === undefined) throw new Error("Thread not found");
+  const reflection = stateStore!.getReflectionRunByThread(thread.id);
+  const requestedProfileId = reflection?.memoryAwareProfileId ?? thread.activeProfileId;
+  if (requestedProfileId === undefined || (reflection !== undefined && reflection.status !== "dialogue_active")) return submitTurn(correlationId, input);
+  const reason = activeTurnByThread.has(thread.id) ? "thread_active" as const : !executionScheduler!.hasCapacity() ? "capacity" as const : undefined;
+  if (reason === undefined) return submitTurn(correlationId, input);
+  const item = stateStore!.enqueueOrdinaryTurn({
+    threadId: thread.id,
+    text: input.text,
+    reason,
+    ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
+    ...(requestedProfileId === undefined ? {} : { requestedProfileId })
+  });
+  emit(executionQueueEvent(correlationId));
+  return { ...eventMetadata(correlationId, thread.id, USER_ACTOR, USER_PROVENANCE), event: "turn.queued", payload: { item } };
+}
+
+function drainExecutionQueue(correlationId: string = randomUUID()): void {
+  if (shuttingDown || stateStore === null || stateStore.isReadOnlyRecovery) return;
+  while (executionScheduler!.hasCapacity()) {
+    const item = stateStore.listExecutionQueue().find((candidate) => {
+      if (candidate.status !== "queued" || activeTurnByThread.has(candidate.threadId)) return false;
+      const candidateThread = stateStore!.getThread(candidate.threadId);
+      if (candidateThread === undefined) return true;
+      const effectiveProfileId = stateStore!.getReflectionRunByThread(candidateThread.id)?.memoryAwareProfileId ?? candidateThread.activeProfileId;
+      return candidate.requestedProfileId === undefined || candidate.requestedProfileId === effectiveProfileId;
+    });
+    if (item === undefined) break;
+    const thread = stateStore.getThread(item.threadId);
+    if (thread === undefined) {
+      stateStore.cancelExecutionQueueItem(item.id);
+      continue;
+    }
+    const effectiveProfileId = stateStore.getReflectionRunByThread(thread.id)?.memoryAwareProfileId ?? thread.activeProfileId;
+    if (item.requestedProfileId !== undefined && effectiveProfileId !== item.requestedProfileId) break;
+    stateStore.cancelExecutionQueueItem(item.id);
+    // Remove the admitted item from the renderer before publishing the new Turn.
+    // Otherwise the conversation message and its editable queue textarea can
+    // briefly represent the same input at once.
+    emit(executionQueueEvent(correlationId));
+    const event = submitTurn(correlationId, { threadId: item.threadId, text: item.text, ...(item.retryOfTurnId === undefined ? {} : { retryOfTurnId: item.retryOfTurnId }) });
+    executionScheduler!.recordQueueAdmission(item.submittedAt);
+    emit(event);
+  }
+  emit(executionQueueEvent(correlationId));
+}
+
 function compactThread(correlationId: string, threadId: string): HostEvent {
   const thread = stateStore!.getThread(threadId);
   if (thread === undefined) throw new Error("Thread not found");
   if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before compacting this Thread.");
+  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Thread compaction");
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   if (profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Model Profile not configured");
   if (thread.scope === "project" && !stateStore!.isProjectProfileAuthorized(thread.projectId, profile.id)) {
@@ -1750,6 +2311,8 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     recallBodyBytes: 0,
     compactionOnly: true
   };
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: threadId, kind: "compaction" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Thread compaction");
   turnContexts.set(turnId, context);
   activeTurnByThread.set(threadId, turnId);
   const started: TrajectoryEvent = {
@@ -1779,7 +2342,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     prompt: "Manual Thread Compaction",
     profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [] },
-    extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+    extensions: extensionRuntimeSnapshot()
   };
   void workerSupervisor!.execute(command).catch(() => {
     finishTurn(context);
@@ -1913,6 +2476,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     interruptTurn(context, "worker_exit", workerEvent.workerSequence);
     return;
   }
+  executionScheduler!.recordFailure();
   const record: TrajectoryEvent = {
     ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
     event: "turn.failed",
@@ -1956,13 +2520,16 @@ function handleDreamSynthesisWorkerEvent(context: DreamSynthesisExecutionContext
 
 function failDreamSynthesisExecution(context: DreamSynthesisExecutionContext, failure: ProviderFailure): void {
   if (!dreamSynthesisContexts.has(context.turnId)) return;
+  executionScheduler!.recordFailure();
   try { dreamReviews?.failSynthesis(context.batchId, failure); }
   finally { finishDreamSynthesisExecution(context); emit(dreamStateEvent(context.correlationId)); }
 }
 
 function finishDreamSynthesisExecution(context: DreamSynthesisExecutionContext): void {
   dreamSynthesisContexts.delete(context.turnId);
+  executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.executionThreadId);
+  queueMicrotask(() => drainExecutionQueue());
 }
 
 function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: WorkerEvent): void {
@@ -1995,6 +2562,7 @@ function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: Wor
 
 function failDreamExecution(context: DreamExecutionContext, failure: ProviderFailure): void {
   if (!dreamContexts.has(context.turnId)) return;
+  executionScheduler!.recordFailure();
   try { dreamReviews?.failScope(context.batchId, context.scope.id, failure); }
   finally {
     finishDreamExecution(context);
@@ -2004,7 +2572,9 @@ function failDreamExecution(context: DreamExecutionContext, failure: ProviderFai
 
 function finishDreamExecution(context: DreamExecutionContext): void {
   dreamContexts.delete(context.turnId);
+  executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.executionThreadId);
+  queueMicrotask(() => drainExecutionQueue());
 }
 
 async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, workerEvent: WorkerEvent): Promise<void> {
@@ -2076,6 +2646,7 @@ function resolveReflectionCapability(context: ReflectionExecutionContext, result
 
 function failReflectionExecution(context: ReflectionExecutionContext, failure: ProviderFailure): void {
   if (!reflectionContexts.has(context.turnId)) return;
+  executionScheduler!.recordFailure();
   const current = stateStore!.getReflectionRun(context.runId);
   if (current?.status !== "independent_running") return;
   const run = stateStore!.failIndependentAssessment(context.runId, failure);
@@ -2085,7 +2656,9 @@ function failReflectionExecution(context: ReflectionExecutionContext, failure: P
 
 function finishReflectionExecution(context: ReflectionExecutionContext): void {
   reflectionContexts.delete(context.turnId);
+  executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.threadId);
+  queueMicrotask(() => drainExecutionQueue());
 }
 
 function emitReflectionRun(correlationId: string, run: ReflectionRun): void {
@@ -2371,9 +2944,12 @@ function interruptTurn(
     const run = stateStore!.getReflectionRun(context.reflectionRunId);
     if (run?.status === "memory_aware_running") emitReflectionRun(context.correlationId, stateStore!.interruptMemoryAwareReflection(run.id));
   }
+  if (reason === "user_stop") stateStore!.pauseThreadExecutionQueue(context.threadId);
+  if (reason === "worker_exit") executionScheduler!.recordFailure();
   finishTurn(context);
   if (reason === "worker_exit") loadedPromptByThread.delete(context.threadId);
   emit({ ...ipcMetadata(record), event: "turn.interrupted", payload: { threadId: context.threadId, turnId: context.turnId, partialMessage: record.payload.partialMessage, reason, profile: context.profile } });
+  if (reason === "user_stop") emit(executionQueueEvent(context.correlationId));
 }
 
 function finishTurn(context: TurnContext): void {
@@ -2386,6 +2962,8 @@ function finishTurn(context: TurnContext): void {
   inflight!.complete(context.turnId);
   turnContexts.delete(context.turnId);
   activeTurnByThread.delete(context.threadId);
+  executionScheduler?.release(context.turnId);
+  queueMicrotask(() => drainExecutionQueue());
 }
 
 function toTrajectoryProfile(profile: ModelProfile): TrajectoryProfile {
@@ -2519,8 +3097,44 @@ app.whenReady().then(() => {
   stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"), {
     failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
   });
+  loadIntegrationJobs(join(app.getPath("userData"), "integrations", "jobs.json"));
+  skillsDirectory = new SkillPackageManager({ root: join(app.getPath("userData"), "skills") });
+  skillProjector = new SkillResourceProjector({ manager: skillsDirectory });
+  executionScheduler = new BoundedExecutionScheduler({ capacity: EXECUTION_CAPACITY, store: stateStore });
+  subAgentRuntime = new SubAgentRuntime({
+    path: join(app.getPath("userData"), "delegation", "runs.json"),
+    resolver: { resolve: resolveSubAgentProfile },
+    adapter: process.env.VC_AGENT_TEST_SUB_AGENT_FIXTURE === "1" ? new FixtureSubAgentAdapter({ delayMs: 5 }) : new UnavailableSubAgentAdapter(),
+    scheduler: executionScheduler,
+    capacity: Math.max(1, Math.min(EXECUTION_CAPACITY, Number.parseInt(process.env.VC_AGENT_SUB_AGENT_CAPACITY ?? String(EXECUTION_CAPACITY), 10) || EXECUTION_CAPACITY)),
+    readOnly: stateStore.isReadOnlyRecovery,
+    onEvent: (runtimeEvent) => { if (!shuttingDown) emit(subAgentHostEvent(runtimeEvent)); }
+  });
+  extensionAdmission = new ExtensionAdmissionManager({ root: join(app.getPath("userData"), "integrations", "extensions"), scheduler: executionScheduler, auditAdapter: createDesktopExtensionAuditAdapter() });
+  globalExtensionRevisions = new GlobalExtensionRevisionManager({
+    root: join(app.getPath("userData"), "integrations", "extensions"),
+    admission: extensionAdmission,
+    isGloballyIdle: () => (executionScheduler?.telemetry().runningCount ?? 0) === 0 && (workerSupervisor?.activity.activeSessions ?? 0) === 0,
+    terminateWorkers: () => { workerSupervisor?.closeAll(); }
+  });
+  officeOrchestrator = new OfficeSkillOrchestrator({ skills: skillsDirectory, adapter: createDesktopOfficeAdapter(), root: join(app.getPath("userData"), "integrations", "office") });
+  skillCreatorWorkflow = new SkillCreationWorkflow({ manager: skillsDirectory, root: join(app.getPath("userData"), "integrations", "skill-creator") });
+  utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
+  const ocrRuntimeRoot = resolve(process.env.VC_AGENT_OCR_RUNTIME_ROOT ?? join(process.env.LOCALAPPDATA ?? app.getPath("userData"), "vc-agent", "runtimes", "ocr"));
+  const localOcrOptions = { runner: utilityJobRunner, runtimeRoot: ocrRuntimeRoot, stagingRoot: join(app.getPath("userData"), "integrations", "page-recovery", "staging") };
+  const useFixtureOcr = process.env.NODE_ENV === "test" && process.env.VC_AGENT_REAL_OCR !== "1";
+  pageRecoveryPipeline = new PageRecoveryPipeline(useFixtureOcr
+    ? { native: createDesktopNativePdfAdapter(), paddle: createDesktopPaddleAdapter(), ovis: createDesktopOvisAdapter() }
+    : { native: createDesktopNativePdfAdapter(localOcrOptions), paddle: createDesktopPaddleAdapter(localOcrOptions), ovis: createDesktopOvisAdapter(localOcrOptions) });
+  mcpIntegration = new McpIntegrationManager({
+    root: join(app.getPath("userData"), "integrations", "mcp"),
+    adapter: createDesktopMcpAdapter(),
+    credentials: { resolve: (reference) => { const encrypted = stateStore?.getEncryptedCredential(reference); if (encrypted === undefined) return undefined; try { return credentials.decrypt(encrypted); } catch { return undefined; } } }
+  });
   const readOnlyRecovery = stateStore.isReadOnlyRecovery;
   if (!readOnlyRecovery) stateStore.recoverInterruptedReflections();
+  if (!readOnlyRecovery) stateStore.recoverQueuedExecutionAsDrafts();
+  if (!readOnlyRecovery) stateStore.clearStaleExecutionLeases();
   longTermMemories = new LongTermMemoryStore(join(app.getPath("userData"), "memory", "long-term"));
   if (!readOnlyRecovery) {
     memoryEvolution = new MemoryEvolutionStore(longTermMemories);
@@ -2698,7 +3312,6 @@ app.whenReady().then(() => {
     return { body, retrieval: retrievalMetadata(envelope, body) };
   }));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
-  utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
   if (!readOnlyRecovery) {
     for (const project of stateStore.listProjects()) {
       startMaterialWatcher(project.id);
@@ -2732,9 +3345,25 @@ app.on("before-quit", () => {
     dreamSynthesisContexts.delete(context.turnId);
   }
   ipcMain.removeHandler(COMMAND_CHANNEL);
+  void subAgentRuntime?.shutdown();
+  subAgentRuntime = null;
   workerSupervisor?.closeAll();
   utilityJobRunner?.close();
   utilityJobRunner = null;
+  void officeOrchestrator?.shutdown();
+  void skillCreatorWorkflow?.shutdown();
+  void mcpIntegration?.shutdown();
+  officeOrchestrator = null;
+  skillCreatorWorkflow = null;
+  pageRecoveryPipeline = null;
+  mcpIntegration = null;
+  persistIntegrationJobs();
+  integrationJobsPath = undefined;
+  void extensionAdmission?.shutdown();
+  extensionAdmission = null;
+  globalExtensionRevisions = null;
+  skillProjector = null;
+  skillsDirectory = null;
   for (const state of materialWatchers.values()) {
     state.watcher.close();
     if (state.timer !== undefined) clearTimeout(state.timer);

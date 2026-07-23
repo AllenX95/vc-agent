@@ -17,6 +17,7 @@ test("launches the empty shell without activating execution resources", async ()
   try {
     const window = await application.firstWindow();
     await expect(window).toHaveTitle("vc-agent");
+    expect(existsSync(join(userDataDirectory, "skills"))).toBe(false);
     await expect(window.getByLabel("Navigation")).toBeVisible();
     await expect(window.getByTestId("empty-workspace")).toBeVisible();
     await expect(window.getByRole("complementary", { name: "Project state" })).toBeVisible();
@@ -51,8 +52,10 @@ test("launches the empty shell without activating execution resources", async ()
 
     await window.getByRole("button", { name: "Settings" }).click();
     await expect(window.getByRole("heading", { name: "Settings" })).toBeVisible();
-    await expect(window.getByText("Agent workers")).toBeVisible();
-    await expect(window.locator("dl").nth(1).getByText("0", { exact: true })).toHaveCount(3);
+    expect(existsSync(join(userDataDirectory, "skills"))).toBe(false);
+    for (const metric of ["Agent workers", "Pi sessions", "Provider requests", "Execution failures"]) {
+      await expect(window.getByText(metric, { exact: true }).locator("..").getByText("0", { exact: true })).toBeVisible();
+    }
     await expect(window.getByRole("heading", { name: "Environment Doctor" })).toBeVisible();
     await expect(window.getByRole("heading", { name: "Learning telemetry" })).toBeVisible();
     await expect(window.getByText("Remote content telemetry", { exact: true })).toBeVisible();
@@ -98,7 +101,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 12, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 14, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -111,13 +114,141 @@ test("opens newer local state in visible read-only recovery without changing it"
   }
 });
 
+test("imports, inspects, activates, and restores a Skill through Settings", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-skills-e2e-"));
+  const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-skill-source-e2e-"));
+  writeFileSync(join(skillSource, "SKILL.md"), ["---", "name: Fixture Skill", "description: A bounded fixture", "keywords: fixture, document", "---", "# Fixture Skill", "Use the bounded fixture."].join("\n"), "utf8");
+  writeFileSync(join(skillSource, "LICENSE"), "fixture license", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_SKILL_SOURCE: skillSource });
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByTestId("skills-settings")).toBeVisible();
+    await expect(window.getByText("No imported Skill packages", { exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Import Skill" }).click();
+    const row = window.locator("[data-testid=skills-settings] .profile-row");
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("copied");
+    await row.getByRole("button", { name: "Inspect" }).click();
+    await expect(row).toContainText("awaiting_activation");
+    await row.getByRole("button", { name: "Activate" }).click();
+    await expect(row).toContainText("active");
+    expect(existsSync(join(userDataDirectory, "skills", "inventory.json"))).toBe(true);
+    await application.close();
+    application = await launchApplication(root, userDataDirectory);
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    const restoredRow = window.locator(".profile-row").filter({ hasText: "Fixture Skill" });
+    await expect(restoredRow).toContainText("active");
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(skillSource, { recursive: true, force: true });
+  }
+});
+
+test("exposes lazy Integration status and keeps MCP disconnected after configuration", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-integrations-e2e-"));
+  const extensionSource = mkdtempSync(join(tmpdir(), "vc-agent-extension-source-e2e-"));
+  writeFileSync(join(extensionSource, "package.json"), JSON.stringify({ name: "fixture-extension", version: "1.0.0", license: "MIT", main: "index.js" }), "utf8");
+  writeFileSync(join(extensionSource, "package-lock.json"), "{}", "utf8");
+  writeFileSync(join(extensionSource, "index.js"), "module.exports = {};", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_EXTENSION_SOURCE: extensionSource });
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByTestId("integrations-settings")).toBeVisible();
+    await expect(window.getByRole("heading", { name: "Integrations" })).toBeVisible();
+    await expect(window.getByText("Pinned MCP adapter is dormant; no server connection is open.", { exact: true })).toBeVisible();
+    const serverId = crypto.randomUUID();
+    const saved = await invokeRaw(window, "mcp.server.save", { serverId, name: "Fixture MCP", transport: "fixture", enabled: true, allowedScopes: ["project"] });
+    expect(saved).toMatchObject({ event: "integration.state.updated", payload: { state: { mcp: { servers: [{ serverId, connectionStatus: "disconnected" }] } } } });
+    expect(existsSync(join(userDataDirectory, "integrations", "mcp", "mcp-servers.json"))).toBe(true);
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(extensionSource, { recursive: true, force: true });
+  }
+});
+
+test("completes the desktop C1 fixture paths without eager external activation", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-c1-fixtures-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-c1-project-e2e-"));
+  const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-c1-skill-source-e2e-"));
+  const extensionSource = mkdtempSync(join(tmpdir(), "vc-agent-c1-extension-source-e2e-"));
+  writeFileSync(join(projectDirectory, "fixture.pdf"), "fixture pdf bytes", "utf8");
+  writeFileSync(join(projectDirectory, "fixture.docx"), "fixture office source bytes", "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: C1 Office\ndescription: fixture\n---\n# C1 Office\n", "utf8");
+  writeFileSync(join(skillSource, "LICENSE"), "fixture", "utf8");
+  writeFileSync(join(extensionSource, "package.json"), JSON.stringify({ name: "c1-extension", version: "1.0.0", license: "MIT", main: "index.js" }), "utf8");
+  writeFileSync(join(extensionSource, "package-lock.json"), "{}", "utf8");
+  writeFileSync(join(extensionSource, "index.js"), "module.exports = {};", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_PROJECT_PATH: projectDirectory, VC_AGENT_TEST_SKILL_SOURCE: skillSource, VC_AGENT_TEST_EXTENSION_SOURCE: extensionSource });
+  try {
+    const window = await application.firstWindow();
+    const opened = await invokeRaw(window, "project.open");
+    const projectId = (opened as { payload: { project: { id: string } } }).payload.project.id;
+    await window.getByRole("button", { name: `New thread in ${projectDirectory.split(/[\\/]/).at(-1)!}` }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Import Skill" }).click();
+    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
+    await skillRow.getByRole("button", { name: "Inspect" }).click();
+    await skillRow.getByRole("button", { name: "Activate" }).click();
+    const integration = window.getByTestId("integrations-settings");
+    const officeCard = integration.locator(".integration-card").filter({ hasText: "Office Skills" });
+    await officeCard.getByRole("button", { name: "Prepare fixture Office task" }).click();
+    await officeCard.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(officeCard.getByRole("button", { name: "Commit copy" })).toBeVisible();
+    await officeCard.getByRole("button", { name: "Commit copy" }).click();
+    await officeCard.getByRole("button", { name: "Prepare fixture Office edit" }).click();
+    await officeCard.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(officeCard.getByRole("button", { name: "Request source replacement" })).toBeVisible();
+    await officeCard.getByRole("button", { name: "Request source replacement" }).click();
+    await officeCard.getByRole("button", { name: "Approve replacement" }).click();
+    await integration.getByRole("button", { name: "Create explicit draft" }).click();
+    await expect(integration.getByText("desktop-created-skill", { exact: false })).toBeVisible();
+    await integration.getByRole("button", { name: "Review" }).click();
+    await integration.getByRole("button", { name: "Hand off disabled" }).click();
+    const pageRecoveryCard = integration.locator(".integration-card").filter({ hasText: "Page Recovery / OCR" });
+    await pageRecoveryCard.getByRole("button", { name: "Run Page Recovery" }).click();
+    await expect(pageRecoveryCard).toContainText("completed");
+    await expect(pageRecoveryCard).toContainText("Last Parse · per-page retained result");
+    await integration.getByLabel("MCP endpoint").fill("Fixture MCP");
+    await integration.getByRole("button", { name: "Save config" }).click();
+    await expect(integration.getByText("Fixture MCP", { exact: false })).toBeVisible();
+    await integration.getByRole("button", { name: "Activate", exact: true }).click();
+    await expect(integration.getByRole("button", { name: "Run read" })).toBeVisible();
+    await integration.getByRole("button", { name: "Run read" }).click();
+    await integration.getByRole("button", { name: "Confirm write" }).click();
+    await integration.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await integration.getByRole("button", { name: "Stage Extension" }).click();
+    const extensionCard = integration.locator(".integration-card").filter({ hasText: "Extension Admission" });
+    await extensionCard.getByRole("button", { name: "Inspect" }).click();
+    await extensionCard.getByRole("button", { name: "Audit" }).click();
+    await extensionCard.getByRole("button", { name: "Approve" }).click();
+    await extensionCard.getByRole("button", { name: "Prepare enable" }).click();
+    await extensionCard.getByRole("button", { name: "Activate pending revision" }).click();
+    await expect(extensionCard).toContainText("1 enabled");
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+    rmSync(skillSource, { recursive: true, force: true });
+    rmSync(extensionSource, { recursive: true, force: true });
+  }
+});
+
 test("keeps old state active when staged migration fails", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-migration-failure-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12)").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14)").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -132,7 +263,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 12, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 14, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -450,6 +581,90 @@ test("persists an interrupted trajectory, requires cross-Provider authorization,
     expect(bootstrap).toMatchObject({
       payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } }
     });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("queues editable follow-ups and restores them as unsent drafts after restart", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-r0-queue-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_EXECUTION_CAPACITY: "1", VC_AGENT_TEST_FAUX_DELAY_MS: "20000" });
+
+  try {
+    let window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Queue fixture", provider: "vc-agent-faux", model: "fixture", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Queue fixture" });
+
+    await window.getByLabel("Message").fill("Keep this first Turn active.");
+    await window.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(window.getByRole("button", { name: "Stop" })).toBeVisible();
+
+    await window.getByLabel("Message").fill("Cancel this queued follow-up.");
+    await window.getByRole("button", { name: "Queue follow-up" }).click();
+    await expect(window.getByLabel("Execution Queue")).toBeVisible();
+    await window.getByLabel("Message", { exact: true }).fill("Preserve this queued follow-up.");
+    await window.getByRole("button", { name: "Queue follow-up" }).click();
+    await expect(window.locator(".execution-queue-item")).toHaveCount(2);
+    await window.locator(".execution-queue-item").first().getByRole("button", { name: "Cancel" }).click();
+    await expect(window.locator(".execution-queue-item")).toHaveCount(1);
+    await window.getByLabel("Queued message 1").fill("Edited follow-up survives restart.");
+    await window.getByLabel("Queued message 1").press("Tab");
+    await window.getByRole("button", { name: "Stop" }).click();
+    await expect(window.getByText(/^Unsent draft ·/u)).toBeVisible();
+
+    await application.close();
+    application = await launchApplication(root, userDataDirectory, { VC_AGENT_EXECUTION_CAPACITY: "1" });
+    window = await application.firstWindow();
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await expect(window.getByText(/^Unsent draft ·/u)).toBeVisible();
+    await expect(window.getByLabel("Queued message 1")).toHaveValue("Edited follow-up survives restart.");
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
+
+    await window.locator(".execution-queue-item").getByRole("button", { name: "Send" }).click();
+    await expect(window.getByText("Edited follow-up survives restart.", { exact: true })).toBeVisible();
+    await expect(window.locator(".execution-queue-item")).toHaveCount(0);
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("admits capacity-blocked work from another Thread after the running Turn stops", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-r0-capacity-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_EXECUTION_CAPACITY: "1", VC_AGENT_TEST_FAUX_DELAY_MS: "2000" });
+
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await createProfile(window, { name: "Capacity fixture", provider: "vc-agent-faux", model: "fixture", apiKey: "fixture-key" });
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Capacity fixture" });
+    await window.getByRole("button", { name: "New thread" }).click();
+    await window.getByLabel("Active Model Profile").selectOption({ label: "Capacity fixture" });
+
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await window.getByLabel("Message", { exact: true }).fill("Occupy the only execution slot.");
+    await window.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await window.getByRole("button", { name: "Thread 2", exact: true }).click();
+    await window.getByLabel("Message", { exact: true }).fill("Run after capacity becomes available.");
+    await window.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(window.getByText(/Waiting for capacity · unscoped · Capacity fixture/u)).toBeVisible();
+
+    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
+    await window.getByRole("button", { name: "Stop" }).click();
+    await window.getByRole("button", { name: "Thread 2", exact: true }).click();
+    await expect(window.getByText("Run after capacity becomes available.", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(window.locator(".execution-queue-item")).toHaveCount(0);
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -1064,7 +1279,7 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(workspace).toContainText("Evidence pass complete", { timeout: 30_000 });
     await expect(workspace.getByRole("heading", { name: "Independent Assessment" })).toBeVisible();
     await expect(workspace).toContainText("continued diligence");
-    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 2, piSessionsStarted: 1, providerRequests: 1 } } });
+    expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 1, piSessionsStarted: 1, providerRequests: 1 } } });
 
     const database = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
     const run = database.prepare("SELECT status, assessment_json, thread_id FROM reflection_runs").get() as { status: string; assessment_json: string; thread_id: string };
