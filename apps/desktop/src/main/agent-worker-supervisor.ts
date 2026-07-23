@@ -1,5 +1,6 @@
 import { utilityProcess, type UtilityProcess } from "electron";
 import { workerEventSchema, type WorkerCommand, type WorkerEvent } from "@vc-agent/contracts";
+import { terminateProcessTree, waitForProcessExit } from "./process-tree.js";
 
 type ExecuteCommand = Extract<WorkerCommand, { command: "turn.execute" }>;
 
@@ -104,8 +105,18 @@ export class AgentWorkerSupervisor {
   }
 
   closeAll(): void {
-    for (const record of this.#workers.values()) record.process.kill();
+    for (const record of this.#workers.values()) terminateProcessTree(record.process.pid, () => record.process.kill());
     this.#workers.clear();
+  }
+
+  async shutdown(deadlineMs = 5_000): Promise<void> {
+    const workers = [...this.#workers.values()];
+    this.#workers.clear();
+    await Promise.all(workers.map(async (record) => {
+      const exited = waitForProcessExit((callback) => record.process.once("exit", callback), deadlineMs);
+      terminateProcessTree(record.process.pid, () => record.process.kill());
+      await exited;
+    }));
   }
 
   #startWorker(ownerKey: string, workerRevision: string): WorkerRecord {

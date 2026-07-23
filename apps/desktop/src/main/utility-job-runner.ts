@@ -1,5 +1,6 @@
 import { utilityProcess, type UtilityProcess } from "electron";
 import { utilityJobEventSchema, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
+import { terminateProcessTree, waitForProcessExit } from "./process-tree.js";
 
 interface PendingJob {
   readonly command: UtilityJobCommand;
@@ -19,6 +20,7 @@ export class UtilityJobRunner {
   #pending = new Map<string, PendingJob>();
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
+  #shutdownPromise: Promise<void> | null = null;
 
   constructor(entryPath: string) { this.#entryPath = entryPath; }
 
@@ -31,9 +33,22 @@ export class UtilityJobRunner {
     return result;
   }
 
-  close(): void {
+  close(): void { void this.shutdown(0); }
+
+  async shutdown(deadlineMs = 5_000): Promise<void> {
+    if (this.#shutdownPromise !== null) return this.#shutdownPromise;
+    this.#shutdownPromise = this.#shutdown(deadlineMs);
+    return this.#shutdownPromise;
+  }
+
+  async #shutdown(deadlineMs: number): Promise<void> {
     this.#closed = true;
-    this.#process?.kill();
+    const process = this.#process;
+    if (process !== null) {
+      const exited = waitForProcessExit((callback) => process.once("exit", callback), deadlineMs);
+      terminateProcessTree(process.pid, () => process.kill());
+      await exited;
+    }
     this.#process = null;
     this.#spawned = null;
     for (const [jobId, pending] of this.#pending) {
@@ -56,7 +71,7 @@ export class UtilityJobRunner {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.#pending.delete(command.jobId);
-        this.#process?.kill();
+        if (this.#process !== null) terminateProcessTree(this.#process.pid, () => this.#process?.kill());
         this.#process = null;
         this.#spawned = null;
         resolve(failure(command, "UTILITY_JOB_TIMEOUT", "Utility job exceeded its timeout."));

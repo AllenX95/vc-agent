@@ -165,6 +165,8 @@ let subAgentRuntime: SubAgentRuntime | null = null;
 let lastPageRecoveryParse: IntegrationState["pageRecovery"]["lastParse"] | undefined;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
+let shutdownPromise: Promise<void> | null = null;
+let allowQuitAfterShutdown = false;
 const sequenceByThread = new Map<string, number>();
 const turnContexts = new Map<string, TurnContext>();
 const reflectionContexts = new Map<string, ReflectionExecutionContext>();
@@ -349,6 +351,18 @@ function persistIntegrationJobs(): void {
 }
 
 if (process.env.VC_AGENT_USER_DATA_DIR) app.setPath("userData", process.env.VC_AGENT_USER_DATA_DIR);
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (hasSingleInstanceLock) {
+  app.on("second-instance", () => {
+    if (mainWindow === null) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+} else {
+  app.quit();
+}
 
 function nextSequence(threadId?: string): number {
   if (threadId === undefined) return 0;
@@ -3090,6 +3104,7 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) return;
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     if (details.url.startsWith("http://") || details.url.startsWith("https://")) externalNetworkRequests += 1;
     callback({});
@@ -3325,7 +3340,17 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (allowQuitAfterShutdown) return;
+  if (shutdownPromise !== null) {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  shutdownPromise = shutdownApplication().finally(() => { allowQuitAfterShutdown = true; app.quit(); });
+});
+
+async function shutdownApplication(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
@@ -3345,21 +3370,21 @@ app.on("before-quit", () => {
     dreamSynthesisContexts.delete(context.turnId);
   }
   ipcMain.removeHandler(COMMAND_CHANNEL);
-  void subAgentRuntime?.shutdown();
+  const subAgentShutdown = subAgentRuntime?.shutdown() ?? Promise.resolve();
   subAgentRuntime = null;
-  workerSupervisor?.closeAll();
-  utilityJobRunner?.close();
+  const workerShutdown = workerSupervisor?.shutdown(5_000) ?? Promise.resolve();
+  const utilityShutdown = utilityJobRunner?.shutdown(5_000) ?? Promise.resolve();
   utilityJobRunner = null;
-  void officeOrchestrator?.shutdown();
-  void skillCreatorWorkflow?.shutdown();
-  void mcpIntegration?.shutdown();
+  const officeShutdown = officeOrchestrator?.shutdown() ?? Promise.resolve();
+  const skillCreatorShutdown = skillCreatorWorkflow?.shutdown() ?? Promise.resolve();
+  const mcpShutdown = mcpIntegration?.shutdown() ?? Promise.resolve();
   officeOrchestrator = null;
   skillCreatorWorkflow = null;
   pageRecoveryPipeline = null;
   mcpIntegration = null;
   persistIntegrationJobs();
   integrationJobsPath = undefined;
-  void extensionAdmission?.shutdown();
+  const extensionShutdown = extensionAdmission?.shutdown() ?? Promise.resolve();
   extensionAdmission = null;
   globalExtensionRevisions = null;
   skillProjector = null;
@@ -3381,4 +3406,5 @@ app.on("before-quit", () => {
   projectMemories = null;
   longTermMemories = null;
   memoryCandidates = null;
-});
+  await Promise.allSettled([subAgentShutdown, workerShutdown, utilityShutdown, officeShutdown, skillCreatorShutdown, mcpShutdown, extensionShutdown]);
+}

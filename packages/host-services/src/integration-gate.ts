@@ -22,6 +22,7 @@ export interface GateScenarioResult {
   readonly status: "pass" | "fail" | "blocked";
   readonly durationMs: number;
   readonly evidencePath?: string;
+  readonly evidencePaths?: readonly string[];
   readonly warning?: string;
 }
 
@@ -78,6 +79,7 @@ export function writeIntegrationGateReport(root: string, input: IntegrationGateR
   const scenarios = input.scenarios.map((scenario) => ({
     testId: scenario.testId, scenario: sanitizeDiagnostic(scenario.scenario), status: scenario.status, durationMs: Math.max(0, Math.round(scenario.durationMs)),
     ...(scenario.evidencePath === undefined ? {} : { evidencePath: safeEvidencePath(scenario.evidencePath, input.evidenceRoot) }),
+    ...(scenario.evidencePaths === undefined ? {} : { evidencePaths: scenario.evidencePaths.map((path) => safeEvidencePath(path, input.evidenceRoot)) }),
     ...(scenario.warning === undefined ? {} : { warning: sanitizeDiagnostic(scenario.warning) })
   }));
   const rawWarnings = [...(input.warnings ?? []), ...scenarios.filter((scenario) => scenario.warning !== undefined).map((scenario) => scenario.warning!)];
@@ -93,7 +95,7 @@ export function writeIntegrationGateReport(root: string, input: IntegrationGateR
     schemaVersion: 1, generatedAt: input.now ?? new Date().toISOString(),
     buildIdentity: { ...input.buildIdentity, ...(input.buildIdentity.buildRevision === undefined ? {} : { buildRevision: sanitizeDiagnostic(input.buildIdentity.buildRevision) }) },
     stateSchema: { currentVersion: input.buildIdentity.stateSchemaVersion, migrationVersions: [...new Set(input.migrationVersions)].sort((left, right) => left - right) },
-    environmentDoctor: inspectEnvironmentDoctor(input.environmentDoctor), executedTests: scenarios, evidencePaths: [...new Set(scenarios.flatMap((scenario) => scenario.evidencePath === undefined ? [] : [scenario.evidencePath]))], zeroSecretScan,
+    environmentDoctor: inspectEnvironmentDoctor(input.environmentDoctor), executedTests: scenarios, evidencePaths: [...new Set(scenarios.flatMap((scenario) => [...(scenario.evidencePath === undefined ? [] : [scenario.evidencePath]), ...(scenario.evidencePaths ?? [])]))], zeroSecretScan,
     warnings, unavailableDependencies, deferredScope, decision
   };
   const jsonPath = resolve(outputRoot, "integration-gate-report.json");

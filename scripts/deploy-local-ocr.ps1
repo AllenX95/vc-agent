@@ -90,6 +90,8 @@ if ((Test-Path -LiteralPath $paddleReportPath) -and (Test-Path -LiteralPath $ovi
   $evidencePath = Join-Path $runtimePath "validation\local-ocr-evidence.json"
   $evidence = [ordered]@{
     schemaVersion = 1
+    kind = "ocr-compatibility"
+    sanitized = $true
     generatedAt = [DateTime]::UtcNow.ToString("o")
     runtimeRevision = $manifest.revision
     validatedDevices = $devices

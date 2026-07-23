@@ -15,6 +15,7 @@ import {
   writeIntegrationGateReport,
   pageTextBlock,
   PINNED_PI_MCP_ADAPTER_VERSION,
+  inspectRealDependencyEvidence,
   type McpAdapterConnection,
   type McpServerRecord,
   type McpToolSchema,
@@ -22,7 +23,7 @@ import {
 } from "../packages/host-services/src/index.ts";
 import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "../apps/desktop/src/main/integration-adapters.ts";
 
-interface Scenario { testId: string; scenario: string; status: "pass" | "fail" | "blocked"; durationMs: number; warning?: string }
+interface Scenario { testId: string; scenario: string; status: "pass" | "fail" | "blocked"; durationMs: number; evidencePath?: string; evidencePaths?: readonly string[]; warning?: string }
 
 async function main(): Promise<void> {
   const outputRoot = resolve(process.env.VC_AGENT_GATE_OUTPUT ?? join(process.cwd(), "test-results", "integration-gate"));
@@ -47,10 +48,14 @@ async function main(): Promise<void> {
     const ocrEvidence = process.env.VC_AGENT_REAL_OCR_EVIDENCE;
     const mcpEvidence = process.env.VC_AGENT_REAL_MCP_EVIDENCE;
     const blocked: string[] = [];
-    if (!isExternalExistingPath(realOffice) || !isExternalExistingPath(officeEvidence)) blocked.push("User-supplied Office Skill package plus redacted compatibility evidence (set VC_AGENT_REAL_OFFICE_SOURCE and VC_AGENT_REAL_OFFICE_EVIDENCE outside the repository)");
-    if (!realOcr || !isExternalExistingPath(ocrEvidence)) blocked.push("Configured PaddleOCR + OvisOCR2 runtime plus redacted compatibility evidence (set VC_AGENT_REAL_OCR=1 and VC_AGENT_REAL_OCR_EVIDENCE outside the repository)");
-    if (!realMcp || !isExternalExistingPath(mcpEvidence)) blocked.push("Installed locked pi-mcp-adapter fixture server plus redacted compatibility evidence (set VC_AGENT_REAL_MCP_ADAPTER=1 and VC_AGENT_REAL_MCP_EVIDENCE outside the repository)");
-    scenarios.push({ testId: "G3-T-011", scenario: "Personal Build real dependency path", status: blocked.length === 0 ? "pass" : "blocked", durationMs: 0, ...(blocked.length === 0 ? {} : { warning: blocked.join("; ") }) });
+    const office = realOffice !== undefined && isExternalExistingPath(realOffice) ? inspectRealDependencyEvidence({ kind: "office", path: officeEvidence, repositoryRoot: process.cwd() }) : { valid: false, reason: "Office source package is missing" };
+    const ocr = realOcr && isExternalExistingPath(ocrEvidence) ? inspectRealDependencyEvidence({ kind: "ocr", path: ocrEvidence, repositoryRoot: process.cwd() }) : { valid: false, reason: "OCR runtime flag or evidence is missing" };
+    const mcp = realMcp && isExternalExistingPath(mcpEvidence) ? inspectRealDependencyEvidence({ kind: "mcp", path: mcpEvidence, repositoryRoot: process.cwd() }) : { valid: false, reason: "MCP adapter flag or evidence is missing" };
+    if (!office.valid) blocked.push(`Office: ${office.reason}`);
+    if (!ocr.valid) blocked.push(`OCR: ${ocr.reason}`);
+    if (!mcp.valid) blocked.push(`MCP: ${mcp.reason}`);
+    const evidencePaths = [office, ocr, mcp].filter((item): item is typeof item & { evidencePath: string } => item.valid && typeof item.evidencePath === "string").map((item) => item.evidencePath);
+    scenarios.push({ testId: "G3-T-011", scenario: "Personal Build real dependency path", status: blocked.length === 0 ? "pass" : "blocked", durationMs: 0, ...(evidencePaths.length === 0 ? {} : { evidencePaths }), ...(blocked.length === 0 ? {} : { warning: blocked.join("; ") }) });
     const doctor = inspectEnvironmentDoctor({
       piAdapter: { status: "ready", message: "Bundled adapter available; no Pi session was started." },
       profiles: { status: "attention", message: "Gate fixture uses no provider credential." },
@@ -62,9 +67,9 @@ async function main(): Promise<void> {
       utilityRuntime: { status: "ready", message: "Utility runtime remains dormant during fixture gate." },
       isolatedRuntime: { status: "ready", message: "Isolated local jobs were bounded and cleaned up." },
       skills: { status: "ready", message: "Imported fixture packages remain app-owned and explicitly activated." },
-      office: { status: blocked.some((item) => item.includes("Office")) ? "attention" : "ready", message: blocked.some((item) => item.includes("Office")) ? "Fixture path passed; real User-supplied package/evidence is not configured." : "User-supplied Office package and redacted compatibility evidence are configured outside the repository." },
-      ocr: { status: blocked.some((item) => item.includes("PaddleOCR")) ? "attention" : "ready", message: blocked.some((item) => item.includes("PaddleOCR")) ? "PaddleOCR/OvisOCR2 local runtimes or evidence are unavailable in this run." : "Configured local OCR compatibility evidence supplied." },
-      mcp: { status: blocked.some((item) => item.includes("pi-mcp-adapter")) ? "attention" : "ready", message: blocked.some((item) => item.includes("pi-mcp-adapter")) ? "Pinned adapter fixture or evidence is unavailable in this run." : "Pinned adapter evidence is configured; fixture connections are opened only by activation." },
+      office: { status: office.valid ? "ready" : "attention", message: office.valid ? "User-supplied Office package and redacted compatibility evidence are configured outside the repository." : "Fixture path passed; real User-supplied package/evidence is not configured." },
+      ocr: { status: ocr.valid ? "ready" : "attention", message: ocr.valid ? "Configured local OCR compatibility evidence supplied." : "PaddleOCR/OvisOCR2 local runtimes or evidence are unavailable in this run." },
+      mcp: { status: mcp.valid ? "ready" : "attention", message: mcp.valid ? "Pinned adapter evidence is configured; fixture connections are opened only by activation." : "Pinned adapter fixture or evidence is unavailable in this run." },
       extensionRevision: { status: "ready", message: "Extension admission and revision fixture completed without auto-enable." },
       backup: { status: "ready", message: "No cognition backup was created by the gate." }
     });
