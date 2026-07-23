@@ -12,6 +12,7 @@
     "@vc-agent/contracts": "workspace:*",
     "@vc-agent/core": "workspace:*",
     "@vc-agent/host-services": "workspace:*",
+    "@vc-agent/pi-adapter": "workspace:*",
     "@vc-agent/persistence": "workspace:*",
     "lucide-react": "1.24.0",
     "react": "19.2.7",

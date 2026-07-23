@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join, resolve } from "node:path";
 import type { CapabilityExecutionResult } from "@vc-agent/contracts";
 
-export const PINNED_PI_MCP_ADAPTER_VERSION = "pi-mcp-adapter@1.0.0";
+export const PINNED_PI_MCP_ADAPTER_VERSION = "pi-mcp-adapter@1.5.1";
 
 export type McpTransport = "stdio" | "http" | "fixture";
 export type McpActionClass = "read" | "write" | "external_submission" | "sampling" | "elicitation" | "local_file_upload";
@@ -223,12 +223,26 @@ export class McpIntegrationManager {
     const requested = request.toolIds.length === 0 ? record.enabledToolIds : request.toolIds;
     const schemas = record.cachedToolSchemas.filter((schema) => requested.includes(schema.name) && record.enabledToolIds.includes(schema.name) && schema.allowedScopes.includes(request.scope));
     if (request.reason !== "test_connection" && schemas.length !== requested.length) throw new McpIntegrationError("MCP_TOOL_INACTIVE", "Requested MCP tools are not active for this task.");
-    const activation: McpActivationDecision = { activationId: randomUUID(), serverId: record.serverId, toolSchemas: schemas, schemaRevision: record.schemaRevision, connectionRequired: request.connect !== false, reason: request.reason };
+    let activation: McpActivationDecision = { activationId: randomUUID(), serverId: record.serverId, toolSchemas: schemas, schemaRevision: record.schemaRevision, connectionRequired: request.connect !== false, reason: request.reason };
     if (request.connect !== false) {
       const existing = this.#connections.get(record.serverId);
       if (existing !== undefined && record.schemaState === "current_for_connection" && existing.activation.schemaRevision === record.schemaRevision) {
         this.#connections.set(record.serverId, { ...existing, activation });
-      } else await this.connect(record, activation);
+      } else {
+        await this.connect(record, activation);
+        // A first Test Connection may discover the schema cache. Refresh the
+        // activation and the active connection with the reviewed result so a
+        // server configured without a pre-populated cache can be used on the
+        // next explicit task activation.
+        const refreshedRecord = this.#servers.get(record.serverId);
+        if (refreshedRecord !== undefined && refreshedRecord.schemaRevision !== activation.schemaRevision) {
+          const refreshedRequested = request.toolIds.length === 0 ? refreshedRecord.enabledToolIds : request.toolIds;
+          const refreshedSchemas = refreshedRecord.cachedToolSchemas.filter((schema) => refreshedRequested.includes(schema.name) && refreshedRecord.enabledToolIds.includes(schema.name) && schema.allowedScopes.includes(request.scope));
+          activation = { ...activation, toolSchemas: refreshedSchemas, schemaRevision: refreshedRecord.schemaRevision };
+          const connected = this.#connections.get(record.serverId);
+          if (connected !== undefined) this.#connections.set(record.serverId, { ...connected, activation });
+        }
+      }
     }
     return activation;
   }
@@ -294,8 +308,21 @@ export class McpIntegrationManager {
         this.save();
         throw new McpIntegrationError("MCP_SCHEMA_MISMATCH", "MCP schema revision changed.");
       }
+      const discovered = server.cachedToolSchemas.length === 0;
+      const cachedToolSchemas = discovered ? [...currentSchemas] : [...server.cachedToolSchemas];
+      const enabledToolIds = server.enabledToolIds.length === 0 ? currentSchemas.map((schema) => schema.name) : [...server.enabledToolIds];
+      const schemaRevision = discovered ? currentRevision : server.schemaRevision;
+      const connectedRecord: McpServerRecord = {
+        ...server,
+        enabledToolIds,
+        cachedToolSchemas,
+        schemaRevision,
+        connectionStatus: "connected",
+        schemaState: "current_for_connection",
+        lastConnectedAt: this.#now()
+      };
       this.#connections.set(server.serverId, { connection, activation, connectedAt: this.#now() });
-      this.#servers.set(server.serverId, { ...server, connectionStatus: "connected", schemaState: "current_for_connection", lastConnectedAt: this.#now() });
+      this.#servers.set(server.serverId, connectedRecord);
       this.save();
     } catch (error) {
       const failure = error instanceof McpIntegrationError ? error : new McpIntegrationError("MCP_CONNECTION_FAILED", "MCP connection failed without fallback.");

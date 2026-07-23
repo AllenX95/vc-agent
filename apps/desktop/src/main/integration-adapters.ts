@@ -17,6 +17,7 @@ import {
   type MaterialParseRequest,
   type PinnedPiMcpAdapter
 } from "@vc-agent/host-services";
+import { createPiMcpAdapter, PI_MCP_ADAPTER_VERSION, type PiMcpServerConfig } from "@vc-agent/pi-adapter/mcp";
 import type { LocalOcrDevice, UtilityJobEvent } from "@vc-agent/contracts";
 import type { UtilityJobRunner } from "./utility-job-runner.js";
 
@@ -170,26 +171,81 @@ function localPrintableRatio(text: string): number {
 }
 
 export function createDesktopMcpAdapter(): PinnedPiMcpAdapter {
+  const realAdapter = createPiMcpAdapter();
   return {
     version: PINNED_PI_MCP_ADAPTER_VERSION,
-    async connect(config: McpServerRecord): Promise<McpAdapterConnection> {
-      if (config.transport !== "fixture" && process.env.VC_AGENT_TEST_MCP_REAL !== "1") throw new Error("MCP_CONNECTION_FAILED");
-      let closed = false;
-      const schemas = config.cachedToolSchemas.length > 0 ? config.cachedToolSchemas : defaultMcpSchemas();
+    async connect(config: McpServerRecord, credentialValue: string | undefined, signal?: AbortSignal): Promise<McpAdapterConnection> {
+      if (config.transport === "fixture") return createFixtureMcpConnection(config);
+      if (PI_MCP_ADAPTER_VERSION !== PINNED_PI_MCP_ADAPTER_VERSION.slice("pi-mcp-adapter@".length)) throw new Error("MCP_ADAPTER_UNAVAILABLE");
+      const connection = await realAdapter.connect(toPiMcpServerConfig(config, credentialValue), signal);
       return {
         async listTools() {
-          if (closed) throw new Error("MCP_DISCONNECTED");
-          return schemas;
+          const tools = await connection.listTools();
+          return tools.map((tool) => normalizeMcpTool(tool, config));
         },
-        async call(toolName: string, arguments_: Readonly<Record<string, unknown>>) {
-          if (closed) throw new Error("MCP_DISCONNECTED");
-          if (process.env.VC_AGENT_TEST_MCP_FAILURE === "1") throw new Error("MCP_CONNECTION_FAILED");
-          return { fixture: true, toolName, arguments: arguments_, observedAt: new Date().toISOString() };
-        },
-        async close() { closed = true; }
+        call: (toolName, arguments_, callSignal) => connection.call(toolName, arguments_, callSignal),
+        close: () => connection.close()
       };
     }
   };
+}
+
+function createFixtureMcpConnection(config: McpServerRecord): McpAdapterConnection {
+  let closed = false;
+  const schemas = config.cachedToolSchemas.length > 0 ? config.cachedToolSchemas : defaultMcpSchemas();
+  return {
+    async listTools() {
+      if (closed) throw new Error("MCP_DISCONNECTED");
+      return schemas;
+    },
+    async call(toolName: string, arguments_: Readonly<Record<string, unknown>>) {
+      if (closed) throw new Error("MCP_DISCONNECTED");
+      if (process.env.VC_AGENT_TEST_MCP_FAILURE === "1") throw new Error("MCP_CONNECTION_FAILED");
+      return { fixture: true, toolName, arguments: arguments_, observedAt: new Date().toISOString() };
+    },
+    async close() { closed = true; }
+  };
+}
+
+function toPiMcpServerConfig(config: McpServerRecord, credentialValue: string | undefined): PiMcpServerConfig {
+  return {
+    serverKey: config.serverId,
+    transport: config.transport === "http" ? "http" : "stdio",
+    ...(config.command === undefined ? {} : { command: config.command }),
+    ...(config.args.length === 0 ? {} : { args: config.args }),
+    ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
+    ...(credentialValue === undefined ? {} : { credentialValue })
+  };
+}
+
+function normalizeMcpTool(tool: { readonly name: string; readonly description?: string; readonly inputSchema?: unknown }, config: McpServerRecord): McpToolSchema {
+  const cached = config.cachedToolSchemas.find((schema) => schema.name === tool.name);
+  if (cached !== undefined) {
+    // Keep Host-reviewed policy metadata, but always recompute the protocol
+    // schema identity from the live tool definition so a changed server cannot
+    // hide behind a stale cached hash.
+    return {
+      ...cached,
+      ...(tool.description === undefined ? {} : { description: tool.description }),
+      schemaHash: schemaHash(tool.inputSchema)
+    };
+  }
+  return {
+    name: tool.name,
+    ...(tool.description === undefined ? {} : { description: tool.description }),
+    actionClass: /(?:write|update|delete|create|submit|send|upload)/iu.test(tool.name) ? "write" : "read",
+    allowedScopes: config.allowedScopes,
+    inputBytes: 4_000,
+    outputBytes: 20_000,
+    schemaHash: schemaHash(tool.inputSchema)
+  };
+}
+
+function schemaHash(schema: unknown): string {
+  const canonical = JSON.stringify(schema ?? null);
+  let hash = 2166136261;
+  for (const character of canonical) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return `mcp-schema-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 export function createDesktopExtensionAuditAdapter(): ExtensionAuditAdapter {

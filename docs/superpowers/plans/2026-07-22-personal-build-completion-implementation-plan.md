@@ -22,26 +22,25 @@ Starting point: committed Learning Build at `1dae091` plus the current uncommitt
 - Office 和 MCP 尚未通过要求的真实依赖路径；OCR 已完成本地 CPU/CUDA 部署与真实 Electron 进程链路验收。
 - Integration Gate 当前因真实 Office Skill 路径缺失而为 `blocked`。
 - Sub-Agent Runtime 的 deterministic core、IPC/UI、持久化、fixture 和 Electron 路径已实现；真实 Provider-backed child session 仍保持不可用。
-- 当前 `pnpm verify`：43 个测试文件、205 个测试；31 个 Electron E2E 中 30 个通过、1 个按未配置真实 OCR 环境跳过。
+- 当前 `pnpm verify`：44 个测试文件、206 个测试；31 个 Electron E2E 中 30 个通过、1 个按未配置真实 OCR 环境跳过。
 
-## Progress Snapshot (2026-07-22)
+## Progress Snapshot (2026-07-23)
 
 - **C0:** closed for the current slice. Skills Directory is lazy at app launch; Project/Unscoped runtime, scheduler, migration and existing shutdown fixtures remain green.
 - **C1 / Skills:** closed for the first vertical slice. Typed `skills.*` IPC, Settings inventory, explicit import, compatibility inspection, activation, disable, restart restoration and no-eager-creation E2E are implemented.
 - **C1:** typed Integration state/job/diagnostic IPC and a Settings Integration surface are wired for Office create/edit/review/replace, Skill Creator, Page Recovery/OCR Parse, MCP configuration/activation/permission actions and Extension Admission/revision/rollback. The full desktop fixture matrix is covered by `completes the desktop C1 fixture paths without eager external activation`; fixture actions remain explicit and lazy.
 - **C2 / deterministic gate:** `pnpm integration-gate` runs G3-T-001 through G3-T-010 (fixture, unavailable/failure injection, restart dormancy, recovery and evidence hygiene), writes sanitized JSON/Markdown evidence, and reports `blocked` when the declared Personal Build dependencies are absent.
-- **C2 / remaining:** PaddleOCR + OvisOCR2 now have pinned external runtimes, redacted CPU/CUDA evidence, and a real Electron-to-Utility-Worker E2E. User-supplied Office package evidence and installed locked `pi-mcp-adapter` fixture evidence are still required before a `pass` decision. Environment flags alone do not close G3-T-011.
-- **C2 / Gate hardening:** G3-T-011 now validates typed sanitized evidence outside the repository, including OCR CPU/CUDA repeated results, and records sanitized relative evidence paths. It still remains blocked on Office and MCP.
+- **C2 / remaining:** PaddleOCR + OvisOCR2 now have pinned external runtimes, redacted CPU/CUDA evidence, and a real Electron-to-Utility-Worker E2E. `pi-mcp-adapter@1.5.1` is now installed and locked; its real stdio path is exercised by the Host manager with lazy Test Connection, schema caching, bounded read/write authorization, and restart dormancy. User-supplied Office package evidence and external real-MCP evidence are still required before a `pass` decision. Environment flags alone do not close G3-T-011.
+- **C2 / Gate hardening:** G3-T-011 validates typed sanitized evidence outside the repository, including OCR CPU/CUDA repeated results, and records sanitized relative evidence paths. The report remains blocked on Office and externally supplied MCP evidence, while the local pinned-adapter compatibility slice is closed.
 - **D1:** implementation slice is present: explicit intent, flat Run/Task/Attempt records, bounded Host runtime, IPC/UI, fixture adapter, persistence/restart interruption, deletion placeholders, collision policy and delegation E2E are covered. The D1 final gate remains blocked until C2 is `pass` and a real provider-backed child-session/Output evidence path is supplied.
 - **H1:** Personal Build Gate runner and sanitized JSON/Markdown artifacts are present. Single-instance locking, awaited shutdown, and bounded Utility/Agent child-tree termination are now implemented and tested; the report remains `blocked` for real Office/MCP, provider-backed D1, packaged lifecycle evidence, and remaining external-edit/backup evidence.
 
 ## Immediate Next Work
 
-1. Validate the actual `pi-mcp-adapter` package/revision against the current Pi runtime; the historical `1.0.0` identifier is not an installable npm version.
-2. Complete the user-supplied Office package path and real create/edit/replace evidence in parallel with the MCP compatibility spike.
-3. Make G3-T-011 execute the validated Office/MCP smoke paths, then close C2.
-4. Add the real Provider-backed child-session and Output-adoption path; the deterministic D1 core is already complete.
-5. Collect packaged process-tree, external-edit, backup/restore, and usability evidence before the final H1 pass.
+1. Complete the user-supplied Office package path and real create/edit/replace evidence.
+2. Supply sanitized external MCP evidence and wire the validated Office/MCP smoke paths into G3-T-011, then close C2.
+3. Add the real Provider-backed child-session and Output-adoption path; the deterministic D1 core is already complete.
+4. Collect packaged process-tree, external-edit, backup/restore, and usability evidence before the final H1 pass.
 
 ## Program Invariants
 

@@ -73,6 +73,7 @@ describe("workspace dependency direction", () => {
         "@vc-agent/core",
         "@vc-agent/contracts",
         "@vc-agent/host-services",
+        "@vc-agent/pi-adapter",
         "@vc-agent/persistence",
         "@vc-agent/capabilities"
       ])

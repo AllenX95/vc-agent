@@ -213,15 +213,21 @@ function createGateMcpAdapter(): PinnedPiMcpAdapter {
 }
 
 async function runMcp(root: string): Promise<void> {
-  const read: McpToolSchema = { name: "search", actionClass: "read", allowedScopes: ["project", "unscoped"], inputBytes: 1_000, outputBytes: 2_000, schemaHash: "search-v1" };
-  const write: McpToolSchema = { name: "update", actionClass: "write", allowedScopes: ["project"], inputBytes: 1_000, outputBytes: 2_000, schemaHash: "update-v1" };
-  const adapter: PinnedPiMcpAdapter = createGateMcpAdapter();
-  const manager = new McpIntegrationManager({ root: join(root, "mcp"), adapter });
-  const server = manager.configure({ name: "Fixture MCP", transport: "fixture", enabled: true, allowedScopes: ["project", "unscoped"], enabledToolIds: ["search", "update"], toolSchemas: [read, write] });
+  const counterPath = join(root, "mcp-starts.log");
+  const fixtureServer = resolve(process.cwd(), "tests", "fixtures", "mcp-stdio-server.mjs");
+  const manager = new McpIntegrationManager({ root: join(root, "mcp"), adapter: createDesktopMcpAdapter() });
+  const server = manager.configure({ name: "Fixture MCP", transport: "stdio", command: process.execPath, args: [fixtureServer, counterPath], enabled: true, allowedScopes: ["project", "unscoped"] });
   if ((manager.inventory()[0]?.connectionStatus ?? "connected") !== "disconnected") throw new Error("MCP_EAGER_CONNECTION");
-  const activation = await manager.resolveActivation({ serverId: server.serverId, toolIds: ["search"], scope: "unscoped", reason: "task_preactivation" });
-  const result = await manager.execute({ activationId: activation.activationId, serverId: server.serverId, toolName: "search", arguments: {}, threadId: "thread", turnId: "turn", scope: "unscoped", accessMode: "standard", expectedSchemaRevision: activation.schemaRevision });
+  const tested = await manager.testConnection(server.serverId);
+  if (tested.connectionStatus !== "disconnected" || tested.schemaState !== "cached" || !existsSync(counterPath)) throw new Error("MCP_SCHEMA_CACHE_NOT_RECORDED");
+  const activation = await manager.resolveActivation({ serverId: server.serverId, toolIds: ["fixture.search"], scope: "unscoped", reason: "task_preactivation" });
+  const readTool = activation.toolSchemas.find((schema) => schema.name === "fixture.search");
+  if (readTool === undefined) throw new Error("MCP_DISCOVERED_SCHEMA_MISSING");
+  const result = await manager.execute({ activationId: activation.activationId, serverId: server.serverId, toolName: "fixture.search", arguments: {}, threadId: "thread", turnId: "turn", scope: "unscoped", accessMode: "standard", expectedSchemaRevision: activation.schemaRevision });
   if (result.status !== "completed") throw new Error("MCP_READ_NOT_COMPLETED"); await manager.shutdown();
+  const restarted = new McpIntegrationManager({ root: join(root, "mcp"), adapter: createDesktopMcpAdapter() });
+  if (restarted.inventory()[0]?.connectionStatus !== "disconnected") throw new Error("MCP_RESTART_RECONNECTED");
+  await restarted.shutdown();
 }
 
 async function runExtension(root: string): Promise<void> {
