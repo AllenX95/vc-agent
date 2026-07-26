@@ -11,13 +11,13 @@ The sole User can import and directly invoke complete User-supplied Claude Code 
 
 ## Non-goals
 
-- No vc-agent-owned parallel Office engine, LibreOffice fallback, third-party Skill redistribution, installer bundling, or automatic dependency installation.
+- No vc-agent-owned parallel Office engine, LibreOffice provider/fallback, third-party Skill redistribution, installer bundling, or automatic dependency installation.
 - No silent source replacement, format conversion promise, live Microsoft Office control surface, or Office-specific Memory path.
 - No guarantee that every package version is compatible; unavailable state is a valid result.
 
 ## Governing Decisions
 
-ADR 0025, 0034, 0036, 0041, 0042, 0048, 0057, and I1.
+ADR 0025, 0028, 0034, 0036, 0041, 0042, 0048, 0057, 0060, and I1.
 
 ## Supported User Flows
 
@@ -71,7 +71,7 @@ The adapter executes only the imported Skill-declared entry point with explicit 
 | I2-REQ-007 | Original replacement is a second action. Standard Access requires a scoped confirmation; Full Access may execute without a prompt but MUST keep visible action/provenance. |
 | I2-REQ-008 | Replacement MUST revalidate Source identity and target collision immediately before atomic commit. Changed targets require the existing collision policy. |
 | I2-REQ-009 | Dispatched replacement without confirmed completion becomes Unknown Tool Outcome; retry requires inspection or duplicate-risk acknowledgement. |
-| I2-REQ-010 | Missing runtime/binary/optional COM, Skill failure, render failure, timeout, cancellation, or malformed result MUST preserve Source and every validated staged/committed copy. |
+| I2-REQ-010 | Missing Microsoft Office desktop/COM, Skill failure, render failure, timeout, cancellation, or malformed result MUST preserve Source and every validated staged/committed copy. |
 | I2-REQ-011 | The Host MUST NOT attempt LibreOffice, another Skill, another package revision, another Provider, or format fallback automatically. |
 | I2-REQ-012 | Environment Doctor MUST report integrity and dependencies per imported format Skill without running document generation or starting Pi. |
 | I2-REQ-013 | Temporary job inputs/results/logs MUST retire after durable commit or bounded failure retention; secrets and full Project paths are sanitized from persistent diagnostics. |

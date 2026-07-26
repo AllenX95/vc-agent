@@ -24,7 +24,7 @@ The command clones the pinned revision when `--source-root` is omitted, copies e
 pnpm skills:provision:anthropic -- --source-root C:\path\to\skills --skills-root C:\path\to\app-data\skills
 ```
 
-The default Skills Directory is `%APPDATA%\Electron\skills` (or `VC_AGENT_SKILLS_ROOT` when set). The directory contains `inventory.json`, copied imports, overlays, active revisions, and bounded job staging data.
+The default Skills Directory is `%LOCALAPPDATA%\vc-agent\skills` on Windows (or the platform app-data directory under `vc-agent`; `VC_AGENT_SKILLS_ROOT` remains an explicit override). It never reads another agent's `~/.claude/skills` or equivalent directory. The directory contains `inventory.json`, copied imports, overlays, active revisions, and bounded job staging data.
 
 ## Runtime behavior
 
@@ -55,6 +55,6 @@ The Desktop Host does not guess an entry point from `SKILL.md` and does not fall
 }
 ```
 
-The runner must write the declared output(s) and exit zero. The Worker enforces the staging boundary, timeout, cancellation, output bound, and a structural Office check (`%PDF-` for PDF or an OOXML ZIP containing `[Content_Types].xml` for DOCX/PPTX/XLSX). Missing runner/dependencies, malformed output, timeout, cancellation, and non-zero exit remain explicit failures; no alternate Skill, package revision, provider, or LibreOffice fallback is attempted.
+The runner must write the declared output(s) and exit zero. For the Windows personal build, DOCX jobs use the installed Microsoft Word application through the external runner; LibreOffice is neither required nor used as a fallback. The Worker enforces the staging boundary, timeout, cancellation, output bound, and a structural Office check (`%PDF-` for PDF or an OOXML ZIP containing `[Content_Types].xml` for DOCX/PPTX/XLSX). Missing runner/dependencies, malformed output, timeout, cancellation, and non-zero exit remain explicit failures; no alternate Skill, package revision, provider, or document engine fallback is attempted.
 
-For an end-to-end external evidence run, use `pnpm office:compat` with `--source-root`, `--runner`, and an evidence path outside the repository (or the corresponding `VC_AGENT_REAL_OFFICE_*` variables). The command provisions the pinned upstream package, executes create/edit/replace through `OfficeSkillOrchestrator`, and writes only sanitized metadata. It never commits the user package, document bytes, full paths, or runner logs.
+For an end-to-end external evidence run, use `pnpm office:compat` with `--source-root`, `--runner`, and an evidence path outside the repository (or the corresponding `VC_AGENT_REAL_OFFICE_*` variables). The command provisions the pinned upstream package, executes create/edit/replace through `OfficeSkillOrchestrator`, and requires a bounded provider receipt from each runner job. For the Windows DOCX path, the receipt records only `microsoft-office`, `word`, and the installed Word version. The final evidence contains sanitized metadata only; it never commits the user package, document bytes, full paths, command line, or runner logs.

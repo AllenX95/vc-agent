@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { ANTHROPIC_SKILLS_SOURCE, SkillPackageManager, provisionAnthropicSkills, type AnthropicSkillPackageId } from "../packages/host-services/src/index.ts";
+import { resolve } from "node:path";
+import { ANTHROPIC_SKILLS_SOURCE, SkillPackageManager, provisionAnthropicSkills, resolveVcAgentSkillsRoot, type AnthropicSkillPackageId } from "../packages/host-services/src/index.ts";
 
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2));
-  const skillsRoot = resolve(flags["skills-root"] ?? (process.env.VC_AGENT_SKILLS_ROOT ?? join(process.env.APPDATA ?? tmpdir(), "Electron", "skills")));
+  const skillsRoot = resolve(flags["skills-root"] ?? resolveVcAgentSkillsRoot(process.env, process.env.APPDATA ?? tmpdir()));
   const selected = flags.skills === undefined ? undefined : flags.skills.split(",").map((value) => value.trim()).filter((value): value is AnthropicSkillPackageId => ANTHROPIC_SKILLS_SOURCE.skills.some((skill) => skill.packageId === value));
   let temporarySource: string | undefined;
   let sourceRoot = flags["source-root"] === undefined ? undefined : resolve(flags["source-root"]);

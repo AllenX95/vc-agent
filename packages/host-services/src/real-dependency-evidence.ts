@@ -50,10 +50,12 @@ function validOfficeEvidence(value: Record<string, unknown>): boolean {
   const packageIds = value.packageIds;
   const formats = value.formats;
   const runner = value.runner;
+  const provider = value.provider;
   const results = value.results;
   if (!Array.isArray(packageIds) || packageIds.length === 0 || packageIds.some((item) => typeof item !== "string" || item.length === 0)) return false;
   if (!Array.isArray(formats) || formats.length === 0 || formats.some((item) => !["docx", "pptx", "xlsx", "pdf"].includes(String(item)))) return false;
   if (!isRecord(runner) || runner.mode !== "external-stdin-manifest" || runner.status !== "ready") return false;
+  if (!isRecord(provider) || provider.kind !== "microsoft-office" || provider.application !== "word" || typeof provider.version !== "string" || !/^\d+(?:\.\d+){0,3}$/u.test(provider.version)) return false;
   if (!Array.isArray(results)) return false;
   return ["create", "edit", "replace"].every((workflow) => results.some((item) => isRecord(item) && item.workflow === workflow && ((workflow === "replace" && item.status === "replaced") || (workflow !== "replace" && item.status === "validated"))));
 }

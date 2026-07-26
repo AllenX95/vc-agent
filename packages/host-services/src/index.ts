@@ -37,6 +37,7 @@ export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, ty
 export { inspectRealDependencyEvidence, type RealDependencyEvidenceCheck, type RealDependencyKind } from "./real-dependency-evidence.js";
 export { inspectPackagedLifecycleEvidence, type PackagedLifecycleEvidenceCheck } from "./personal-build-evidence.js";
 export { gateExitCode, type GateDecision } from "./gate-cli.js";
+export { resolveVcAgentSkillsRoot, resolveVcAgentUserDataRoot } from "./app-data-paths.js";
 export {
   AgentRuntimeSupervisor,
   LocalJobSupervisor,

@@ -95,12 +95,12 @@ P1 is complete in the current working tree:
 
 P2 is complete:
 
-- Provisioned the pinned Anthropic Office Skills source revision `fa0fa64bdc967915dc8399e803be67759e1e62b8` outside the repository.
-- Ran DOCX create, edit, and controlled replacement through an external stdin-manifest runner and emitted sanitized Office evidence outside the repository.
+- Provisioned the pinned Anthropic Office Skills source revision `fa0fa64bdc967915dc8399e803be67759e1e62b8` into vc-agent-owned application directories outside the repository; no other agent's Skills directory is consulted.
+- Ran DOCX create, edit, reopen validation, and controlled replacement through an external Microsoft Word stdin-manifest runner and emitted sanitized Office evidence outside the repository. LibreOffice is neither required nor used.
 - Installed the official `@modelcontextprotocol/server-filesystem@2026.7.10` outside the repository, scoped it to a dedicated sandbox, and exercised lazy read, confirmed write, and restart dormancy through `pi-mcp-adapter@1.5.1`.
 - Reused the already configured real OCR evidence.
 - `pnpm integration-gate:release` passes; G3-T-001 through G3-T-011 all pass and the Integration Gate decision is `pass`.
-- LibreOffice is not installed on this machine, so the additional DOCX PNG render inspection was unavailable; the required Office compatibility run still passed its structural OOXML validation without a hidden fallback.
+- Microsoft Word 16.0 created and reopened each DOCX output; the compatibility run also passed the Host structural OOXML validation without an alternate document-engine fallback.
 
 ## 3. Program Definition Of Done
 
@@ -399,6 +399,7 @@ Evidence must validate:
 
 - package and source revision;
 - external runner identity and ready state;
+- Microsoft Office provider, Word application identity, and bounded installed version;
 - create, edit, and replace workflows;
 - produced formats;
 - structural validation of generated artifacts;

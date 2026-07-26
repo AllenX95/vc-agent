@@ -1621,9 +1621,9 @@ The MVP can include or directly load lightweight capabilities:
 - Text PDF parsing.
 - Outputs/context/memory registry.
 
-### Optional Microsoft Office Dependency
+### Microsoft Office Desktop Provider
 
-Microsoft Office desktop/COM is not a required built-in provider. A document Skill may declare it as an optional Windows dependency for legacy `.doc`/`.ppt` conversion, rendering, preview, or stronger local compatibility. If unavailable, that Skill reports the missing path; vc-agent does not silently substitute LibreOffice.
+For the Windows Personal Build, installed Microsoft Office desktop applications are the required local provider for creating, editing, reopening, previewing, and rendering Office Outputs. DOCX work uses Microsoft Word through the explicitly configured isolated Office runner. If the required Office application is unavailable, the Skill reports the missing dependency and preserves source and staged artifacts; vc-agent does not invoke a vc-agent-owned document engine or silently substitute LibreOffice.
 
 ### Configured OCR Capability
 
@@ -1642,6 +1642,7 @@ When a runtime or model is unavailable, or a stage fails, the affected page reta
 LibreOffice is not part of MVP:
 
 - Do not bundle it.
+- Do not use it for Office Output creation, editing, preview, rendering, or compatibility evidence.
 - Do not recommend it as default fallback.
 - Do not include it in first-run setup.
 

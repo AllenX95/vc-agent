@@ -29,6 +29,7 @@ describe("real dependency evidence", () => {
         packageIds: ["docx"],
         formats: ["docx"],
         runner: { mode: "external-stdin-manifest", status: "ready" },
+        provider: { schemaVersion: 1, kind: "microsoft-office", application: "word", version: "16.0" },
         workflows: ["create", "edit", "replace"],
         results: [{ workflow: "create", status: "validated" }, { workflow: "edit", status: "validated" }, { workflow: "replace", status: "replaced" }]
       }));
@@ -42,6 +43,25 @@ describe("real dependency evidence", () => {
       const path = join(root, "mcp.json");
       writeFileSync(path, JSON.stringify({ schemaVersion: 1, kind: "mcp-compatibility", sanitized: true, adapterVersion: "pi-mcp-adapter@1.5.1", packageRevision: "pi-mcp-adapter@1.5.1", workflows: ["lazy-read", "confirmed-write", "restart"] }));
       expect(inspectRealDependencyEvidence({ kind: "mcp", path, repositoryRoot: process.cwd() })).toMatchObject({ valid: true, evidencePath: "external/mcp/compatibility.json" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects Office evidence that does not prove the Microsoft Word provider", () => {
+    const root = evidenceRoot();
+    try {
+      const path = join(root, "office.json");
+      writeFileSync(path, JSON.stringify({
+        schemaVersion: 1,
+        kind: "office-compatibility",
+        sanitized: true,
+        sourceRevision: "fa0fa64bdc967915dc8399e803be67759e1e62b8",
+        packageIds: ["docx"],
+        formats: ["docx"],
+        runner: { mode: "external-stdin-manifest", status: "ready" },
+        workflows: ["create", "edit", "replace"],
+        results: [{ workflow: "create", status: "validated" }, { workflow: "edit", status: "validated" }, { workflow: "replace", status: "replaced" }]
+      }));
+      expect(inspectRealDependencyEvidence({ kind: "office", path, repositoryRoot: process.cwd() }).valid).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

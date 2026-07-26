@@ -24,6 +24,12 @@ import {
  */
 
 interface RunnerSpec { readonly executable: string; readonly args: readonly string[] }
+interface OfficeProviderReceipt {
+  readonly schemaVersion: 1;
+  readonly kind: "microsoft-office";
+  readonly application: "word";
+  readonly version: string;
+}
 interface OfficeEvidence {
   readonly schemaVersion: 1;
   readonly sanitized: true;
@@ -32,6 +38,7 @@ interface OfficeEvidence {
   readonly packageIds: readonly string[];
   readonly formats: readonly string[];
   readonly runner: { readonly mode: "external-stdin-manifest"; readonly status: "ready" };
+  readonly provider: OfficeProviderReceipt;
   readonly workflows: readonly ["create", "edit", "replace"];
   readonly results: readonly { readonly workflow: "create" | "edit" | "replace"; readonly status: "validated" | "replaced"; readonly outputBytes?: number }[];
 }
@@ -58,8 +65,12 @@ async function main(): Promise<void> {
     const projectPath = join(workRoot, "project");
     const outputDirectory = join(projectPath, "outputs");
     mkdirSync(projectPath, { recursive: true });
+    let provider: OfficeProviderReceipt | undefined;
     const adapter: OfficeSkillJobAdapter = {
-      run: (input) => runExternalOffice(input.plan, runner, activeChildren, input.signal),
+      run: (input) => runExternalOffice(input.plan, runner, activeChildren, input.signal, (receipt) => {
+        if (provider !== undefined && JSON.stringify(provider) !== JSON.stringify(receipt)) throw new Error("OFFICE_PROVIDER_EVIDENCE_MISMATCH");
+        provider = receipt;
+      }),
       terminate: (jobId) => terminateChild(activeChildren.get(jobId))
     };
     const orchestrator = new OfficeSkillOrchestrator({ skills, adapter, root: join(workRoot, "office") });
@@ -82,6 +93,7 @@ async function main(): Promise<void> {
     await orchestrator.commit(edited.resultId);
     const replaced = await orchestrator.replaceOriginal({ resultId: edited.resultId, sourcePath: createdOutput.destination, expectedSourceHash: edited.sourceHash, accessMode: "full", confirmed: true });
     if (replaced.status !== "replaced") throw new Error("OFFICE_REPLACE_NOT_COMPLETED");
+    if (provider === undefined) throw new Error("OFFICE_PROVIDER_EVIDENCE_MISSING");
     const evidence: OfficeEvidence = {
       schemaVersion: 1,
       sanitized: true,
@@ -90,6 +102,7 @@ async function main(): Promise<void> {
       packageIds: [selected.packageId],
       formats: [format],
       runner: { mode: "external-stdin-manifest", status: "ready" },
+      provider,
       workflows: ["create", "edit", "replace"],
       results: [
         { workflow: "create", status: "validated", outputBytes: created.outputBytes ?? statSync(created.stagedOutputPath).size },
@@ -106,7 +119,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, activeChildren: Map<string, ChildProcessWithoutNullStreams>, signal: AbortSignal): Promise<{ readonly outputPath: string; readonly outputBytes: number }> {
+async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, activeChildren: Map<string, ChildProcessWithoutNullStreams>, signal: AbortSignal, recordProvider: (receipt: OfficeProviderReceipt) => void): Promise<{ readonly outputPath: string; readonly outputBytes: number }> {
   const child = spawn(runner.executable, [...runner.args], { cwd: plan.skillRoot, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: runnerEnvironment() });
   activeChildren.set(plan.job.jobId, child);
   let stderr = Buffer.alloc(0);
@@ -114,6 +127,7 @@ async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, 
   child.stdout.resume();
   const abort = () => terminateChild(child);
   signal.addEventListener("abort", abort, { once: true });
+  const providerEvidencePath = join(plan.job.stagingDirectory, "provider-evidence.json");
   child.stdin.end(JSON.stringify({
     schemaVersion: 1,
     jobId: plan.job.jobId,
@@ -124,6 +138,7 @@ async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, 
     inputPaths: plan.job.inputPaths,
     stagingDirectory: plan.job.stagingDirectory,
     outputPath: plan.stagedOutputPath,
+    providerEvidencePath,
     ...(plan.task.renderPreview === true ? { previewPath: plan.stagedOutputPath + ".preview" } : {}),
     logPath: join(plan.job.stagingDirectory, "runner.log"),
     cancellationToken: plan.job.cancellationToken ?? plan.planId,
@@ -137,8 +152,28 @@ async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, 
   if (result.timedOut) throw new Error("OFFICE_JOB_TIMEOUT");
   if (result.error !== undefined) throw new Error("OFFICE_DEPENDENCY_MISSING");
   if (result.code !== 0) throw new Error(`OFFICE_RUNNER_FAILED${stderr.length === 0 ? "" : ":" + sanitizeLog(stderr.toString("utf8"))}`);
+  recordProvider(readOfficeProviderReceipt(providerEvidencePath));
   if (!isValidArtifact(plan.stagedOutputPath, plan.task.format, plan.job.maxOutputBytes)) throw new Error("OFFICE_RESULT_INVALID");
   return { outputPath: plan.stagedOutputPath, outputBytes: statSync(plan.stagedOutputPath).size };
+}
+
+function readOfficeProviderReceipt(path: string): OfficeProviderReceipt {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (
+      typeof parsed !== "object"
+      || parsed === null
+      || Array.isArray(parsed)
+      || (parsed as Record<string, unknown>).schemaVersion !== 1
+      || (parsed as Record<string, unknown>).kind !== "microsoft-office"
+      || (parsed as Record<string, unknown>).application !== "word"
+      || typeof (parsed as Record<string, unknown>).version !== "string"
+      || !/^\d+(?:\.\d+){0,3}$/u.test((parsed as Record<string, unknown>).version as string)
+    ) throw new Error();
+    return parsed as OfficeProviderReceipt;
+  } catch {
+    throw new Error("OFFICE_PROVIDER_EVIDENCE_INVALID");
+  }
 }
 
 function readRunnerSpec(flags: Record<string, string>): RunnerSpec | undefined {

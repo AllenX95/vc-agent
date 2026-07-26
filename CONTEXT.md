@@ -604,6 +604,10 @@ _Avoid_: Prompt Load Boundary, per-Worker opportunistic update, automatic Active
 A third-party Skill package placed into the VC Agent Skills Directory by the User for the Personal Build, without becoming a vc-agent-owned or redistributable asset.
 _Avoid_: Bundled first-party Skill, vc-agent ownership, redistribution right
 
+**Microsoft Office Desktop Provider**:
+The installed Microsoft Office applications used by the Windows Personal Build to create, edit, reopen, preview, and render Office Outputs.
+_Avoid_: LibreOffice provider, vc-agent-owned document engine, cross-Agent Office runtime
+
 **Configured OCR Capability**:
 The single fixed local page-recovery capability used on demand when a Material requires OCR or Complex Page Recovery, with visible stage availability, provenance, validation, hardware path, and warnings while remaining one model-visible capability.
 _Avoid_: User-selected OCR Provider, separate model-visible OCR tools, user-selectable Provider Chain, unconditional generative overwrite, silent external upload
