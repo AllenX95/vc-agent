@@ -7,6 +7,7 @@ import {
   SubAgentRuntime,
   createSubAgentProfileResolver,
   writePersonalBuildGateReport,
+  inspectPackagedLifecycleEvidence,
   type PersonalBuildAcceptanceCriterion,
   type PersonalBuildExecutionMode,
   type PersonalBuildGateStatus,
@@ -41,8 +42,22 @@ async function main(): Promise<void> {
     const officeReady = integrationComponents.office === "ready";
     const ocrReady = integrationComponents.ocr === "ready";
     const mcpReady = integrationComponents.mcp === "ready";
+    const c2Missing = [
+      ...(officeReady ? [] : ["Office"]),
+      ...(ocrReady ? [] : ["OCR"]),
+      ...(mcpReady ? [] : ["MCP"])
+    ];
     const d1RealAvailable = process.env.VC_AGENT_REAL_SUB_AGENT === "1" && isExternalEvidence(process.env.VC_AGENT_REAL_SUB_AGENT_EVIDENCE);
-    const acceptanceMatrix = buildAcceptanceMatrix(scenarios, { c2Blocked, d1RealAvailable });
+    const packagedLifecycle = inspectPackagedLifecycleEvidence({ path: process.env.VC_AGENT_H1_PACKAGED_EVIDENCE, repositoryRoot: process.cwd() });
+    const packagedLifecycleReady = packagedLifecycle.valid;
+    if (packagedLifecycleReady) {
+      const crashScenario = scenarios.find((item) => item.testId === "H1-S-007");
+      if (crashScenario !== undefined && packagedLifecycle.evidencePath !== undefined) {
+        const index = scenarios.indexOf(crashScenario);
+        scenarios[index] = { ...crashScenario, evidencePaths: [packagedLifecycle.evidencePath] };
+      }
+    }
+    const acceptanceMatrix = buildAcceptanceMatrix(scenarios, { c2Blocked, d1RealAvailable, packagedLifecycleReady });
     const modeStatus = (mode: PersonalBuildExecutionMode, ids: string[]): { status: PersonalBuildGateStatus; scenarioIds: string[]; note?: string } => {
       const relevant = scenarios.filter((item) => item.mode === mode && ids.includes(item.testId));
       const failed = relevant.some((item) => item.status === "fail");
@@ -63,7 +78,8 @@ async function main(): Promise<void> {
         { name: "Office Skill adapter", status: officeReady ? "ready" : "attention", evidence: officeReady ? "external redacted evidence supplied" : "fixture-only; real evidence missing" },
         { name: "PaddleOCR/OvisOCR2", status: ocrReady ? "ready" : "unavailable", evidence: ocrReady ? "external redacted evidence supplied" : "local runtime or evidence missing" },
         { name: "Pinned pi-mcp-adapter", status: mcpReady ? "ready" : "unavailable", evidence: mcpReady ? "external redacted evidence supplied" : "locked adapter or evidence missing" },
-        { name: "Sub-Agent provider path", status: d1RealAvailable ? "ready" : "attention", evidence: d1RealAvailable ? "external redacted evidence supplied" : "fixture adapter only" }
+        { name: "Sub-Agent provider path", status: d1RealAvailable ? "ready" : "attention", evidence: d1RealAvailable ? "external redacted evidence supplied" : "fixture adapter only" },
+        { name: "Packaged lifecycle evidence", status: packagedLifecycleReady ? "ready" : "attention", evidence: packagedLifecycleReady ? "external redacted evidence supplied" : "packaged lifecycle evidence missing" }
       ],
       environmentDoctor: {
         storage: { status: "ready", message: "Temporary local state is writable; no credential values exported." },
@@ -78,13 +94,13 @@ async function main(): Promise<void> {
       executionModes: modes,
       acceptanceMatrix,
       unavailableDependencies: [
-        ...(c2Blocked ? ["C2/G3 real Office, OCR and MCP dependency evidence"] : []),
+        ...(c2Missing.length === 0 ? [] : [`C2/G3 real dependency evidence missing: ${c2Missing.join(", ")}`]),
         ...(!d1RealAvailable ? ["D1 real provider-backed child-session evidence"] : [])
       ],
       deferredScope: [
         ...(c2Blocked ? ["C2 real dependency gate remains blocked"] : []),
         ...(!d1RealAvailable ? ["D1 provider-backed child session and Output adoption E2E"] : []),
-        "H1 full process-tree and single-instance evidence requires packaged desktop execution"
+        ...(!packagedLifecycleReady ? ["H1 packaged process-tree, external-edit, backup/restore, and single-instance evidence"] : [])
       ],
       evidenceRoot: outputRoot,
       secretScanInputs: ["credentialRef: local-reference-only", "no prompt, Memory, OCR text, MCP body or package bytes exported", "fixture adapter made zero provider requests"]
@@ -202,7 +218,7 @@ function readIntegrationComponents(path: string): Record<"office" | "ocr" | "mcp
 }
 function isExternalEvidence(path: string | undefined): boolean { return path !== undefined && existsSync(resolve(path)) && resolve(path) !== resolve(process.cwd()) && !resolve(path).startsWith(resolve(process.cwd()) + "\\"); }
 
-function buildAcceptanceMatrix(scenarios: readonly Scenario[], input: { c2Blocked: boolean; d1RealAvailable: boolean }): PersonalBuildAcceptanceCriterion[] {
+function buildAcceptanceMatrix(scenarios: readonly Scenario[], input: { c2Blocked: boolean; d1RealAvailable: boolean; packagedLifecycleReady: boolean }): PersonalBuildAcceptanceCriterion[] {
   const statusFor = (id: string, blocked = false): PersonalBuildGateStatus => blocked ? "blocked" : scenarios.some((item) => item.status === "fail" && item.testId === id) ? "fail" : "pass";
   return [
     ["H1-REQ-001", "Acceptance coverage", statusFor("H1-S-010"), ["H1-S-010", "design-doc:testing-and-acceptance"]],
@@ -211,19 +227,19 @@ function buildAcceptanceMatrix(scenarios: readonly Scenario[], input: { c2Blocke
     ["H1-REQ-004", "Unscoped isolation", statusFor("H1-S-005"), ["H1-S-005", "H1-S-010"]],
     ["H1-REQ-005", "Bounded concurrency", statusFor("H1-S-006"), ["H1-S-006"]],
     ["H1-REQ-006", "Interruption and no replay", statusFor("H1-S-007"), ["H1-S-007"]],
-    ["H1-REQ-007", "Process termination", "blocked", ["H1-S-007"], "Packaged desktop process-tree evidence is not collected by the deterministic runner."],
+    ["H1-REQ-007", "Process termination", statusFor("H1-S-007", !input.packagedLifecycleReady), ["H1-S-007", "external/h1/packaged-lifecycle.json"], ...(input.packagedLifecycleReady ? [] : ["Packaged desktop process-tree evidence is not collected by the deterministic runner."])],
     ["H1-REQ-008", "Atomic write integrity", statusFor("H1-S-002"), ["H1-S-002", "H1-S-010"]],
     ["H1-REQ-009", "Unknown tool outcome", statusFor("H1-S-004", input.c2Blocked), ["H1-S-004"]],
     ["H1-REQ-010", "Migration and recovery", statusFor("H1-S-008"), ["H1-S-008"]],
-    ["H1-REQ-011", "External edit stale policies", "blocked", ["H1-S-002"], "Requires packaged desktop external-edit lifecycle evidence."],
+    ["H1-REQ-011", "External edit stale policies", statusFor("H1-S-002", !input.packagedLifecycleReady), ["H1-S-002", "external/h1/packaged-lifecycle.json"], ...(input.packagedLifecycleReady ? [] : ["Requires packaged desktop external-edit lifecycle evidence."])],
     ["H1-REQ-012", "Deletion cascade", statusFor("H1-S-009"), ["H1-S-009"]],
     ["H1-REQ-013", "Secret boundary", statusFor("H1-S-010"), ["H1-S-010", "gate:zero-secret-scan"]],
     ["H1-REQ-014", "Scope and authority", statusFor("H1-S-005"), ["H1-S-005", "H1-S-010"]],
     ["H1-REQ-015", "No hidden activation", statusFor("H1-S-001"), ["H1-S-001", "H1-S-010"]],
     ["H1-REQ-016", "No fallback", statusFor("H1-S-004", input.c2Blocked || !input.d1RealAvailable), ["H1-S-004", "H1-S-005"]],
     ["H1-REQ-017", "Observability", statusFor("H1-S-005"), ["H1-S-005", "H1-S-006"]],
-    ["H1-REQ-018", "Backup and restore", "blocked", ["H1-S-003"], "Deterministic backup coverage exists, but packaged restore evidence is deferred."],
-    ["H1-REQ-019", "Single instance", "blocked", ["H1-S-001"], "Requires packaged second-instance focus evidence."],
+    ["H1-REQ-018", "Backup and restore", statusFor("H1-S-003", !input.packagedLifecycleReady), ["H1-S-003", "external/h1/packaged-lifecycle.json"], ...(input.packagedLifecycleReady ? [] : ["Deterministic backup coverage exists, but packaged restore evidence is deferred."])],
+    ["H1-REQ-019", "Single instance", statusFor("H1-S-001", !input.packagedLifecycleReady), ["H1-S-001", "external/h1/packaged-lifecycle.json"], ...(input.packagedLifecycleReady ? [] : ["Requires packaged second-instance focus evidence."])],
     ["H1-REQ-020", "Usability", statusFor("H1-S-002", input.c2Blocked || !input.d1RealAvailable), ["H1-S-002", "H1-S-004", "H1-S-005"]]
   ].map(([criterionId, requirement, status, evidence, note]) => ({ criterionId, requirement, status, evidence, ...(note === undefined ? {} : { note }) })) as PersonalBuildAcceptanceCriterion[];
 }

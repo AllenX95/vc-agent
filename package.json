@@ -15,6 +15,8 @@
     "personal-build-gate": "pnpm exec esbuild scripts/run-personal-build-gate.ts --bundle --platform=node --format=cjs --outfile=test-results/run-personal-build-gate.cjs && node test-results/run-personal-build-gate.cjs",
     "skills:provision:anthropic": "pnpm exec esbuild scripts/provision-anthropic-skills.ts --bundle --platform=node --format=cjs --outfile=test-results/provision-anthropic-skills.cjs && node test-results/provision-anthropic-skills.cjs",
     "office:compat": "pnpm exec esbuild scripts/run-real-office-compat.ts --bundle --platform=node --format=cjs --outfile=test-results/run-real-office-compat.cjs && node test-results/run-real-office-compat.cjs",
+    "mcp:compat": "pnpm exec esbuild scripts/run-real-mcp-compat.ts --bundle --platform=node --format=cjs --outfile=test-results/run-real-mcp-compat.cjs && node test-results/run-real-mcp-compat.cjs",
+    "h1:packaged": "pnpm build && pnpm exec esbuild scripts/run-packaged-h1-evidence.ts --bundle --platform=node --format=cjs --outfile=test-results/run-packaged-h1-evidence.cjs && node test-results/run-packaged-h1-evidence.cjs",
     "test:e2e": "pnpm build && playwright test",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm test:e2e"

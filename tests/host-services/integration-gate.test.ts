@@ -34,6 +34,7 @@ describe("Integration Gate report", () => {
         { testId: "G3-T-004", scenario: "Mixed PDF page recovery", status: "pass", durationMs: 2 },
         { testId: "G3-T-005", scenario: "Lazy MCP read/write/failure fixture", status: "pass", durationMs: 2 },
         { testId: "G3-T-006", scenario: "Extension admission and revision fixture", status: "pass", durationMs: 3 },
+        { testId: "G3-T-010", scenario: "External sanitized dependency evidence", status: "pass", durationMs: 1, evidencePath: "external/ocr/compatibility.json" },
         { testId: "G3-T-011", scenario: "Personal Build real Office Skill", status: "blocked", durationMs: 0, warning: "Requires an explicit User-supplied package and dependency run." }
       ],
       migrationVersions: [1],
@@ -46,6 +47,7 @@ describe("Integration Gate report", () => {
     expect(artifacts.report.zeroSecretScan.passed).toBe(true);
     expect(readFileSync(artifacts.jsonPath, "utf8")).not.toContain("secret-value");
     expect(readFileSync(artifacts.jsonPath, "utf8")).not.toContain(outputRoot);
+    expect(artifacts.report.evidencePaths).toContain("external/ocr/compatibility.json");
     expect(existsSync(artifacts.markdownPath)).toBe(true);
   });
 });

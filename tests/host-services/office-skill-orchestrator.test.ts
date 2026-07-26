@@ -115,4 +115,62 @@ describe("Office Skill Orchestrator", () => {
     expect(unknown).toMatchObject({ status: "unknown_outcome", code: "UNKNOWN_TOOL_OUTCOME", requiresInspection: true });
     expect(readFileSync(source, "utf8")).toBe("original");
   });
+
+  it("cancels a running job through the adapter termination boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vc-office-cancel-"));
+    roots.push(root);
+    const { manager, revisionId } = await activeSkill(root);
+    let started = false;
+    let terminated = 0;
+    const orchestrator = new OfficeSkillOrchestrator({
+      skills: manager,
+      root: join(root, "office-state"),
+      adapter: {
+        run: async ({ signal }) => {
+          started = true;
+          await new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("OFFICE_JOB_CANCELLED")), { once: true }));
+          throw new Error("OFFICE_JOB_CANCELLED");
+        },
+        terminate: () => { terminated += 1; }
+      }
+    });
+    const plan = await orchestrator.prepare(request(root, revisionId, "create"));
+    const running = orchestrator.execute(plan.planId);
+    expect(orchestrator.getTask(plan.job.jobId)?.plan.planId).toBe(plan.planId);
+    const deadline = Date.now() + 2_000;
+    while (!started && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+    expect(started).toBe(true);
+    await expect(orchestrator.cancel(plan.job.jobId)).resolves.toMatchObject({ jobId: plan.job.jobId, status: "cancelled" });
+    await expect(running).resolves.toMatchObject({ status: "cancelled" });
+    expect(terminated).toBe(1);
+  });
+
+  it("rejects external source edits before and during an Office run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vc-office-stale-"));
+    roots.push(root);
+    const source = join(root, "source.docx");
+    writeFileSync(source, "original", "utf8");
+    const { manager, revisionId } = await activeSkill(root);
+    let runs = 0;
+    const orchestrator = new OfficeSkillOrchestrator({
+      skills: manager,
+      root: join(root, "office-state"),
+      adapter: { run: async ({ plan }) => { runs += 1; writeFileSync(plan.stagedOutputPath, "edited", "utf8"); return { outputPath: plan.stagedOutputPath }; } }
+    });
+    const beforePlan = await orchestrator.prepare(request(root, revisionId, "edit", source));
+    writeFileSync(source, "changed before execute", "utf8");
+    const before = await orchestrator.execute(beforePlan.planId);
+    expect(before).toMatchObject({ status: "failed", warnings: ["OFFICE_SOURCE_CHANGED"] });
+    expect(runs).toBe(0);
+
+    writeFileSync(source, "original again", "utf8");
+    const duringOrchestrator = new OfficeSkillOrchestrator({
+      skills: manager,
+      root: join(root, "office-state-during"),
+      adapter: { run: async ({ plan }) => { writeFileSync(plan.stagedOutputPath, "edited", "utf8"); writeFileSync(source, "changed during execute", "utf8"); return { outputPath: plan.stagedOutputPath }; } }
+    });
+    const duringPlan = await duringOrchestrator.prepare(request(root, revisionId, "edit", source));
+    const during = await duringOrchestrator.execute(duringPlan.planId);
+    expect(during).toMatchObject({ status: "failed", warnings: ["OFFICE_SOURCE_CHANGED"] });
+  });
 });

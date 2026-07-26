@@ -264,8 +264,8 @@ export class OfficeSkillOrchestrator {
     }
   }
 
-  getTask(planId: string): { readonly plan: OfficeExecutionPlan; readonly result?: OfficeStagedResult; readonly output?: ProjectOfficeOutput } | undefined {
-    const found = this.findByPlan(planId);
+  getTask(planOrJobId: string): { readonly plan: OfficeExecutionPlan; readonly result?: OfficeStagedResult; readonly output?: ProjectOfficeOutput } | undefined {
+    const found = this.#tasks.get(planOrJobId) ?? this.findByPlan(planOrJobId);
     return found === undefined ? undefined : { ...found };
   }
 
@@ -275,7 +275,12 @@ export class OfficeSkillOrchestrator {
     return found?.result === undefined ? undefined : { plan: found.plan, result: found.result, ...(found.output === undefined ? {} : { output: found.output }) };
   }
 
-  async cancel(jobId: string): Promise<void> { await this.#jobs.cancel(jobId); }
+  async cancel(planOrJobId: string): Promise<{ readonly jobId: string; readonly status: "cancelled" | "not_found" }> {
+    const stored = this.#tasks.get(planOrJobId) ?? this.findByPlan(planOrJobId);
+    const jobId = stored?.plan.job.jobId ?? planOrJobId;
+    const result = await this.#jobs.cancel(jobId);
+    return { jobId, status: result.status };
+  }
 
   async shutdown(): Promise<void> { await this.#jobs.shutdown(10_000); }
 
@@ -284,7 +289,7 @@ export class OfficeSkillOrchestrator {
   private saveResult(plan: OfficeExecutionPlan, result: OfficeStagedResult, failureCode?: string): OfficeStagedResult {
     const stored = this.#tasks.get(plan.job.jobId);
     if (stored === undefined) return result;
-    stored.result = failureCode === undefined ? result : { ...result, warnings: [...result.warnings, failureCode] };
+    stored.result = failureCode === undefined ? result : { ...result, warnings: [...new Set([...result.warnings, failureCode])] };
     this.save();
     return stored.result;
   }

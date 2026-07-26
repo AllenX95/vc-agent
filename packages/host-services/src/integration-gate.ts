@@ -121,7 +121,13 @@ function markdownSummary(report: IntegrationGateReport): string {
 function atomicWrite(path: string, content: string): void { const partial = path + ".partial"; writeFileSync(partial, content, "utf8"); renameSync(partial, path); }
 
 function safeEvidencePath(path: string, evidenceRoot: string | undefined): string {
-  const candidate = evidenceRoot === undefined ? path : relative(resolve(evidenceRoot), resolve(path));
+  const input = path.replaceAll("\\", "/");
+  // Real dependency validators return a deliberately opaque logical path
+  // (`external/<kind>/compatibility.json`) rather than the user's absolute
+  // evidence location. Preserve that path instead of resolving it against
+  // the repository and incorrectly turning it into `evidence/invalid-path`.
+  const logical = input.startsWith("external/") ? input : undefined;
+  const candidate = logical ?? (evidenceRoot === undefined ? path : relative(resolve(evidenceRoot), resolve(path)));
   const normalized = candidate.replaceAll("\\", "/");
   if (normalized === "" || normalized === "." || normalized === ".." || normalized.startsWith("../") || /^[A-Za-z]:/u.test(normalized) || normalized.startsWith("/")) return "evidence/invalid-path";
   return normalized.slice(0, 240);

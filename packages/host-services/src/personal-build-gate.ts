@@ -108,6 +108,11 @@ function markdownSummary(report: PersonalBuildGateReport): string {
 }
 
 function atomicWrite(path: string, content: string): void { const partial = `${path}.partial`; writeFileSync(partial, content, "utf8"); renameSync(partial, path); }
-function safeEvidencePath(path: string, root: string | undefined): string { const value = (root === undefined ? path : path.replace(resolve(root), "")).replaceAll("\\", "/").replace(/^\/+/, ""); return value === "" || value === "." || value === ".." || value.startsWith("../") || /^[A-Za-z]:/u.test(value) ? "evidence/invalid-path" : value.slice(0, 240); }
+function safeEvidencePath(path: string, root: string | undefined): string {
+  const input = path.replaceAll("\\", "/");
+  const logical = input.startsWith("external/") ? input : undefined;
+  const value = (logical ?? (root === undefined ? path : path.replace(resolve(root), ""))).replaceAll("\\", "/").replace(/^\/+/, "");
+  return value === "" || value === "." || value === ".." || value.startsWith("../") || /^[A-Za-z]:/u.test(value) ? "evidence/invalid-path" : value.slice(0, 240);
+}
 function sanitize(value: string): string { return value.replace(/[A-Za-z]:\\[^\s,;]+|(?:\\\\|\/)(?:Users|home|tmp|var|private)[^\s,;]*/giu, "<local-path>").replace(/(?:api[_-]?key|token|secret|password|credential)\s*[:=]\s*[^\s,;]+/giu, "<redacted>").slice(0, 400); }
 function containsSecret(value: string): boolean { return /(api[_-]?key|bearer\s+|password\s*[:=]|secret\s*[:=]|token\s*[:=])/iu.test(value); }

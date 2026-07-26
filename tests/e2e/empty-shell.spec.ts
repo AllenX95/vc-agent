@@ -282,6 +282,44 @@ test("executes an explicitly configured Office runner through the Utility Worker
   }
 });
 
+test("cancels a running Office runner and reports an interrupted job", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-office-cancel-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-office-cancel-project-e2e-"));
+  const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-office-cancel-skill-e2e-"));
+  writeFileSync(join(projectDirectory, "source.docx"), "source bytes", "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: Explicit Office Runner\ndescription: runner cancellation fixture\n---\n# Explicit Office Runner\n", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, {
+    VC_AGENT_TEST_PROJECT_PATH: projectDirectory,
+    VC_AGENT_TEST_SKILL_SOURCE: skillSource,
+    VC_AGENT_REAL_OFFICE: "1",
+    VC_AGENT_OFFICE_RUNNER: process.execPath,
+    VC_AGENT_OFFICE_RUNNER_ARGS: JSON.stringify([join(root, "tests/fixtures/office-runner.mjs"), "--delay-ms", "20000"])
+  });
+  try {
+    const window = await application.firstWindow();
+    await invokeRaw(window, "project.open");
+    await window.getByRole("button", { name: `New thread in ${projectDirectory.split(/[\\/]/).at(-1)!}` }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Import Skill" }).click();
+    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
+    await skillRow.getByRole("button", { name: "Inspect" }).click();
+    await skillRow.getByRole("button", { name: "Activate" }).click();
+    const officeCard = window.getByTestId("integrations-settings").locator(".integration-card").filter({ hasText: "Office Skills" });
+    await officeCard.getByRole("button", { name: "Prepare Office task" }).click();
+    await officeCard.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(officeCard.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await officeCard.getByRole("button", { name: "Cancel" }).click();
+    await expect(officeCard).toContainText("office:create · interrupted", { timeout: 15_000 });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+    rmSync(skillSource, { recursive: true, force: true });
+  }
+});
+
 test("keeps old state active when staged migration fails", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-migration-failure-e2e-"));
   const root = resolve(import.meta.dirname, "../..");

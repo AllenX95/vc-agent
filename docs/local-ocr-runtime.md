@@ -16,13 +16,14 @@ Run from the repository root in PowerShell:
 .\scripts\deploy-local-ocr.ps1 -Profile Nvidia -RuntimeRoot E:\vc-agent-runtime\ocr
 ```
 
-Use `-Profile Cpu` for a CPU-only installation. The NVIDIA profile installs and validates both CPU and CUDA paths. It creates isolated `paddle-venv` and `ovis-venv` environments because loading PaddlePaddle and PyTorch CUDA libraries into one Windows Python process can cause cuDNN DLL conflicts.
+Use `-Profile Cpu` for a CPU-only installation. The NVIDIA profile installs and validates both CPU and CUDA paths. It creates a parser `venv` plus isolated `paddle-venv` and `ovis-venv` environments because loading PaddlePaddle and PyTorch CUDA libraries into one Windows Python process can cause cuDNN DLL conflicts. The parser venv installs the pinned `apps/utility-worker/requirements.txt` set and is exported as `VC_AGENT_PYTHON`; OCR stages continue to use their own environments.
 
 The deployment pins PaddleOCR 3.7.0, PaddlePaddle 3.3.1, PyTorch 2.13.0, Transformers 5.14.1, and OvisOCR2 revision `65c619d374b55d4152e85150fc1b003700bc1f0c`. Model weights and validation evidence remain outside Git.
 
 ## Runtime controls
 
 - `VC_AGENT_OCR_RUNTIME_ROOT`: deployed runtime directory.
+- `VC_AGENT_PYTHON`: parser venv used by the Utility Worker for pinned Canonical Parse dependencies.
 - `VC_AGENT_OCR_DEVICE`: `auto`, `cpu`, or `cuda`; `auto` prefers validated CUDA.
 - `VC_AGENT_OVIS_MAX_NEW_TOKENS`: optional Ovis generation bound; default is 2048.
 - `VC_AGENT_REAL_OCR_EVIDENCE`: redacted CPU/CUDA validation evidence used by the integration gate.

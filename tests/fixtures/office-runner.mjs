@@ -7,7 +7,14 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
+  void run();
+});
+
+async function run() {
   const manifest = JSON.parse(input);
+  const delayIndex = process.argv.indexOf("--delay-ms");
+  const delayMs = delayIndex >= 0 ? Number(process.argv[delayIndex + 1] ?? 0) : 0;
+  if (Number.isFinite(delayMs) && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   const source = manifest.kind === "edit" && manifest.inputPaths?.[0] ? readFileSync(manifest.inputPaths[0]) : undefined;
   const marker = source === undefined ? "created" : "edited";
   writeFileSync(manifest.outputPath, zip({
@@ -16,7 +23,7 @@ process.stdin.on("end", () => {
     "docProps/core.xml": `<coreProperties><subject>${manifest.format}</subject></coreProperties>`
   }));
   if (manifest.previewPath) writeFileSync(manifest.previewPath, "%PDF-1.7\nfixture preview\n");
-});
+}
 
 function zip(files) {
   const local = [];

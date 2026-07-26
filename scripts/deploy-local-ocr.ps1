@@ -9,15 +9,17 @@ param(
 $ErrorActionPreference = "Stop"
 $runtimePath = [System.IO.Path]::GetFullPath($RuntimeRoot)
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$parserVenv = Join-Path $runtimePath "venv"
 $paddleVenv = Join-Path $runtimePath "paddle-venv"
 $ovisVenv = Join-Path $runtimePath "ovis-venv"
+$parserPython = Join-Path $parserVenv "Scripts\python.exe"
 $paddlePython = Join-Path $paddleVenv "Scripts\python.exe"
 $ovisPython = Join-Path $ovisVenv "Scripts\python.exe"
 $modelRoot = Join-Path $runtimePath "models\ovisocr2"
 $ovisRevision = "65c619d374b55d4152e85150fc1b003700bc1f0c"
 
 New-Item -ItemType Directory -Force -Path $runtimePath | Out-Null
-foreach ($venv in @($paddleVenv, $ovisVenv)) {
+foreach ($venv in @($parserVenv, $paddleVenv, $ovisVenv)) {
   $candidate = Join-Path $venv "Scripts\python.exe"
   if (-not (Test-Path -LiteralPath $candidate)) {
     & $PythonExe -m venv $venv
@@ -28,6 +30,8 @@ foreach ($python in @($paddlePython, $ovisPython)) {
   & $python -m pip install --upgrade pip setuptools wheel
   if ($LASTEXITCODE -ne 0) { throw "Failed to bootstrap OCR virtual environment: $python" }
 }
+& $parserPython -m pip install -r (Join-Path $repoRoot "apps\utility-worker\requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "Failed to install pinned Utility Worker parser dependencies." }
 
 if ($Profile -eq "Nvidia") {
   & $ovisPython -m pip install "torch==2.13.0" "torchvision==0.28.0" --index-url https://download.pytorch.org/whl/cu130
@@ -61,8 +65,10 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to download the pinned OvisOCR2 snapsho
 [Environment]::SetEnvironmentVariable("VC_AGENT_OCR_RUNTIME_ROOT", $runtimePath, "User")
 [Environment]::SetEnvironmentVariable("VC_AGENT_OCR_PYTHON", $null, "User")
 [Environment]::SetEnvironmentVariable("VC_AGENT_OCR_DEVICE", "auto", "User")
+[Environment]::SetEnvironmentVariable("VC_AGENT_PYTHON", $parserPython, "User")
 $env:VC_AGENT_OCR_RUNTIME_ROOT = $runtimePath
 $env:VC_AGENT_OCR_DEVICE = "auto"
+$env:VC_AGENT_PYTHON = $parserPython
 
 if (-not $SkipValidation) {
   $validationScript = Join-Path $repoRoot "scripts\validate-local-ocr.py"

@@ -100,7 +100,12 @@ export class UtilityJobRunner {
         this.#spawned = null;
         return failure(command, "UTILITY_WORKER_UNAVAILABLE", error instanceof Error ? error.message : "Utility Worker could not start.");
       }
-      return new Promise((resolve) => {
+      // Await the pending response before leaving this try/finally. Without
+      // the await, the async function would run finally immediately after
+      // posting the message and clear #currentJobId while the worker was
+      // still running. A cancellation would then be misclassified as a
+      // queued-job cancellation and leave the active process tree alive.
+      return await new Promise((resolve) => {
         const timer = setTimeout(() => {
           this.#pending.delete(command.jobId);
           if (this.#process !== null) terminateProcessTree(this.#process.pid, () => this.#process?.kill());

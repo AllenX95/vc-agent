@@ -36,6 +36,15 @@ describe("real dependency evidence", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("accepts complete sanitized MCP compatibility evidence", () => {
+    const root = evidenceRoot();
+    try {
+      const path = join(root, "mcp.json");
+      writeFileSync(path, JSON.stringify({ schemaVersion: 1, kind: "mcp-compatibility", sanitized: true, adapterVersion: "pi-mcp-adapter@1.5.1", packageRevision: "pi-mcp-adapter@1.5.1", workflows: ["lazy-read", "confirmed-write", "restart"] }));
+      expect(inspectRealDependencyEvidence({ kind: "mcp", path, repositoryRoot: process.cwd() })).toMatchObject({ valid: true, evidencePath: "external/mcp/compatibility.json" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("rejects missing sanitization and secret-shaped values", () => {
     const root = evidenceRoot();
     try {

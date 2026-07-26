@@ -35,6 +35,7 @@ export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmissi
 export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, createSubAgentProfileResolver, zeroSubAgentUsage, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
 export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, type PersonalBuildDependency, type PersonalBuildExecutionMode, type PersonalBuildGateArtifacts, type PersonalBuildGateInput, type PersonalBuildGateReport, type PersonalBuildGateStatus, type PersonalBuildScenarioResult } from "./personal-build-gate.js";
 export { inspectRealDependencyEvidence, type RealDependencyEvidenceCheck, type RealDependencyKind } from "./real-dependency-evidence.js";
+export { inspectPackagedLifecycleEvidence, type PackagedLifecycleEvidenceCheck } from "./personal-build-evidence.js";
 export {
   AgentRuntimeSupervisor,
   LocalJobSupervisor,

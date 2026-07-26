@@ -780,7 +780,12 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "office.task.cancel": {
         if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
-        try { await officeOrchestrator.cancel(command.payload.jobId); return integrationStateEvent(command.correlationId, "changed"); }
+        try {
+          const cancellation = await officeOrchestrator.cancel(command.payload.jobId);
+          const task = officeOrchestrator.getTask(command.payload.jobId);
+          if (cancellation.status === "cancelled" && task !== undefined) emit(integrationJobEvent(command.correlationId, "office", officeJobProjection(task.plan.planId, "interrupted", "Office task was cancelled before its result was committed.", new Date().toISOString())));
+          return integrationStateEvent(command.correlationId, "changed");
+        }
         catch (error) { return integrationDiagnostic(command.correlationId, "office", error); }
       }
       case "office.result.commit": {

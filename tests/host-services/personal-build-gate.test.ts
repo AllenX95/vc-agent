@@ -1,8 +1,8 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { writePersonalBuildGateReport } from "@vc-agent/host-services";
+import { inspectPackagedLifecycleEvidence, writePersonalBuildGateReport } from "@vc-agent/host-services";
 
 describe("personal build gate report", () => {
   it("writes the five execution modes, matrix and sanitized evidence", async () => {
@@ -27,5 +27,23 @@ describe("personal build gate report", () => {
     expect(json).not.toContain(root);
     expect(json).toContain("crash_cancellation");
     expect(json).toContain("H1-REQ-013");
+  });
+
+  it("accepts only complete external packaged lifecycle metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vc-agent-packaged-evidence-"));
+    try {
+      const path = join(root, "h1.json");
+      await writeFile(path, JSON.stringify({
+        schemaVersion: 1,
+        sanitized: true,
+        kind: "h1-packaged-compatibility",
+        buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
+        runner: { mode: "playwright-electron", status: "ready" },
+        workflows: ["process-tree", "external-edit", "backup-restore", "single-instance"],
+        results: ["process-tree", "external-edit", "backup-restore", "single-instance"].map((workflow) => ({ workflow, status: "passed" })),
+        testCount: 4
+      }));
+      expect(inspectPackagedLifecycleEvidence({ path, repositoryRoot: process.cwd() })).toMatchObject({ valid: true, evidencePath: "external/h1/packaged-lifecycle.json" });
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
