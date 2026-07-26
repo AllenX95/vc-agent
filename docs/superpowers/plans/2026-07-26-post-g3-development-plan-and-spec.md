@@ -1,7 +1,7 @@
 # G3 之后的 Personal Build 开发方案与可执行 SPEC
 
 > 日期：2026-07-26
-> 状态：Implementation in progress；P3/D1 与 P4-A 已完成，P4-B/C 仅剩 MCP 真实依赖证据与完整垂直闭环
+> 状态：Implementation complete；P3/D1、P4-A/B/C 与 Release Gate 已完成，P5 文档收口同步中
 > 范围：P3 Provider-backed Sub-Agent、P4 Personal Build Hardening、P5 发布一致性
 > 前置基线：P0/P1/P2 与 G3 已完成；Microsoft Office 是唯一 DOCX 桌面兼容性目标，不使用 LibreOffice
 
@@ -30,33 +30,31 @@
 - `pnpm sub-agent:compat` 已用用户保存的 MIMO Profile 生成仓库外脱敏证据：并行只读、write-capable Output、父采用、stop/cancel、budget exhaustion、显式 Provider Failure 七类场景均通过，secret scan 通过。
 - `pnpm h1:packaged` 已生成有效打包生命周期证据：进程树退出、Word 外部编辑、备份恢复、单实例四类工作流均通过。
 - Microsoft Word COM 兼容性证据和本地 OCR 证据均有效；DOCX 验收只走 Microsoft Office，不使用 LibreOffice。
-- 当前 `integration-gate` 的 G3-T-001 至 G3-T-010 通过，G3-T-011 仅因 MCP 外部适配器/证据缺失而 blocked；`personal-build-gate` 同样只剩 MCP 依赖阻塞。
+- vc-agent 自有 `server-filesystem` MCP 服务已完成真实 lazy-read、confirmed-write、restart 三条工作流；使用固定 `pi-mcp-adapter@1.5.1`，证据写在仓库外。
+- `pnpm integration-gate:release` 的 G3-T-001 至 G3-T-011 全部通过；`pnpm personal-build-gate:release` 的 H1-S-001 至 H1-S-010 全部通过。
 
-仍未关闭的范围是 P4-B/C：需要用户提供真实 MCP 服务命令及读写工具配置，生成仓库外 MCP 脱敏证据，并完成包含 MCP 的完整真实项目垂直闭环；P5 还需同步权威文档和发布运维说明。
+剩余工作仅为 P5 文档/运维同步和定期复跑；当前没有阻塞 Release Gate 的开发缺口。
 
 ## 2. 当前基线与剩余阻塞
 
 ### 2.1 已完成基线
 
 - `pnpm verify` 最新通过：56 个测试文件、241 个单元/集成测试、32 个 E2E 场景。
-- `pnpm integration-gate` 的 G3-T-001 至 G3-T-010 已通过；G3-T-011 仍 blocked，原因仅为 MCP 真实依赖证据缺失，不能宣称 `integration-gate:release` 已通过。
-- Microsoft Word 和 OCR 真实兼容性证据已纳入 Integration Gate；MCP 尚待外部服务配置和证据。
+- `pnpm integration-gate:release` 最新通过：G3-T-001 至 G3-T-011 全部 pass。
+- Microsoft Word、OCR 和 MCP 真实兼容性证据均已纳入 Integration Gate；MCP 使用 vc-agent 自有 `server-filesystem` 运行时。
 - Extension Audit 已使用隔离 Worker；测试可使用确定性 fixture，生产路径不应使用 fixture。
 - Skills 的目标位置是 vc-agent 自身管理的目录，不依赖 `~/claude/skills` 或其他 Agent 的技能目录。
 
 ### 2.2 当前 Personal Build Gate 状态
 
-`pnpm personal-build-gate` 可以在没有 LLM Provider 的情况下运行。目前所有确定性场景均可执行通过；用户保存的 MIMO Profile 已用于生成并校验 D1 Provider 脱敏证据，H1 打包证据、Office 证据和 OCR 证据也已就绪。当前决策仍为 `blocked`，唯一缺口是 MCP 真实依赖证据：
+`pnpm personal-build-gate` 可以在没有 LLM Provider 的情况下运行。目前所有确定性场景均可执行通过；用户保存的 MIMO Profile 已用于生成并校验 D1 Provider 脱敏证据，H1 打包证据、Office、OCR 和 MCP 证据也已就绪。最新 `pnpm personal-build-gate:release` 决策为 `pass`：
 
-1. C2/G3 MCP 真实适配器、读写工具和脱敏证据。
-2. 包含 MCP 的完整真实项目垂直工作流摘要。
+1. H1-S-001 至 H1-S-010 全部通过。
+2. Office、OCR、MCP、Sub-Agent Provider 和 Packaged Lifecycle 证据均通过脱敏校验。
 
 目前受上述证据阻塞的验收项包括：
 
-- H1-REQ-003 完整垂直工作流（MCP 依赖未闭合）
-- H1-REQ-009 未知工具结果（MCP 依赖未闭合）
-- H1-REQ-016 Provider Failure 不静默降级的真实垂直工作流汇总
-- H1-REQ-020 可用性验收（等待完整真实闭环）
+- 无 blocked 验收项；H1-REQ-001 至 H1-REQ-020 均为 `pass`。
 
 ### 2.3 代码层面的主要缺口
 
@@ -72,8 +70,8 @@
 | D1 真实证据 | `sub-agent:compat` 七类场景均已生成并由 Gate 校验脱敏证据 | 已完成 |
 | H1 打包证据 | `h1:packaged` 四类生命周期工作流均已通过 | 已完成；仍受整体 C2/G3 release gate 约束 |
 | Office/OCR 真实证据 | Microsoft Word COM 与本地 OCR 证据均有效 | 已完成；不使用 LibreOffice |
-| MCP 真实证据 | 尚无用户提供的外部 MCP 服务和证据 | P4-B/C 当前唯一外部阻塞 |
-| 文档状态 | 本文已更新本轮实现与 Gate 数字；其他权威索引/运维文档待 P5 同步 | 待完成 |
+| MCP 真实证据 | vc-agent 自有 `server-filesystem` 已通过 `lazy-read`、`confirmed-write`、`restart`，证据在仓库外 | 已完成 |
+| 文档状态 | 本文和 `docs/local-mcp-compatibility.md` 已记录实际配置；其余权威索引按发布流程同步 | 进行中 |
 
 ## 3. 是否需要提供 LLM Provider
 
@@ -81,7 +79,7 @@
 
 当前已经完成的 G3 检查不需要提供 LLM Provider；继续运行 `verify`、Office、OCR、MCP、Integration Gate 和确定性 Personal Build 诊断，也不需要 LLM Provider。
 
-用户已保存并提供 MIMO LLM Profile，本轮已用它完成 P3/D1 的真实 Provider 证据，因此不需要再次配置新的 Provider。P4 的完整真实垂直工作流仍会复用该 Profile；若要让最终 `personal-build-gate:release` 变成 `pass`，当前唯一缺口是 MCP 外部依赖证据和包含 MCP 的完整闭环摘要。
+用户已保存并提供 MIMO LLM Profile，本轮已用它完成 P3/D1 的真实 Provider 证据，因此不需要再次配置新的 Provider。P4 的完整真实垂直工作流复用了该 Profile，最终 `personal-build-gate:release` 已通过。
 
 Gate 脚本本身只验证证据，不应在 Gate 内临时调用 Provider。真实 Provider 调用由独立兼容性/产品 E2E 生成脱敏证据，Gate 再消费该证据。
 
@@ -99,7 +97,7 @@ Gate 脚本本身只验证证据，不应在 Gate 内临时调用 Provider。真
 | D1 真实 Provider 子会话验收 | **是（已完成）** | 已使用保存的 MIMO Profile 证明生产 Adapter、凭据解析、usage、停止和错误行为 |
 | D1 write-capable Output adoption E2E | **是（已完成）** | 已由真实子会话产生并采用 Output |
 | `pnpm h1:packaged` 生命周期场景 | 否 | 进程、外部编辑、备份恢复、单实例不依赖 LLM |
-| 完整真实垂直工作流 | **是** | 继续复用保存的 MIMO Profile；普通会话、Reflection/Dream、Extension Audit、Sub-Agent 至少需真实模型闭环 |
+| 完整真实垂直工作流 | **是（已完成）** | 已复用保存的 MIMO Profile；普通会话、Reflection/Dream、Extension Audit、Sub-Agent 真实闭环证据已被 Gate 接受 |
 | `pnpm personal-build-gate` 诊断 | 否 | 可运行，但缺证据时仍为 `blocked` |
 | `pnpm personal-build-gate:release` 最终通过 | **间接需要** | Gate 不调用模型，但必须读取真实 Provider 证据 |
 
@@ -352,7 +350,7 @@ pnpm h1:packaged
 
 ### 6.2 P4-B 完整真实垂直工作流
 
-状态：进行中。Office/OCR 和真实 Sub-Agent Provider 已就绪，MCP 仍需外部服务配置；在 MCP 证据到位前，完整闭环只能保持 `blocked`，不得用 fixture 代替真实 MCP。
+状态：已完成。Office/OCR、真实 Sub-Agent Provider 和 vc-agent 自有 `server-filesystem` MCP 均已通过真实兼容性证据；MCP 仍不得以 fixture 证据替代。
 
 #### P4-REQ-005 单项目闭环
 
@@ -379,7 +377,7 @@ pnpm h1:packaged
 
 ### 6.3 P4-C Release Gate
 
-状态：等待 MCP 证据。当前 Gate 已正确消费 D1、H1、Office、OCR 证据；缺少 MCP 时返回 `blocked`，而不是误报 `pass`。
+状态：已完成。当前 Gate 已消费 D1、H1、Office、OCR、MCP 证据并返回 `pass`；缺证据时仍会返回 `blocked`。
 
 #### P4-REQ-007 最终 Gate 输入
 
@@ -416,13 +414,13 @@ pnpm h1:packaged
 
 ### 7.1 P5-REQ-001 状态同步
 
-状态：进行中。本文件已同步 P3/D1、H1、Office/OCR 和 Gate 的最新状态；MCP 证据到位后还需同步 Completion Spec Index、Finalization Plan 和最终 Gate 结果。
+状态：进行中。本文件已同步 P3/D1、H1、Office/OCR、MCP 和 Gate 的最新状态；仍需在发布流程中同步 Completion Spec Index、Finalization Plan。
 
 更新 D1、H1、Completion Spec Index 和 Finalization Plan，清除 C2/G3 的过期 blocked 状态，并记录最终测试数量、证据 schema 和 Gate 命令。
 
 ### 7.2 P5-REQ-002 运维文档
 
-状态：进行中。Provider Profile、Microsoft Office/Word、OCR 和 vc-agent 自有 Skills 目录的运行约束已确定；MCP 配置示例和最终运维故障处理待真实服务接入后补齐。
+状态：已完成本地配置。Provider Profile、Microsoft Office/Word、OCR、MCP 和 vc-agent 自有 Skills 目录的运行约束均已记录；MCP 实际命令/工具配置见 `docs/local-mcp-compatibility.md`。
 
 补充：
 

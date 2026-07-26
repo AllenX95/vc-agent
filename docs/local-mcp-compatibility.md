@@ -31,3 +31,26 @@ pnpm mcp:compat
 ```
 
 The selected write tool must be classified as write-capable by the live schema/name policy. The evidence is accepted by G3-T-011 only when it contains all three workflows (`lazy-read`, `confirmed-write`, `restart`), has the pinned adapter revision, is marked sanitized, and lives outside the repository. A fixture run is useful for adapter tests but must not be copied into the external evidence path to close the real dependency gate.
+
+## Verified vc-agent-owned filesystem service
+
+The current Windows runtime has a real stdio MCP server under the vc-agent-owned runtime directory: `@modelcontextprotocol/server-filesystem@2026.7.10`. The verified tools are `read_text_file` (read) and `write_file` (write). Keep the allowed directory limited to a temporary sandbox; do not grant the server the whole repository unless that is the explicit user intent.
+
+```powershell
+$mcpPackageRoot = Join-Path $env:LOCALAPPDATA 'vc-agent\runtimes\mcp-filesystem\node_modules\.pnpm\@modelcontextprotocol+server-filesystem@2026.7.10_zod@4.4.3\node_modules\@modelcontextprotocol\server-filesystem'
+$mcpServer = Join-Path $mcpPackageRoot 'dist\index.js'
+$mcpAllowedDir = Join-Path $env:TEMP 'vc-agent-mcp-sandbox'
+New-Item -ItemType Directory -Path $mcpAllowedDir -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $mcpAllowedDir 'seed.txt') -Value 'vc-agent MCP seed' -NoNewline
+
+$env:VC_AGENT_REAL_MCP_COMMAND = 'node'
+$env:VC_AGENT_REAL_MCP_ARGS = @($mcpServer, $mcpAllowedDir) | ConvertTo-Json -Compress
+$env:VC_AGENT_REAL_MCP_READ_TOOL = 'read_text_file'
+$env:VC_AGENT_REAL_MCP_WRITE_TOOL = 'write_file'
+$env:VC_AGENT_REAL_MCP_READ_ARGUMENTS = '{"path":"seed.txt"}'
+$env:VC_AGENT_REAL_MCP_WRITE_ARGUMENTS = '{"path":"compatibility-output.txt","content":"vc-agent MCP compatibility"}'
+$env:VC_AGENT_REAL_MCP_EVIDENCE = (Join-Path $env:LOCALAPPDATA 'vc-agent\external-evidence\mcp-compatibility.json')
+pnpm mcp:compat
+```
+
+This exact configuration passed `lazy-read`, `confirmed-write`, and `restart` with `pi-mcp-adapter@1.5.1`. The compatibility command writes only a sanitized evidence summary outside the repository; it does not export tool results, arguments, credentials, or server logs.
