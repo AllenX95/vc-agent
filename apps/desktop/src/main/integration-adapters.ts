@@ -18,14 +18,71 @@ import {
   type PinnedPiMcpAdapter
 } from "@vc-agent/host-services";
 import { createPiMcpAdapter, PI_MCP_ADAPTER_VERSION, type PiMcpServerConfig } from "@vc-agent/pi-adapter/mcp";
-import type { LocalOcrDevice, UtilityJobEvent } from "@vc-agent/contracts";
+import type { LocalOcrDevice, OfficeSkillJobCommand, UtilityJobEvent } from "@vc-agent/contracts";
 import type { UtilityJobRunner } from "./utility-job-runner.js";
 
 /**
  * Electron only owns adapter construction. Adapters stay dormant until their
  * owning workflow calls them; Environment Doctor only consumes availability.
  */
-export function createDesktopOfficeAdapter(): OfficeSkillJobAdapter {
+export interface DesktopOfficeAdapterOptions {
+  /** Utility Worker used for real, user-supplied Skill execution. */
+  readonly runner?: UtilityJobRunner;
+  /** Explicit runner executable; defaults to VC_AGENT_OFFICE_RUNNER. */
+  readonly runnerCommand?: string;
+  /** JSON-free injection seam for tests and packaged launchers. */
+  readonly runnerArgs?: readonly string[];
+  /** Fixture execution is opt-in outside NODE_ENV=test and never a production default. */
+  readonly fixture?: boolean;
+}
+
+export function createDesktopOfficeAdapter(options: DesktopOfficeAdapterOptions = {}): OfficeSkillJobAdapter {
+  const fixture = options.fixture ?? (process.env.NODE_ENV === "test" && process.env.VC_AGENT_REAL_OFFICE !== "1");
+  if (fixture) return createFixtureOfficeAdapter();
+  const runnerSpec = readOfficeRunnerSpec(options);
+  const utilityJobIds = new Map<string, string>();
+  return {
+    async run({ plan, signal }: { readonly plan: OfficeExecutionPlan; readonly signal: AbortSignal }) {
+      if (signal.aborted) throw new Error("OFFICE_JOB_CANCELLED");
+      if (process.env.VC_AGENT_TEST_OFFICE_FAILURE === "1") throw new Error("OFFICE_DEPENDENCY_UNAVAILABLE");
+      if (options.runner === undefined || runnerSpec === undefined) throw new Error("OFFICE_DEPENDENCY_MISSING");
+      const previewPath = plan.task.renderPreview === true ? plan.stagedOutputPath + ".preview" : undefined;
+      const command: OfficeSkillJobCommand = {
+        schemaVersion: 1,
+        jobId: plan.planId,
+        command: "office.skill",
+        kind: plan.task.kind,
+        format: plan.task.format,
+        skillRevisionId: plan.task.skillRevisionId,
+        skillRoot: plan.skillRoot,
+        runner: runnerSpec,
+        inputPaths: [...plan.job.inputPaths],
+        stagingDirectory: plan.job.stagingDirectory,
+        outputPath: plan.stagedOutputPath,
+        ...(previewPath === undefined ? {} : { previewPath }),
+        logPath: join(plan.job.stagingDirectory, "runner.log"),
+        cancellationToken: plan.job.cancellationToken ?? plan.planId,
+        timeoutMs: plan.job.timeoutMs,
+        maxOutputBytes: plan.job.maxOutputBytes
+      };
+      utilityJobIds.set(plan.job.jobId, command.jobId);
+      try {
+        const event = await options.runner.run(command);
+        if (signal.aborted) throw new Error("OFFICE_JOB_CANCELLED");
+        if (event.event === "office.skill.failed") throw new Error(event.code);
+        return { outputPath: event.outputPath, outputBytes: event.outputBytes, ...(event.previewPath === undefined ? {} : { previewPath: event.previewPath }), warnings: event.warnings };
+      } finally {
+        utilityJobIds.delete(plan.job.jobId);
+      }
+    },
+    terminate(jobId: string) {
+      const utilityJobId = utilityJobIds.get(jobId);
+      return utilityJobId === undefined ? undefined : options.runner?.terminate(utilityJobId);
+    }
+  };
+}
+
+function createFixtureOfficeAdapter(): OfficeSkillJobAdapter {
   return {
     async run({ plan, signal }: { readonly plan: OfficeExecutionPlan; readonly signal: AbortSignal }) {
       if (signal.aborted) throw new Error("OFFICE_JOB_CANCELLED");
@@ -38,6 +95,19 @@ export function createDesktopOfficeAdapter(): OfficeSkillJobAdapter {
       return { outputPath: plan.stagedOutputPath, ...(previewPath === undefined ? {} : { previewPath }) };
     }
   };
+}
+
+function readOfficeRunnerSpec(options: DesktopOfficeAdapterOptions): OfficeSkillJobCommand["runner"] | undefined {
+  const executable = (options.runnerCommand ?? process.env.VC_AGENT_OFFICE_RUNNER)?.trim();
+  if (executable === undefined || executable === "") return undefined;
+  if (options.runnerArgs !== undefined) return { executable, args: [...options.runnerArgs] };
+  const encoded = process.env.VC_AGENT_OFFICE_RUNNER_ARGS;
+  if (encoded === undefined || encoded.trim() === "") return { executable, args: [] };
+  try {
+    const args = JSON.parse(encoded) as unknown;
+    if (!Array.isArray(args) || args.some((value) => typeof value !== "string")) return undefined;
+    return { executable, args };
+  } catch { return undefined; }
 }
 
 interface LocalOcrAdapterOptions {

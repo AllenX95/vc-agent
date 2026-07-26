@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalParseSchema, utilityJobCommandSchema, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
+import { canonicalParseSchema, utilityJobCommandSchema, type OfficeSkillJobCommand, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Utility Worker requires an Electron Utility Process parent port");
@@ -18,7 +18,8 @@ parentPort.on("message", (message) => {
 
 async function run(command: UtilityJobCommand): Promise<void> {
   if (command.command === "material.parse") await runMaterialParse(command);
-  else await runOcr(command);
+  else if (command.command === "page_recovery.ocr") await runOcr(command);
+  else await runOfficeSkill(command);
 }
 
 async function runMaterialParse(command: Extract<UtilityJobCommand, { command: "material.parse" }>): Promise<void> {
@@ -66,6 +67,80 @@ async function runOcr(command: Extract<UtilityJobCommand, { command: "page_recov
     parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code: error instanceof OcrRuntimeError ? error.code : "OCR_RUNTIME_FAILED", message: error instanceof Error ? error.message.slice(0, 2_000) : "OCR runtime failed.", stderr: error instanceof OcrRuntimeError ? error.stderr : "" } satisfies UtilityJobEvent);
     if (error instanceof OcrRuntimeError && error.fatal) { ocrRuntimes.get(command.stage)?.close(); ocrRuntimes.delete(command.stage); }
   }
+}
+
+/**
+ * Executes one explicitly configured, user-supplied Office runner. The
+ * Utility Worker owns this process boundary so the Electron Main process never
+ * imports or executes third-party Skill code directly. The runner receives a
+ * JSON manifest on stdin and must write only the declared staged output(s).
+ */
+async function runOfficeSkill(command: OfficeSkillJobCommand): Promise<void> {
+  const outputPath = resolve(command.outputPath);
+  const stagingDirectory = resolve(command.stagingDirectory);
+  const skillRoot = resolve(command.skillRoot);
+  if (!isWithin(stagingDirectory, outputPath) || extname(outputPath).toLowerCase() !== `.${command.format}` || command.inputPaths.some((path) => resolve(path) === outputPath)) {
+    return sendOfficeFailure(command, "OFFICE_JOB_REJECTED", "Office output path is not an isolated staged target.");
+  }
+  if (command.previewPath !== undefined && !isWithin(stagingDirectory, command.previewPath)) {
+    return sendOfficeFailure(command, "OFFICE_JOB_REJECTED", "Office preview path is outside the staging directory.");
+  }
+  if (!isWithin(stagingDirectory, command.logPath)) {
+    return sendOfficeFailure(command, "OFFICE_JOB_REJECTED", "Office log path is outside the staging directory.");
+  }
+  if (!existsSync(skillRoot)) return sendOfficeFailure(command, "OFFICE_SKILL_UNAVAILABLE", "The active Office Skill revision is unavailable.");
+
+  const child = spawn(command.runner.executable, [...command.runner.args], {
+    cwd: skillRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: officeEnvironment()
+  });
+  children.add(child);
+  child.once("close", () => children.delete(child));
+  let stdoutBytes = 0;
+  let stdoutExceeded = false;
+  let stderr = Buffer.alloc(0);
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdoutBytes += chunk.length;
+    if (stdoutBytes > command.maxOutputBytes) {
+      stdoutExceeded = true;
+      terminateOfficeChild(child);
+    }
+  });
+  child.stderr.on("data", (chunk: Buffer) => { stderr = Buffer.concat([stderr, chunk]).subarray(-20_000); });
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; terminateOfficeChild(child); }, command.timeoutMs);
+  child.stdin.end(JSON.stringify({
+    schemaVersion: 1,
+    jobId: command.jobId,
+    kind: command.kind,
+    format: command.format,
+    skillRevisionId: command.skillRevisionId,
+    skillRoot,
+    inputPaths: command.inputPaths.map((path) => resolve(path)),
+    stagingDirectory,
+    outputPath,
+    ...(command.previewPath === undefined ? {} : { previewPath: resolve(command.previewPath) }),
+    logPath: resolve(command.logPath),
+    cancellationToken: command.cancellationToken,
+    timeoutMs: command.timeoutMs,
+    maxOutputBytes: command.maxOutputBytes
+  }) + "\n");
+  const result = await waitForExit(child);
+  clearTimeout(timeout);
+  const sanitizedStderr = sanitizeOfficeLog(stderr.toString("utf8"), command);
+  if (stdoutExceeded) return sendOfficeFailure(command, "OFFICE_OUTPUT_LIMIT_EXCEEDED", "Office runner logs exceeded the declared output bound.", sanitizedStderr);
+  if (timedOut) return sendOfficeFailure(command, "OFFICE_JOB_TIMEOUT", "Office runner exceeded its declared timeout.", sanitizedStderr);
+  if (result.error !== undefined) return sendOfficeFailure(command, "OFFICE_DEPENDENCY_MISSING", result.error.message, sanitizedStderr);
+  if (result.code !== 0) return sendOfficeFailure(command, "OFFICE_RUNNER_FAILED", "The configured Office runner failed.", sanitizedStderr);
+  if (!existsSync(outputPath)) return sendOfficeFailure(command, "OFFICE_RESULT_MISSING", "The Office runner did not create the declared output.", sanitizedStderr);
+  if (!isOfficeArtifact(outputPath, command.format, command.maxOutputBytes)) return sendOfficeFailure(command, "OFFICE_RESULT_INVALID", "The staged file is not a valid Office artifact for the requested format.", sanitizedStderr);
+  const outputBytes = statSync(outputPath).size;
+  if (outputBytes > command.maxOutputBytes) return sendOfficeFailure(command, "OFFICE_OUTPUT_LIMIT_EXCEEDED", "Office output exceeded the declared byte bound.", sanitizedStderr);
+  if (command.previewPath !== undefined && !existsSync(resolve(command.previewPath))) return sendOfficeFailure(command, "OFFICE_RENDER_FAILED", "The Office runner did not create the declared preview.", sanitizedStderr);
+  persistOfficeLog(command, sanitizedStderr);
+  parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "office.skill.completed", outputPath, outputBytes, ...(command.previewPath === undefined ? {} : { previewPath: resolve(command.previewPath) }), warnings: sanitizedStderr === "" ? [] : ["OFFICE_RUNNER_LOG_CAPTURED"] } satisfies UtilityJobEvent);
 }
 
 class OcrRuntimeClient {
@@ -123,6 +198,50 @@ class OcrRuntimeError extends Error {
   constructor(readonly code: string, message: string, readonly stderr: string, readonly fatal: boolean) { super(message); }
 }
 
+function isOfficeArtifact(path: string, format: OfficeSkillJobCommand["format"], maxOutputBytes: number): boolean {
+  try {
+    const size = statSync(path).size;
+    if (size <= 0 || size > maxOutputBytes) return false;
+    const bytes = readFileSync(path);
+    if (format === "pdf") return bytes.subarray(0, 5).toString("ascii") === "%PDF-";
+    if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) return false;
+    return bytes.includes(Buffer.from("[Content_Types].xml", "utf8"));
+  } catch { return false; }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath === "" || (!relativePath.startsWith("..") && !relativePath.startsWith(".." + sep) && !/^[A-Za-z]:/u.test(relativePath));
+}
+
+function sanitizeOfficeLog(value: string, command: OfficeSkillJobCommand): string {
+  let sanitized = value.replaceAll(command.skillRoot, "<skill-root>");
+  for (const inputPath of command.inputPaths) sanitized = sanitized.replaceAll(inputPath, "<input>");
+  sanitized = sanitized.replace(/(api[_-]?key|bearer|password|secret|token)\s*[:=]\s*[^\s,;]+/giu, "$1=<redacted>");
+  return sanitized.slice(-20_000);
+}
+
+function sendOfficeFailure(command: OfficeSkillJobCommand, code: string, message: string, stderr = ""): void {
+  persistOfficeLog(command, stderr);
+  parentPort.postMessage({ schemaVersion: 1, jobId: command.jobId, event: "office.skill.failed", code, message: message.slice(0, 2_000), stderr: stderr.slice(-20_000) } satisfies UtilityJobEvent);
+}
+
+function persistOfficeLog(command: OfficeSkillJobCommand, value: string): void {
+  try {
+    if (isWithin(command.stagingDirectory, command.logPath)) writeFileSync(resolve(command.logPath), value.slice(-Math.min(20_000, command.maxOutputBytes)), "utf8");
+  } catch { /* Diagnostics are best-effort and never change the job outcome. */ }
+}
+
+function terminateOfficeChild(child: ChildProcessWithoutNullStreams): void {
+  if (child.pid === undefined) { child.kill(); return; }
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    killer.once("error", () => { try { child.kill(); } catch { /* process may already be gone */ } });
+  } else {
+    try { child.kill("SIGTERM"); } catch { /* process may already be gone */ }
+  }
+}
+
 function spawnPython(scriptName: string, executable?: string): ChildProcessWithoutNullStreams {
   const python = executable ?? process.env.VC_AGENT_PYTHON?.trim() ?? "python";
   const script = join(dirname(fileURLToPath(import.meta.url)), scriptName);
@@ -155,4 +274,15 @@ function parserEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-process.on("exit", () => { for (const runtime of ocrRuntimes.values()) runtime.close(); for (const child of children) child.kill(); });
+function officeEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? process.env.Path ?? "",
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    TEMP: process.env.TEMP ?? "",
+    TMP: process.env.TMP ?? "",
+    PYTHONUTF8: "1",
+    ...(process.env.VC_AGENT_PYTHON === undefined ? {} : { VC_AGENT_PYTHON: process.env.VC_AGENT_PYTHON })
+  };
+}
+
+process.on("exit", () => { for (const runtime of ocrRuntimes.values()) runtime.close(); for (const child of children) terminateOfficeChild(child); });

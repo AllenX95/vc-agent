@@ -200,11 +200,11 @@ test("completes the desktop C1 fixture paths without eager external activation",
     await skillRow.getByRole("button", { name: "Activate" }).click();
     const integration = window.getByTestId("integrations-settings");
     const officeCard = integration.locator(".integration-card").filter({ hasText: "Office Skills" });
-    await officeCard.getByRole("button", { name: "Prepare fixture Office task" }).click();
+    await officeCard.getByRole("button", { name: "Prepare Office task" }).click();
     await officeCard.getByRole("button", { name: "Run", exact: true }).click();
     await expect(officeCard.getByRole("button", { name: "Commit copy" })).toBeVisible();
     await officeCard.getByRole("button", { name: "Commit copy" }).click();
-    await officeCard.getByRole("button", { name: "Prepare fixture Office edit" }).click();
+    await officeCard.getByRole("button", { name: "Prepare Office edit" }).click();
     await officeCard.getByRole("button", { name: "Run", exact: true }).click();
     await expect(officeCard.getByRole("button", { name: "Request source replacement" })).toBeVisible();
     await officeCard.getByRole("button", { name: "Request source replacement" }).click();
@@ -239,6 +239,46 @@ test("completes the desktop C1 fixture paths without eager external activation",
     rmSync(projectDirectory, { recursive: true, force: true });
     rmSync(skillSource, { recursive: true, force: true });
     rmSync(extensionSource, { recursive: true, force: true });
+  }
+});
+
+test("executes an explicitly configured Office runner through the Utility Worker", async () => {
+  test.setTimeout(60_000);
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-office-runner-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-office-runner-project-e2e-"));
+  const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-office-runner-skill-e2e-"));
+  writeFileSync(join(projectDirectory, "source.docx"), "source bytes are never passed to a fixture engine", "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: Explicit Office Runner\ndescription: runner contract fixture\n---\n# Explicit Office Runner\n", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, {
+    VC_AGENT_TEST_PROJECT_PATH: projectDirectory,
+    VC_AGENT_TEST_SKILL_SOURCE: skillSource,
+    VC_AGENT_REAL_OFFICE: "1",
+    VC_AGENT_OFFICE_RUNNER: process.execPath,
+    VC_AGENT_OFFICE_RUNNER_ARGS: JSON.stringify([join(root, "tests/fixtures/office-runner.mjs")])
+  });
+  try {
+    const window = await application.firstWindow();
+    const opened = await invokeRaw(window, "project.open");
+    const projectId = (opened as { payload: { project: { id: string } } }).payload.project.id;
+    await window.getByRole("button", { name: `New thread in ${projectDirectory.split(/[\\/]/).at(-1)!}` }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Import Skill" }).click();
+    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
+    await skillRow.getByRole("button", { name: "Inspect" }).click();
+    await skillRow.getByRole("button", { name: "Activate" }).click();
+    const integration = window.getByTestId("integrations-settings");
+    const officeCard = integration.locator(".integration-card").filter({ hasText: "Office Skills" });
+    await officeCard.getByRole("button", { name: "Prepare Office task" }).click();
+    await officeCard.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(officeCard.getByRole("button", { name: "Commit copy" })).toBeVisible();
+    await officeCard.getByRole("button", { name: "Commit copy" }).click();
+    expect(projectId).toBeTruthy();
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+    rmSync(skillSource, { recursive: true, force: true });
   }
 });
 

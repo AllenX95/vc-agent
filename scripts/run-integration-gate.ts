@@ -176,7 +176,7 @@ async function runOffice(root: string): Promise<void> {
   const project = join(root, "project"); mkdirSync(project, { recursive: true });
   const sourcePath = join(project, "source.docx"); writeFileSync(sourcePath, "fixture source", "utf8");
   const outputs: Array<{ readonly sourceReferences: readonly string[]; readonly producer: { readonly skillRevisionId: string } }> = [];
-  const orchestrator = new OfficeSkillOrchestrator({ skills, adapter: createDesktopOfficeAdapter(), root: join(root, "office"), registerOutput: (output) => outputs.push(output) });
+  const orchestrator = new OfficeSkillOrchestrator({ skills, adapter: createDesktopOfficeAdapter({ fixture: true }), root: join(root, "office"), registerOutput: (output) => outputs.push(output) });
   const plan = await orchestrator.prepare({ kind: "create", format: "docx", projectId: "project-1", projectPath: project, threadId: "thread-1", turnId: "turn-1", profile: { id: "fixture", provider: "fixture", model: "fixture" }, skillRevisionId: imported.package.revisionId, outputDirectory: join(project, "outputs"), explicitIntent: true });
   const result = await orchestrator.execute(plan.planId); if (result.status !== "validated") throw new Error("OFFICE_FIXTURE_NOT_VALIDATED");
   const output = await orchestrator.commit(result.resultId); if (!existsSync(output.destination)) throw new Error("OFFICE_OUTPUT_MISSING");

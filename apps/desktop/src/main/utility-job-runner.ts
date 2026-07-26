@@ -10,14 +10,18 @@ interface PendingJob {
 
 type MaterialParseCommand = Extract<UtilityJobCommand, { command: "material.parse" }>;
 type OcrCommand = Extract<UtilityJobCommand, { command: "page_recovery.ocr" }>;
+type OfficeCommand = Extract<UtilityJobCommand, { command: "office.skill" }>;
 type MaterialParseEvent = Extract<UtilityJobEvent, { event: "material.parse.completed" | "material.parse.failed" }>;
 type OcrEvent = Extract<UtilityJobEvent, { event: "page_recovery.ocr.completed" | "page_recovery.ocr.failed" }>;
+type OfficeEvent = Extract<UtilityJobEvent, { event: "office.skill.completed" | "office.skill.failed" }>;
 
 export class UtilityJobRunner {
   readonly #entryPath: string;
   #process: UtilityProcess | null = null;
   #spawned: Promise<void> | null = null;
   #pending = new Map<string, PendingJob>();
+  #currentJobId: string | null = null;
+  #cancelledJobIds = new Set<string>();
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
   #shutdownPromise: Promise<void> | null = null;
@@ -26,6 +30,7 @@ export class UtilityJobRunner {
 
   run(command: MaterialParseCommand): Promise<MaterialParseEvent>;
   run(command: OcrCommand): Promise<OcrEvent>;
+  run(command: OfficeCommand): Promise<OfficeEvent>;
   run(command: UtilityJobCommand): Promise<UtilityJobEvent> {
     if (this.#closed) return Promise.resolve(failure(command, "UTILITY_WORKER_CLOSED", "Utility Worker is closed."));
     const result = this.#tail.then(() => this.#execute(command));
@@ -34,6 +39,28 @@ export class UtilityJobRunner {
   }
 
   close(): void { void this.shutdown(0); }
+
+  /**
+   * Interrupts the utility process that owns a bounded job. The worker is
+   * deliberately disposable: a killed worker cannot acknowledge stale output
+   * from a third-party Office runner, and the next request starts a fresh
+   * process with the same allowlisted environment.
+   */
+  async terminate(jobId?: string): Promise<void> {
+    if (jobId !== undefined && this.#currentJobId !== jobId) {
+      this.#cancelledJobIds.add(jobId);
+      return;
+    }
+    const process = this.#process;
+    if (process === null) return;
+    const exited = waitForProcessExit((callback) => process.once("exit", callback), 2_000);
+    terminateProcessTree(process.pid, () => process.kill());
+    await exited;
+    if (this.#process === process) {
+      this.#process = null;
+      this.#spawned = null;
+    }
+  }
 
   async shutdown(deadlineMs = 5_000): Promise<void> {
     if (this.#shutdownPromise !== null) return this.#shutdownPromise;
@@ -51,6 +78,8 @@ export class UtilityJobRunner {
     }
     this.#process = null;
     this.#spawned = null;
+    this.#currentJobId = null;
+    this.#cancelledJobIds.clear();
     for (const [jobId, pending] of this.#pending) {
       clearTimeout(pending.timer);
       pending.resolve(failure(pending.command, "UTILITY_WORKER_EXITED", "Utility Worker closed before the job completed."));
@@ -60,25 +89,31 @@ export class UtilityJobRunner {
 
   async #execute(command: UtilityJobCommand): Promise<UtilityJobEvent> {
     if (this.#closed) return failure(command, "UTILITY_WORKER_CLOSED", "Utility Worker is closed.");
-    this.#ensureWorker();
+    if (this.#cancelledJobIds.delete(command.jobId)) return failure(command, "UTILITY_JOB_CANCELLED", "Utility job was cancelled before it started.");
+    this.#currentJobId = command.jobId;
     try {
-      await this.#spawned;
-    } catch (error) {
-      this.#process = null;
-      this.#spawned = null;
-      return failure(command, "UTILITY_WORKER_UNAVAILABLE", error instanceof Error ? error.message : "Utility Worker could not start.");
-    }
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(command.jobId);
-        if (this.#process !== null) terminateProcessTree(this.#process.pid, () => this.#process?.kill());
+      this.#ensureWorker();
+      try {
+        await this.#spawned;
+      } catch (error) {
         this.#process = null;
         this.#spawned = null;
-        resolve(failure(command, "UTILITY_JOB_TIMEOUT", "Utility job exceeded its timeout."));
-      }, command.timeoutMs + 1_000);
-      this.#pending.set(command.jobId, { command, resolve, timer });
-      this.#process!.postMessage(command);
-    });
+        return failure(command, "UTILITY_WORKER_UNAVAILABLE", error instanceof Error ? error.message : "Utility Worker could not start.");
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          this.#pending.delete(command.jobId);
+          if (this.#process !== null) terminateProcessTree(this.#process.pid, () => this.#process?.kill());
+          this.#process = null;
+          this.#spawned = null;
+          resolve(failure(command, "UTILITY_JOB_TIMEOUT", "Utility job exceeded its declared timeout."));
+        }, command.timeoutMs + 1_000);
+        this.#pending.set(command.jobId, { command, resolve, timer });
+        this.#process!.postMessage(command);
+      });
+    } finally {
+      if (this.#currentJobId === command.jobId) this.#currentJobId = null;
+    }
   }
 
   #ensureWorker(): void {
@@ -125,7 +160,7 @@ function utilityEnvironment(): NodeJS.ProcessEnv {
 }
 
 function failure(command: UtilityJobCommand, code: string, message: string): UtilityJobEvent {
-  return command.command === "material.parse"
-    ? { schemaVersion: 1, jobId: command.jobId, event: "material.parse.failed", code, message, stderr: "" }
-    : { schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code, message, stderr: "" };
+  if (command.command === "material.parse") return { schemaVersion: 1, jobId: command.jobId, event: "material.parse.failed", code, message, stderr: "" };
+  if (command.command === "page_recovery.ocr") return { schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code, message, stderr: "" };
+  return { schemaVersion: 1, jobId: command.jobId, event: "office.skill.failed", code, message, stderr: "" };
 }

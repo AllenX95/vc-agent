@@ -97,8 +97,29 @@ const pageRecoveryOcrJobCommandSchema = utilityJobBaseSchema.extend({
   maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
 });
 
-export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema]);
+const officeSkillJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("office.skill"),
+  kind: z.enum(["create", "edit"]),
+  format: z.enum(["docx", "pptx", "xlsx", "pdf"]),
+  skillRevisionId: z.string().min(1),
+  skillRoot: z.string().min(1),
+  runner: z.object({
+    executable: z.string().min(1),
+    args: z.array(z.string().max(2_000)).max(64)
+  }),
+  inputPaths: z.array(z.string().min(1)).max(8),
+  stagingDirectory: z.string().min(1),
+  outputPath: z.string().min(1),
+  previewPath: z.string().min(1).optional(),
+  logPath: z.string().min(1),
+  cancellationToken: z.string().min(1),
+  timeoutMs: z.number().int().min(1_000).max(1_800_000),
+  maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
+});
+
+export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema, officeSkillJobCommandSchema]);
 export type UtilityJobCommand = z.infer<typeof utilityJobCommandSchema>;
+export type OfficeSkillJobCommand = z.infer<typeof officeSkillJobCommandSchema>;
 
 export const utilityJobEventSchema = z.discriminatedUnion("event", [
   utilityJobBaseSchema.extend({ event: z.literal("material.parse.completed"), artifactPath: z.string().min(1), parse: canonicalParseSchema }),
@@ -115,6 +136,8 @@ export const utilityJobEventSchema = z.discriminatedUnion("event", [
     device: z.enum(["cpu", "cuda"]),
     warnings: z.array(z.string().min(1)).default([])
   }),
-  utilityJobBaseSchema.extend({ event: z.literal("page_recovery.ocr.failed"), stage: z.enum(["paddle", "ovis"]), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
+  utilityJobBaseSchema.extend({ event: z.literal("page_recovery.ocr.failed"), stage: z.enum(["paddle", "ovis"]), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({ event: z.literal("office.skill.completed"), outputPath: z.string().min(1), outputBytes: z.number().int().nonnegative(), previewPath: z.string().min(1).optional(), warnings: z.array(z.string().min(1)).default([]) }),
+  utilityJobBaseSchema.extend({ event: z.literal("office.skill.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
 ]);
 export type UtilityJobEvent = z.infer<typeof utilityJobEventSchema>;

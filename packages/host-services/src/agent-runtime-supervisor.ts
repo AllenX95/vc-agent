@@ -438,7 +438,8 @@ export class LocalJobSupervisor {
       }
     } catch (error) {
       if (!this.#running.has(pending.manifest.jobId)) return;
-      result = { jobId: pending.manifest.jobId, status: controller.signal.aborted ? "cancelled" : "failed", outputPaths: [], outputBytes: 0, warnings: [], code: controller.signal.aborted ? "JOB_CANCELLED" : "LOCAL_JOB_CRASHED" };
+      const declaredCode = error instanceof Error && /^[A-Z][A-Z0-9_]+$/u.test(error.message) ? error.message : "LOCAL_JOB_CRASHED";
+      result = { jobId: pending.manifest.jobId, status: controller.signal.aborted ? "cancelled" : "failed", outputPaths: [], outputBytes: 0, warnings: [], code: controller.signal.aborted ? "JOB_CANCELLED" : declaredCode };
       if (controller.signal.aborted) this.#cancelled += 1; else this.#failed += 1;
     } finally {
       const running = this.#running.get(pending.manifest.jobId);

@@ -17,6 +17,25 @@ describe("real dependency evidence", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("accepts only complete sanitized Office runner evidence", () => {
+    const root = evidenceRoot();
+    try {
+      const path = join(root, "office.json");
+      writeFileSync(path, JSON.stringify({
+        schemaVersion: 1,
+        kind: "office-compatibility",
+        sanitized: true,
+        sourceRevision: "fa0fa64bdc967915dc8399e803be67759e1e62b8",
+        packageIds: ["docx"],
+        formats: ["docx"],
+        runner: { mode: "external-stdin-manifest", status: "ready" },
+        workflows: ["create", "edit", "replace"],
+        results: [{ workflow: "create", status: "validated" }, { workflow: "edit", status: "validated" }, { workflow: "replace", status: "replaced" }]
+      }));
+      expect(inspectRealDependencyEvidence({ kind: "office", path, repositoryRoot: process.cwd() })).toMatchObject({ valid: true, evidencePath: "external/office/compatibility.json" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("rejects missing sanitization and secret-shaped values", () => {
     const root = evidenceRoot();
     try {

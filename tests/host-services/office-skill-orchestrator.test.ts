@@ -76,6 +76,8 @@ describe("Office Skill Orchestrator", () => {
       adapter: { run: async ({ plan }) => { writeFileSync(plan.stagedOutputPath, "edited", "utf8"); return { outputPath: plan.stagedOutputPath }; } }
     });
     const plan = await orchestrator.prepare(request(root, revisionId, "edit", source));
+    expect(plan.job.inputPaths).not.toContain(source);
+    expect(readFileSync(plan.job.inputPaths[0]!, "utf8")).toBe("original");
     const staged = await orchestrator.execute(plan.planId);
     expect(staged.changeSummaryPath).toBeDefined();
     expect(readFileSync(source, "utf8")).toBe("original");

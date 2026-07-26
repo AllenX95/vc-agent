@@ -46,7 +46,16 @@ function validOcrEvidence(value: Record<string, unknown>): boolean {
 }
 
 function validOfficeEvidence(value: Record<string, unknown>): boolean {
-  return typeof value.sourceRevision === "string" && value.sourceRevision.length > 0 && hasWorkflowSet(value.workflows, ["create", "edit", "replace"]);
+  if (typeof value.sourceRevision !== "string" || value.sourceRevision.length === 0 || !hasWorkflowSet(value.workflows, ["create", "edit", "replace"])) return false;
+  const packageIds = value.packageIds;
+  const formats = value.formats;
+  const runner = value.runner;
+  const results = value.results;
+  if (!Array.isArray(packageIds) || packageIds.length === 0 || packageIds.some((item) => typeof item !== "string" || item.length === 0)) return false;
+  if (!Array.isArray(formats) || formats.length === 0 || formats.some((item) => !["docx", "pptx", "xlsx", "pdf"].includes(String(item)))) return false;
+  if (!isRecord(runner) || runner.mode !== "external-stdin-manifest" || runner.status !== "ready") return false;
+  if (!Array.isArray(results)) return false;
+  return ["create", "edit", "replace"].every((workflow) => results.some((item) => isRecord(item) && item.workflow === workflow && ((workflow === "replace" && item.status === "replaced") || (workflow !== "replace" && item.status === "validated"))));
 }
 
 function validMcpEvidence(value: Record<string, unknown>): boolean {

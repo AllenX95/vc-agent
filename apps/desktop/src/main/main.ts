@@ -259,7 +259,10 @@ function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; 
   const imported = ANTHROPIC_SKILLS_SOURCE.skills.filter((definition) => inventory.some((item) => item.packageId === definition.packageId));
   const active = imported.filter((definition) => inventory.some((item) => item.packageId === definition.packageId && item.enabled && item.state === "active"));
   if (imported.length === 0) return { status: "attention", message: "Anthropic docx/pptx/xlsx/skill-creator packages are not imported; run the explicit provisioning command." };
-  return { status: active.length === imported.length ? "ready" : "attention", message: `${active.length}/${imported.length} imported Anthropic package(s) are active. Runtime dependencies are checked only at explicit Skill job admission; no fallback is used.` };
+  const runnerConfigured = (process.env.VC_AGENT_OFFICE_RUNNER?.trim() ?? "") !== "";
+  const status = active.length === imported.length && runnerConfigured ? "ready" : "attention";
+  const dependencyMessage = runnerConfigured ? "an explicit Office runner is configured" : "VC_AGENT_OFFICE_RUNNER is not configured";
+  return { status, message: `${active.length}/${imported.length} imported Anthropic package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
 }
 
 function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
@@ -3132,9 +3135,9 @@ app.whenReady().then(() => {
     isGloballyIdle: () => (executionScheduler?.telemetry().runningCount ?? 0) === 0 && (workerSupervisor?.activity.activeSessions ?? 0) === 0,
     terminateWorkers: () => { workerSupervisor?.closeAll(); }
   });
-  officeOrchestrator = new OfficeSkillOrchestrator({ skills: skillsDirectory, adapter: createDesktopOfficeAdapter(), root: join(app.getPath("userData"), "integrations", "office") });
-  skillCreatorWorkflow = new SkillCreationWorkflow({ manager: skillsDirectory, root: join(app.getPath("userData"), "integrations", "skill-creator") });
   utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
+  officeOrchestrator = new OfficeSkillOrchestrator({ skills: skillsDirectory, adapter: createDesktopOfficeAdapter({ runner: utilityJobRunner }), root: join(app.getPath("userData"), "integrations", "office") });
+  skillCreatorWorkflow = new SkillCreationWorkflow({ manager: skillsDirectory, root: join(app.getPath("userData"), "integrations", "skill-creator") });
   const ocrRuntimeRoot = resolve(process.env.VC_AGENT_OCR_RUNTIME_ROOT ?? join(process.env.LOCALAPPDATA ?? app.getPath("userData"), "vc-agent", "runtimes", "ocr"));
   const localOcrOptions = { runner: utilityJobRunner, runtimeRoot: ocrRuntimeRoot, stagingRoot: join(app.getPath("userData"), "integrations", "page-recovery", "staging") };
   const useFixtureOcr = process.env.NODE_ENV === "test" && process.env.VC_AGENT_REAL_OCR !== "1";
@@ -3373,9 +3376,11 @@ async function shutdownApplication(): Promise<void> {
   const subAgentShutdown = subAgentRuntime?.shutdown() ?? Promise.resolve();
   subAgentRuntime = null;
   const workerShutdown = workerSupervisor?.shutdown(5_000) ?? Promise.resolve();
-  const utilityShutdown = utilityJobRunner?.shutdown(5_000) ?? Promise.resolve();
+  const officeRuntime = officeOrchestrator;
+  const utilityRuntime = utilityJobRunner;
+  const officeShutdown = officeRuntime?.shutdown() ?? Promise.resolve();
+  const utilityShutdown = officeShutdown.then(() => utilityRuntime?.shutdown(5_000) ?? Promise.resolve(), () => utilityRuntime?.shutdown(5_000) ?? Promise.resolve());
   utilityJobRunner = null;
-  const officeShutdown = officeOrchestrator?.shutdown() ?? Promise.resolve();
   const skillCreatorShutdown = skillCreatorWorkflow?.shutdown() ?? Promise.resolve();
   const mcpShutdown = mcpIntegration?.shutdown() ?? Promise.resolve();
   officeOrchestrator = null;

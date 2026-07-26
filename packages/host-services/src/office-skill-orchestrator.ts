@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { LocalJobSupervisor, type LocalJobManifest, type LocalJobResult } from "./agent-runtime-supervisor.js";
 import { SkillPackageManager } from "./skills-directory.js";
 
@@ -28,6 +28,8 @@ export interface OfficeExecutionPlan {
   readonly planId: string;
   readonly task: OfficeTaskRequest;
   readonly job: LocalJobManifest;
+  /** Effective app-owned root of the imported Skill revision selected by I1. */
+  readonly skillRoot: string;
   readonly stagedOutputPath: string;
   readonly expectedSourceHash?: string;
 }
@@ -131,7 +133,8 @@ export class OfficeSkillOrchestrator {
     if (!/^[a-z0-9-]+$/iu.test(request.format)) throw new Error("OFFICE_JOB_REJECTED");
     const skill = this.#manager.getRevision(request.skillRevisionId);
     if (skill === undefined || !skill.enabled || skill.state !== "active") throw new Error("OFFICE_SKILL_UNAVAILABLE");
-    if (!existsSync(this.#manager.activePath(skill))) throw new Error("OFFICE_SKILL_UNAVAILABLE");
+    const skillRoot = this.#manager.activePath(skill);
+    if (!existsSync(skillRoot)) throw new Error("OFFICE_SKILL_UNAVAILABLE");
     if (request.kind === "edit" && (request.sourcePath === undefined || !existsSync(request.sourcePath))) throw new Error("OFFICE_SOURCE_CHANGED");
     if (request.kind === "create" && request.sourcePath !== undefined) throw new Error("OFFICE_JOB_REJECTED");
     const planId = randomUUID();
@@ -140,17 +143,23 @@ export class OfficeSkillOrchestrator {
     const stagedOutputPath = join(stagingDirectory, outputName(request));
     mkdirSync(stagingDirectory, { recursive: true });
     const expectedSourceHash = request.sourcePath === undefined ? undefined : hashFile(request.sourcePath);
+    const inputSnapshotPath = request.sourcePath === undefined ? undefined : join(stagingDirectory, `input-${basename(request.sourcePath)}`);
+    if (request.sourcePath !== undefined && inputSnapshotPath !== undefined) {
+      copyFileSync(request.sourcePath, inputSnapshotPath);
+      if (hashFile(request.sourcePath) !== expectedSourceHash) throw new Error("OFFICE_SOURCE_CHANGED");
+    }
     const job: LocalJobManifest = {
       jobId,
       kind: "isolated",
       stagingDirectory,
-      inputPaths: request.sourcePath === undefined ? [] : [resolve(request.sourcePath)],
+      inputPaths: inputSnapshotPath === undefined ? [] : [inputSnapshotPath],
       outputPaths: [stagedOutputPath, ...(request.renderPreview === true ? [stagedOutputPath + ".preview"] : [])],
       timeoutMs: 300_000,
       maxOutputBytes: 100_000_000,
+      cancellationToken: randomUUID(),
       metadata: { format: request.format, skillRevisionId: request.skillRevisionId }
     };
-    const plan: OfficeExecutionPlan = { planId, task: { ...request, ...(expectedSourceHash === undefined ? {} : {}) }, job, stagedOutputPath, ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }) };
+    const plan: OfficeExecutionPlan = { planId, task: { ...request, ...(expectedSourceHash === undefined ? {} : {}) }, job, skillRoot, stagedOutputPath, ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }) };
     this.#tasks.set(jobId, { plan });
     this.save();
     return plan;
@@ -170,6 +179,9 @@ export class OfficeSkillOrchestrator {
     if (job.status !== "completed") {
       const status = job.status === "cancelled" ? "cancelled" : job.status === "timed_out" ? "timed_out" : "failed";
       return this.saveResult(plan, { resultId: randomUUID(), planId, status, format: plan.task.format, previewPaths: [], warnings: job.warnings, job }, job.code ?? "OFFICE_JOB_REJECTED");
+    }
+    if (plan.task.kind === "edit" && plan.task.sourcePath !== undefined && hashFile(plan.task.sourcePath) !== plan.expectedSourceHash) {
+      return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, sourcePath: plan.task.sourcePath, previewPaths: [], warnings: job.warnings, job }, "OFFICE_SOURCE_CHANGED");
     }
     const stagedPath = job.outputPaths.find((path) => path.toLowerCase().endsWith("." + plan.task.format));
     if (stagedPath === undefined || !existsSync(stagedPath) || !isWithin(plan.job.stagingDirectory, stagedPath) || extname(stagedPath).toLowerCase() !== "." + plan.task.format) {
