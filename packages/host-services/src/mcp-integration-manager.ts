@@ -25,6 +25,7 @@ export interface McpServerConfigurationRequest {
   readonly endpoint?: string;
   readonly command?: string;
   readonly args?: readonly string[];
+  readonly workingDirectory?: string;
   readonly credentialRef?: string;
   readonly enabled: boolean;
   readonly allowedScopes: readonly ("project" | "unscoped")[];
@@ -40,6 +41,7 @@ export interface McpServerRecord {
   readonly endpoint?: string;
   readonly command?: string;
   readonly args: readonly string[];
+  readonly workingDirectory?: string;
   readonly credentialRef?: string;
   readonly enabled: boolean;
   readonly allowedScopes: readonly ("project" | "unscoped")[];
@@ -64,6 +66,7 @@ export interface McpServerStatus {
   readonly schemaState: McpServerRecord["schemaState"];
   readonly schemaRevision: string;
   readonly enabledToolIds: readonly string[];
+  readonly toolSchemas: readonly McpToolSchema[];
   readonly lastStatusMessage?: string;
   readonly failureCount: number;
 }
@@ -182,6 +185,7 @@ export class McpIntegrationManager {
       ...(request.endpoint === undefined ? {} : { endpoint: request.endpoint }),
       ...(request.command === undefined ? {} : { command: request.command }),
       args: [...(request.args ?? [])],
+      ...(request.workingDirectory === undefined ? {} : { workingDirectory: request.workingDirectory }),
       ...(request.credentialRef === undefined ? {} : { credentialRef: request.credentialRef }),
       enabled: request.enabled, allowedScopes: [...request.allowedScopes], enabledToolIds: [...(request.enabledToolIds ?? schemas.map((schema) => schema.name))],
       adapterVersion: PINNED_PI_MCP_ADAPTER_VERSION, schemaRevision, cachedToolSchemas: schemas,
@@ -197,6 +201,7 @@ export class McpIntegrationManager {
       serverId: record.serverId, name: record.name, enabled: record.enabled, adapterVersion: record.adapterVersion,
       credentialReferencePresent: record.credentialRef !== undefined, connectionStatus: record.connectionStatus,
       schemaState: record.schemaState, schemaRevision: record.schemaRevision, enabledToolIds: [...record.enabledToolIds],
+      toolSchemas: record.cachedToolSchemas.map((schema) => ({ ...schema, allowedScopes: [...schema.allowedScopes] })),
       ...(record.lastStatusMessage === undefined ? {} : { lastStatusMessage: record.lastStatusMessage }), failureCount: record.failureCount
     }));
   }
@@ -364,7 +369,7 @@ function validateConfig(request: McpServerConfigurationRequest): void {
   if (request.name.trim() === "" || request.allowedScopes.length === 0) throw new McpIntegrationError("MCP_SERVER_CONFIGURATION_INVALID", "MCP server name and scope are required.");
   if (request.transport === "http" && request.endpoint === undefined) throw new McpIntegrationError("MCP_SERVER_CONFIGURATION_INVALID", "HTTP MCP servers require an endpoint.");
   if (request.transport === "stdio" && request.command === undefined) throw new McpIntegrationError("MCP_SERVER_CONFIGURATION_INVALID", "stdio MCP servers require a command.");
-  if ([request.endpoint, request.command, ...(request.args ?? [])].some((value) => value !== undefined && /(api[_-]?key|token|secret|password)=/iu.test(value))) throw new McpIntegrationError("MCP_SERVER_CONFIGURATION_INVALID", "Protected credential values must be references, not configuration text.");
+  if ([request.endpoint, request.command, request.workingDirectory, ...(request.args ?? [])].some((value) => value !== undefined && /(api[_-]?key|token|secret|password)=/iu.test(value))) throw new McpIntegrationError("MCP_SERVER_CONFIGURATION_INVALID", "Protected credential values must be references, not configuration text.");
 }
 
 function hashSchemas(schemas: readonly McpToolSchema[]): string {

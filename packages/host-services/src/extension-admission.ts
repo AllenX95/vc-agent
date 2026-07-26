@@ -108,6 +108,7 @@ export interface ExtensionAuditRequest {
 export interface ExtensionAuditInput {
   readonly auditRunId: string;
   readonly stagedRevisionId: string;
+  readonly profileId?: string;
   readonly stagedArtifactPath: string;
   readonly deterministicReport: DeterministicInspectionReport;
   readonly instructionsRevision: string;
@@ -404,7 +405,8 @@ export class ExtensionAdmissionManager {
     const report = this.latestReportFor(stagedRevisionId);
     const staged = this.#staged.get(stagedRevisionId);
     if (report === undefined || staged === undefined) throw new Error("Audit evidence is unavailable.");
-    const review = await this.#auditAdapter.review({ auditRunId: runId, stagedRevisionId, stagedArtifactPath: staged.stagedPath, deterministicReport: report, instructionsRevision }, signal);
+    const profileId = this.#audits.get(runId)?.profileId;
+    const review = await this.#auditAdapter.review({ auditRunId: runId, stagedRevisionId, ...(profileId === undefined ? {} : { profileId }), stagedArtifactPath: staged.stagedPath, deterministicReport: report, instructionsRevision }, signal);
     this.#auditReviews.set(runId, review);
     const outputPath = manifest.outputPaths[0];
     if (outputPath === undefined) throw new Error("Audit output path is missing.");

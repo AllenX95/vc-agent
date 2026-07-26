@@ -39,6 +39,7 @@ import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION
 import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, FixtureSubAgentAdapter, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentRuntime, UnavailableSubAgentAdapter, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
+import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
@@ -61,6 +62,8 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "skills.list",
   "skills.inspect",
   "integration.state.load",
+  "office.source.choose",
+  "office.artifact.open",
   "skill_creator.list",
   "page_recovery.inspect",
   "mcp.server.list",
@@ -141,6 +144,7 @@ let stateStore: HostStateStore | null = null;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
+let extensionAuditWorker: ExtensionAuditWorkerExecutor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
 let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
@@ -285,7 +289,7 @@ function integrationStateSnapshot(): IntegrationState {
     office: { status: officeStatus, activeSkillCount: (skillsDirectory?.inventory() ?? []).filter((item) => item.enabled && item.state === "active").length, supportedFormats: ["docx", "pptx", "xlsx", "pdf"], jobs: officeJobs },
     skillCreator: { status: creatorStatus, drafts: (skillCreatorWorkflow?.listDrafts() ?? []).map((draft) => ({ draftId: draft.draftId, packageId: draft.packageId, operation: draft.operation, state: draft.state, files: [...draft.files], dependencies: [...draft.dependencies], updatedAt: draft.updatedAt, ...(draft.failureCode === undefined ? {} : { failureCode: draft.failureCode }) })) },
     pageRecovery: { status: page.native.status === "ready" ? { status: "ready", message: "Native parsing is available; OCR stages remain explicit and local." } : { status: "attention", message: page.native.message }, availability: page, telemetry: pageTelemetry, parses: [...integrationJobs.values()].filter((job) => job.kind.startsWith("page_recovery:")), ...(lastPageRecoveryParse === undefined ? {} : { lastParse: lastPageRecoveryParse }) },
-    mcp: { status: { status: "ready", message: mcpTelemetry.connectedServers === 0 ? "Pinned MCP adapter is dormant; no server connection is open." : `${mcpTelemetry.connectedServers} MCP server connection(s) are active for an explicit task.` }, adapterVersion: mcpTelemetry.adapterVersion, servers: (mcpIntegration?.inventory() ?? []).map((server) => ({ ...server, enabledToolIds: [...server.enabledToolIds] })), connectedServers: mcpTelemetry.connectedServers, activeTools: mcpTelemetry.activeTools, failureCount: mcpTelemetry.failureCount, ...(activeMcpActivation === undefined ? {} : { activeActivation: { ...activeMcpActivation, toolIds: [...activeMcpActivation.toolIds] } }) },
+     mcp: { status: { status: "ready", message: mcpTelemetry.connectedServers === 0 ? "Pinned MCP adapter is dormant; no server connection is open." : `${mcpTelemetry.connectedServers} MCP server connection(s) are active for an explicit task.` }, adapterVersion: mcpTelemetry.adapterVersion, servers: (mcpIntegration?.inventory() ?? []).map((server) => ({ ...server, enabledToolIds: [...server.enabledToolIds], toolSchemas: server.toolSchemas.map((schema) => ({ ...schema, allowedScopes: [...schema.allowedScopes] })) })), connectedServers: mcpTelemetry.connectedServers, activeTools: mcpTelemetry.activeTools, failureCount: mcpTelemetry.failureCount, ...(activeMcpActivation === undefined ? {} : { activeActivation: { ...activeMcpActivation, toolIds: [...activeMcpActivation.toolIds] } }) },
     extensions: {
       status: { status: "ready", message: "Extension staging, inspection, audit, approval, and enablement remain separate Host actions." },
       stagedCount: admissionState?.staged.length ?? 0, inspectionCount: admissionState?.reports.length ?? 0, auditCount: admissionState?.audits.length ?? 0, approvedCount: admissionState?.approved.length ?? 0,
@@ -330,6 +334,11 @@ function officeJobProjection(planId: string, state: IntegrationJobSummary["state
     ...(result?.sourceHash === undefined && task?.plan.expectedSourceHash === undefined ? {} : { sourceHash: result?.sourceHash ?? task?.plan.expectedSourceHash! }),
     ...(result?.editedCopyHash === undefined ? {} : { editedCopyHash: result.editedCopyHash }),
     ...(result?.changeSummaryPath === undefined ? {} : { changeSummaryPath: result.changeSummaryPath }),
+    ...(result?.stagedOutputPath === undefined ? {} : { stagedOutputPath: result.stagedOutputPath }),
+    ...(result === undefined ? {} : { previewPaths: [...result.previewPaths] }),
+    ...(task?.output?.relativePath === undefined ? {} : { committedRelativePath: task.output.relativePath }),
+    ...(task?.plan.task.format === undefined ? {} : { format: task.plan.task.format }),
+    ...(task?.plan.task.skillRevisionId === undefined ? {} : { skillRevisionId: task.plan.task.skillRevisionId }),
     ...(task?.plan.task.sourceReferences === undefined ? {} : { sourceReferences: [...task.plan.task.sourceReferences] })
   };
 }
@@ -757,6 +766,18 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "integration.state.load":
         return integrationStateEvent(command.correlationId, "loaded");
+      case "office.source.choose": {
+        const testSourcePath = process.env.NODE_ENV === "test" ? process.env.VC_AGENT_TEST_OFFICE_SOURCE_PATH : undefined;
+        if (testSourcePath !== undefined && testSourcePath !== "") {
+          return { ...eventMetadata(command.correlationId), event: "office.source.selected", payload: { canceled: false, path: resolve(testSourcePath) } };
+        }
+        const selection = await dialog.showOpenDialog({
+          title: `Choose ${command.payload.format.toUpperCase()} source`,
+          properties: ["openFile"],
+          filters: [{ name: command.payload.format.toUpperCase(), extensions: [command.payload.format] }]
+        });
+        return { ...eventMetadata(command.correlationId), event: "office.source.selected", payload: { canceled: selection.canceled || selection.filePaths[0] === undefined, ...(selection.filePaths[0] === undefined ? {} : { path: selection.filePaths[0] }) } };
+      }
       case "office.task.prepare": {
         if (command.actor.actorType !== "user" || officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
         try {
@@ -856,8 +877,30 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "mcp.server.list":
         return integrationStateEvent(command.correlationId, "loaded");
+      case "mcp.server.test": {
+        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        try {
+          const status = await mcpIntegration.testConnection(command.payload.serverId);
+          emit(integrationJobEvent(command.correlationId, "mcp", { id: command.payload.serverId, kind: "mcp:test-connection", state: "completed", message: status.lastStatusMessage ?? "MCP connection test completed and the connection was closed.", updatedAt: new Date().toISOString() }));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+      }
+      case "office.artifact.open": {
+        if (officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
+        const stored = officeOrchestrator.getResult(command.payload.resultId);
+        const result = stored?.result;
+        const target = result === undefined ? undefined
+          : command.payload.artifact === "staged_output" ? result.stagedOutputPath
+            : command.payload.artifact === "change_summary" ? result.changeSummaryPath
+              : result.previewPaths[command.payload.previewIndex ?? 0];
+        if (target === undefined || !existsSync(target)) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_ARTIFACT_UNAVAILABLE"));
+        const error = await shell.openPath(target);
+        if (error !== "") return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_ARTIFACT_OPEN_FAILED"));
+        return { ...eventMetadata(command.correlationId), event: "office.artifact.opened", payload: { resultId: command.payload.resultId, artifact: command.payload.artifact } };
+      }
       case "mcp.server.save": {
         if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
+        if (command.payload.transport === "fixture" && process.env.NODE_ENV !== "test") return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_FIXTURE_TRANSPORT_TEST_ONLY"));
         try { if (command.payload.serverId !== undefined) mcpActivations.delete(command.payload.serverId); const configured = mcpIntegration.configure(command.payload as Parameters<McpIntegrationManager["configure"]>[0]); mcpActivations.delete(configured.serverId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
       }
       case "mcp.activate": {
@@ -2374,6 +2417,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
 }
 
 function handleWorkerEvent(workerEvent: WorkerEvent): void {
+  if (extensionAuditWorker?.handleEvent(workerEvent) === true) return;
   if (workerEvent.event === "trajectory.acknowledged") {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
@@ -3124,6 +3168,11 @@ app.whenReady().then(() => {
   skillsDirectory = new SkillPackageManager({ root: join(app.getPath("userData"), "skills") });
   skillProjector = new SkillResourceProjector({ manager: skillsDirectory });
   executionScheduler = new BoundedExecutionScheduler({ capacity: EXECUTION_CAPACITY, store: stateStore });
+  workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
+  extensionAuditWorker = new ExtensionAuditWorkerExecutor({
+    supervisor: workerSupervisor,
+    root: join(app.getPath("userData"), "integrations", "extensions", "audit-sessions")
+  });
   subAgentRuntime = new SubAgentRuntime({
     path: join(app.getPath("userData"), "delegation", "runs.json"),
     resolver: { resolve: resolveSubAgentProfile },
@@ -3133,7 +3182,18 @@ app.whenReady().then(() => {
     readOnly: stateStore.isReadOnlyRecovery,
     onEvent: (runtimeEvent) => { if (!shuttingDown) emit(subAgentHostEvent(runtimeEvent)); }
   });
-  extensionAdmission = new ExtensionAdmissionManager({ root: join(app.getPath("userData"), "integrations", "extensions"), scheduler: executionScheduler, auditAdapter: createDesktopExtensionAuditAdapter() });
+  extensionAdmission = new ExtensionAdmissionManager({ root: join(app.getPath("userData"), "integrations", "extensions"), scheduler: executionScheduler, auditAdapter: createDesktopExtensionAuditAdapter({ resolveProfile: (profileId) => {
+    const store = stateStore;
+    if (store === null) return undefined;
+    const profile = store.getModelProfile(profileId);
+    if (profile === undefined) return undefined;
+    const encrypted = store.getEncryptedCredential(profile.credentialRef);
+    if (encrypted === undefined) return undefined;
+    try { return { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel }; } catch { return undefined; }
+  }, executeAudit: (input) => {
+    if (extensionAuditWorker === null) throw new Error("EXTENSION_AUDIT_PROVIDER_UNAVAILABLE");
+    return extensionAuditWorker.execute(input);
+  } }) });
   globalExtensionRevisions = new GlobalExtensionRevisionManager({
     root: join(app.getPath("userData"), "integrations", "extensions"),
     admission: extensionAdmission,
@@ -3341,7 +3401,6 @@ app.whenReady().then(() => {
       void refreshProjectInventory(randomUUID(), project.id, false).catch(() => undefined);
     }
   }
-  workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
   ipcMain.handle(COMMAND_CHANNEL, handleCommand);
   mainWindow = createMainWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow(); });
@@ -3411,6 +3470,7 @@ async function shutdownApplication(): Promise<void> {
   if (longTermMemoryWatchTimer !== undefined) clearTimeout(longTermMemoryWatchTimer);
   longTermMemoryWatchTimer = undefined;
   workerSupervisor = null;
+  extensionAuditWorker = null;
   stateStore?.close();
   stateStore = null;
   projectMemories = null;

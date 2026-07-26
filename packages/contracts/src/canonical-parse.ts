@@ -99,7 +99,7 @@ const pageRecoveryOcrJobCommandSchema = utilityJobBaseSchema.extend({
 
 const officeSkillJobCommandSchema = utilityJobBaseSchema.extend({
   command: z.literal("office.skill"),
-  kind: z.enum(["create", "edit"]),
+  kind: z.enum(["create", "edit", "review"]),
   format: z.enum(["docx", "pptx", "xlsx", "pdf"]),
   skillRevisionId: z.string().min(1),
   skillRoot: z.string().min(1),

@@ -5,7 +5,7 @@ import { LocalJobSupervisor, type LocalJobManifest, type LocalJobResult } from "
 import { SkillPackageManager } from "./skills-directory.js";
 
 export type OfficeFormat = "docx" | "pptx" | "xlsx" | "pdf";
-export type OfficeTaskKind = "create" | "edit";
+export type OfficeTaskKind = "create" | "edit" | "review";
 
 export interface OfficeTaskRequest {
   readonly kind: OfficeTaskKind;
@@ -135,7 +135,7 @@ export class OfficeSkillOrchestrator {
     if (skill === undefined || !skill.enabled || skill.state !== "active") throw new Error("OFFICE_SKILL_UNAVAILABLE");
     const skillRoot = this.#manager.activePath(skill);
     if (!existsSync(skillRoot)) throw new Error("OFFICE_SKILL_UNAVAILABLE");
-    if (request.kind === "edit" && (request.sourcePath === undefined || !existsSync(request.sourcePath))) throw new Error("OFFICE_SOURCE_CHANGED");
+    if (request.kind !== "create" && (request.sourcePath === undefined || !existsSync(request.sourcePath))) throw new Error("OFFICE_SOURCE_CHANGED");
     if (request.kind === "create" && request.sourcePath !== undefined) throw new Error("OFFICE_JOB_REJECTED");
     const planId = randomUUID();
     const jobId = "office-" + planId;
@@ -169,7 +169,7 @@ export class OfficeSkillOrchestrator {
     const stored = this.findByPlan(planId);
     if (stored === undefined) throw new Error("OFFICE_JOB_REJECTED");
     const plan = stored.plan;
-    if (plan.task.kind === "edit" && (plan.task.sourcePath === undefined || hashFile(plan.task.sourcePath) !== plan.expectedSourceHash)) return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, ...(plan.task.sourcePath === undefined ? {} : { sourcePath: plan.task.sourcePath }), previewPaths: [], warnings: ["OFFICE_SOURCE_CHANGED"] }, "OFFICE_SOURCE_CHANGED");
+    if (plan.task.kind !== "create" && (plan.task.sourcePath === undefined || hashFile(plan.task.sourcePath) !== plan.expectedSourceHash)) return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, ...(plan.task.sourcePath === undefined ? {} : { sourcePath: plan.task.sourcePath }), previewPaths: [], warnings: ["OFFICE_SOURCE_CHANGED"] }, "OFFICE_SOURCE_CHANGED");
     let job: LocalJobResult;
     try {
       job = await this.#jobs.submit(plan.job);
@@ -180,7 +180,7 @@ export class OfficeSkillOrchestrator {
       const status = job.status === "cancelled" ? "cancelled" : job.status === "timed_out" ? "timed_out" : "failed";
       return this.saveResult(plan, { resultId: randomUUID(), planId, status, format: plan.task.format, previewPaths: [], warnings: job.warnings, job }, job.code ?? "OFFICE_JOB_REJECTED");
     }
-    if (plan.task.kind === "edit" && plan.task.sourcePath !== undefined && hashFile(plan.task.sourcePath) !== plan.expectedSourceHash) {
+    if (plan.task.kind !== "create" && plan.task.sourcePath !== undefined && hashFile(plan.task.sourcePath) !== plan.expectedSourceHash) {
       return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, sourcePath: plan.task.sourcePath, previewPaths: [], warnings: job.warnings, job }, "OFFICE_SOURCE_CHANGED");
     }
     const stagedPath = job.outputPaths.find((path) => path.toLowerCase().endsWith("." + plan.task.format));
@@ -191,7 +191,7 @@ export class OfficeSkillOrchestrator {
     const sourceHash = sourcePath === undefined ? undefined : hashFile(sourcePath);
     const editedCopyHash = hashFile(stagedPath);
     let changeSummaryPath: string | undefined;
-    if (plan.task.kind === "edit" && sourcePath !== undefined) {
+    if (plan.task.kind !== "create" && sourcePath !== undefined) {
       changeSummaryPath = join(plan.job.stagingDirectory, "change-summary.json");
       writeFileSync(changeSummaryPath, JSON.stringify({ schemaVersion: 1, sourcePath: relative(plan.task.projectPath, sourcePath), sourceHash, editedCopyHash, summary: sourceHash === editedCopyHash ? "No byte changes." : "Edited copy differs from the source; review semantic changes in the Office application." }, null, 2) + "\n", "utf8");
     }
@@ -315,7 +315,7 @@ export class OfficeSkillOrchestrator {
 }
 
 function outputName(request: OfficeTaskRequest): string {
-  const base = (request.outputFileName ?? (request.kind === "edit" ? "edited-copy" : "generated-output")).replace(/[^a-z0-9._-]+/giu, "-");
+  const base = (request.outputFileName ?? (request.kind === "edit" ? "edited-copy" : request.kind === "review" ? "reviewed-copy" : "generated-output")).replace(/[^a-z0-9._-]+/giu, "-");
   return base.toLowerCase().endsWith("." + request.format) ? base : base + "." + request.format;
 }
 

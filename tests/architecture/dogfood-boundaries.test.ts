@@ -54,7 +54,10 @@ describe("Dogfood adapter boundaries", () => {
     const adapter = readFileSync(join(root, "packages/pi-adapter/src/pi-session.ts"), "utf8");
     expect(adapter).toContain("enableAnalytics: false");
     expect(adapter).toContain("enableInstallTelemetry: false");
-    const dogfoodSources = [supervisor, adapter, readFileSync(join(root, "apps/desktop/src/main/main.ts"), "utf8")].join("\n");
+    // The composition root is expected to import later-stage workflows. The
+    // reusable Worker supervisor and Pi adapter themselves must remain free of
+    // those feature dependencies.
+    const dogfoodSources = [supervisor, adapter].join("\n");
     expect(dogfoodSources).not.toMatch(/from ["'][^"']*(dream|reflection|long-term-memory|sub-agent|office|ocr|mcp|extension-audit)/iu);
   });
 

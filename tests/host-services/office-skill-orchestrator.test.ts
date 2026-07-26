@@ -21,7 +21,7 @@ async function activeSkill(root: string): Promise<{ manager: SkillPackageManager
   return { manager, revisionId: imported.package.revisionId };
 }
 
-function request(root: string, revisionId: string, kind: "create" | "edit", sourcePath?: string): OfficeTaskRequest {
+function request(root: string, revisionId: string, kind: "create" | "edit" | "review", sourcePath?: string): OfficeTaskRequest {
   return {
     kind,
     format: "docx",
@@ -86,6 +86,33 @@ describe("Office Skill Orchestrator", () => {
     const approved = await orchestrator.replaceOriginal({ resultId: staged.resultId, sourcePath: source, expectedSourceHash: staged.sourceHash!, accessMode: "standard", confirmed: true });
     expect(approved).toMatchObject({ status: "replaced" });
     expect(readFileSync(source, "utf8")).toBe("edited");
+  });
+
+  it("reviews a source through an isolated snapshot and produces review artifacts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vc-office-review-"));
+    roots.push(root);
+    const source = join(root, "source.docx");
+    writeFileSync(source, "original", "utf8");
+    const { manager, revisionId } = await activeSkill(root);
+    const orchestrator = new OfficeSkillOrchestrator({
+      skills: manager,
+      root: join(root, "office-state"),
+      adapter: { run: async ({ plan }) => {
+        writeFileSync(plan.stagedOutputPath, "reviewed", "utf8");
+        writeFileSync(plan.stagedOutputPath + ".preview", "preview", "utf8");
+        return { outputPath: plan.stagedOutputPath, previewPath: plan.stagedOutputPath + ".preview" };
+      } }
+    });
+    const plan = await orchestrator.prepare({ ...request(root, revisionId, "review", source), renderPreview: true });
+    expect(plan.job.inputPaths).not.toContain(source);
+    const staged = await orchestrator.execute(plan.planId);
+    expect(staged).toMatchObject({ status: "validated", sourcePath: source });
+    expect(staged.changeSummaryPath).toBeDefined();
+    expect(staged.previewPaths).toHaveLength(1);
+    expect(readFileSync(source, "utf8")).toBe("original");
+    const output = await orchestrator.commit(staged.resultId);
+    expect(output.relativePath).toContain("reviewed-copy.docx");
+    expect(output.relatedArtifacts.map((item) => item.kind)).toEqual(["change_summary", "preview"]);
   });
 
   it("preserves the source on dependency failure and surfaces unknown outcome", async () => {

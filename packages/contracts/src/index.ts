@@ -5,3 +5,4 @@ export * from "./capability.js";
 export * from "./canonical-parse.js";
 export * from "./dream.js";
 export * from "./sub-agent.js";
+export * from "./integration.js";

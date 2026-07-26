@@ -15,6 +15,7 @@ export interface PiMcpServerConfig {
   readonly transport: "stdio" | "http";
   readonly command?: string;
   readonly args?: readonly string[];
+  readonly cwd?: string;
   readonly endpoint?: string;
   readonly credentialValue?: string;
 }
@@ -85,6 +86,7 @@ function toServerDefinition(config: PiMcpServerConfig): ServerDefinition {
     return {
       command: config.command,
       args: [...(config.args ?? [])],
+      ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
       // pi-mcp-adapter starts from process.env internally. Override common
       // secret-bearing names so a configured stdio server cannot inherit
       // credential material from the Desktop process by accident.

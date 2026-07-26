@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   PINNED_PI_MCP_ADAPTER_VERSION,
@@ -88,7 +88,7 @@ function createFixtureOfficeAdapter(): OfficeSkillJobAdapter {
       if (signal.aborted) throw new Error("OFFICE_JOB_CANCELLED");
       if (process.env.VC_AGENT_TEST_OFFICE_FAILURE === "1") throw new Error("OFFICE_DEPENDENCY_UNAVAILABLE");
       mkdirSync(plan.job.stagingDirectory, { recursive: true });
-      if (plan.task.kind === "edit" && plan.task.sourcePath !== undefined && existsSync(plan.task.sourcePath)) copyFileSync(plan.task.sourcePath, plan.stagedOutputPath);
+      if (plan.task.kind !== "create" && plan.task.sourcePath !== undefined && existsSync(plan.task.sourcePath)) copyFileSync(plan.task.sourcePath, plan.stagedOutputPath);
       else writeFileSync(plan.stagedOutputPath, `vc-agent Office fixture\nformat=${plan.task.format}\ncreated=${new Date().toISOString()}\n`, "utf8");
       const previewPath = plan.task.renderPreview === true ? plan.stagedOutputPath + ".preview" : undefined;
       if (previewPath !== undefined) writeFileSync(previewPath, `Preview for ${basename(plan.stagedOutputPath)}\n`, "utf8");
@@ -283,6 +283,7 @@ function toPiMcpServerConfig(config: McpServerRecord, credentialValue: string | 
     transport: config.transport === "http" ? "http" : "stdio",
     ...(config.command === undefined ? {} : { command: config.command }),
     ...(config.args.length === 0 ? {} : { args: config.args }),
+    ...(config.workingDirectory === undefined ? {} : { cwd: config.workingDirectory }),
     ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
     ...(credentialValue === undefined ? {} : { credentialValue })
   };
@@ -318,13 +319,102 @@ function schemaHash(schema: unknown): string {
   return `mcp-schema-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-export function createDesktopExtensionAuditAdapter(): ExtensionAuditAdapter {
+export interface DesktopExtensionAuditProfile {
+  readonly provider: string;
+  readonly model: string;
+  readonly apiKey: string;
+  readonly thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+
+export interface DesktopExtensionAuditExecution {
+  readonly auditRunId: string;
+  readonly instructionsRevision: string;
+  readonly profile: DesktopExtensionAuditProfile;
+  readonly systemPrompt: string;
+  readonly prompt: string;
+  readonly signal: AbortSignal;
+}
+
+export function createDesktopExtensionAuditAdapter(options: {
+  readonly resolveProfile?: (profileId: string) => DesktopExtensionAuditProfile | undefined;
+  readonly executeAudit?: (input: DesktopExtensionAuditExecution) => Promise<string>;
+  readonly fixtureMode?: boolean;
+} = {}): ExtensionAuditAdapter {
   return {
-    async review(input) {
-      if (process.env.VC_AGENT_TEST_EXTENSION_AUDIT_FAILURE === "1") throw new Error("EXTENSION_AUDIT_PROVIDER_FAILED");
-      return { summary: `Deterministic fixture audit completed for ${input.stagedRevisionId}.`, findings: [], residualRisk: ["Trusted Worker Code remains outside Standard Access mediation."], limitations: ["Fixture audit does not claim semantic correctness of third-party code."] };
+    async review(input, signal) {
+      // Fixture audit is injectable only in the test environment. Production
+      // always goes through the explicit Provider endpoint below.
+      if (options.fixtureMode === true || (options.fixtureMode === undefined && process.env.NODE_ENV === "test")) {
+        if (process.env.VC_AGENT_TEST_EXTENSION_AUDIT_FAILURE === "1") throw new Error("EXTENSION_AUDIT_PROVIDER_FAILED");
+        return { summary: `Test-only Extension Audit completed for ${input.stagedRevisionId}.`, findings: [], residualRisk: ["Trusted Worker Code remains outside Standard Access mediation."], limitations: ["Test fixture audit does not claim semantic correctness of third-party code."] };
+      }
+      if (input.profileId === undefined) throw new Error("EXTENSION_AUDIT_PROFILE_MISSING");
+      const profile = options.resolveProfile?.(input.profileId);
+      if (profile === undefined) throw new Error("EXTENSION_AUDIT_PROFILE_MISSING");
+      if (options.executeAudit === undefined) throw new Error("EXTENSION_AUDIT_PROVIDER_UNAVAILABLE");
+      const message = await options.executeAudit({
+        auditRunId: input.auditRunId,
+        instructionsRevision: input.instructionsRevision,
+        profile,
+        systemPrompt: [
+          "You are an isolated Extension Audit reviewer.",
+          "Review only the bounded deterministic report and Extension snapshot supplied in this request.",
+          "Do not assume access to Projects, ordinary Threads, Skills, VC prompts, Memory, credentials, or tools.",
+          "Return strict JSON with keys summary, findings, residualRisk, and limitations.",
+          "Each finding must contain severity (low|medium|high|critical) and message."
+        ].join("\n"),
+        prompt: JSON.stringify({
+          schemaVersion: 1,
+          auditRunId: input.auditRunId,
+          stagedRevisionId: input.stagedRevisionId,
+          profile: { provider: profile.provider, model: profile.model },
+          instructionsRevision: input.instructionsRevision,
+          deterministicReport: input.deterministicReport,
+          extensionSnapshot: extensionAuditSnapshot(input.stagedArtifactPath)
+        }),
+        signal
+      });
+      return parseExtensionAuditResult(parseStrictJson(message));
     }
   };
+}
+
+function parseStrictJson(value: string): unknown {
+  const trimmed = value.trim();
+  const body = trimmed.startsWith("```") ? trimmed.replace(/^```(?:json)?\s*/iu, "").replace(/\s*```$/u, "") : trimmed;
+  try { return JSON.parse(body); }
+  catch { throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE"); }
+}
+
+function extensionAuditSnapshot(root: string): { readonly files: readonly { readonly path: string; readonly content: string }[] } {
+  const files: Array<{ path: string; content: string }> = [];
+  const visit = (directory: string, relative = "") => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name);
+      const childRelative = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) visit(child, childRelative);
+      else if (entry.isFile() && files.reduce((size, item) => size + Buffer.byteLength(item.content, "utf8"), 0) < 200_000) {
+        const content = readFileSync(child, "utf8").slice(0, 50_000);
+        files.push({ path: childRelative, content });
+      }
+    }
+  };
+  if (existsSync(root)) visit(root);
+  return { files };
+}
+
+function parseExtensionAuditResult(value: unknown): { summary: string; findings: Array<{ severity: "low" | "medium" | "high" | "critical"; message: string }>; residualRisk: string[]; limitations: string[] } {
+  if (value === null || typeof value !== "object") throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE");
+  const record = value as Record<string, unknown>;
+  if (typeof record.summary !== "string" || !Array.isArray(record.findings) || !Array.isArray(record.residualRisk) || !Array.isArray(record.limitations)) throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE");
+  const findings = record.findings.flatMap((item) => {
+    if (item === null || typeof item !== "object") return [];
+    const finding = item as Record<string, unknown>;
+    return typeof finding.message === "string" && (finding.severity === "low" || finding.severity === "medium" || finding.severity === "high" || finding.severity === "critical") ? [{ severity: finding.severity as "low" | "medium" | "high" | "critical", message: finding.message }] : [];
+  });
+  const residualRisk = record.residualRisk.filter((item): item is string => typeof item === "string");
+  const limitations = record.limitations.filter((item): item is string => typeof item === "string");
+  return { summary: record.summary, findings, residualRisk, limitations };
 }
 
 function defaultMcpSchemas(): McpToolSchema[] {

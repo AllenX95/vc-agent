@@ -235,7 +235,7 @@ async function runExtension(root: string): Promise<void> {
   const source = join(root, "extension-source"); mkdirSync(source, { recursive: true });
   writeFileSync(join(source, "package.json"), JSON.stringify({ name: "fixture-extension", version: "1.0.0", license: "MIT", main: "index.js" }), "utf8");
   writeFileSync(join(source, "package-lock.json"), "{}", "utf8"); writeFileSync(join(source, "index.js"), "module.exports = {};", "utf8");
-  const admission = new ExtensionAdmissionManager({ root: join(root, "extensions"), auditAdapter: createDesktopExtensionAuditAdapter() });
+  const admission = new ExtensionAdmissionManager({ root: join(root, "extensions"), auditAdapter: createDesktopExtensionAuditAdapter({ fixtureMode: true }) });
   const staged = await admission.stage({ sourcePath: source }); const report = await admission.inspect(staged.stagedRevisionId);
   const audit = await admission.startAudit({ stagedRevisionId: staged.stagedRevisionId, profileId: "fixture-profile", providerAvailable: true }); if (audit.status !== "audit_complete") throw new Error("EXTENSION_AUDIT_NOT_COMPLETE");
   const approved = await admission.approve({ stagedRevisionId: staged.stagedRevisionId, reportId: report.reportId, expectedArtifactHash: report.artifactHash, userConfirmed: true });

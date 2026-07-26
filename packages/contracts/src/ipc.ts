@@ -79,6 +79,11 @@ const integrationJobSummarySchema = z.object({
   sourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   editedCopyHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   changeSummaryPath: z.string().min(1).optional(),
+  stagedOutputPath: z.string().min(1).optional(),
+  previewPaths: z.array(z.string().min(1)).max(20).optional(),
+  committedRelativePath: z.string().min(1).optional(),
+  format: z.enum(["docx", "pptx", "xlsx", "pdf"]).optional(),
+  skillRevisionId: z.string().uuid().optional(),
   sourceReferences: z.array(z.string().min(1)).max(100).optional()
 });
 export type IntegrationJobSummary = z.infer<typeof integrationJobSummarySchema>;
@@ -124,7 +129,7 @@ const mcpIntegrationStateSchema = z.object({
     serverId: z.string().uuid(), name: z.string().min(1), enabled: z.boolean(), adapterVersion: z.string().min(1),
     credentialReferencePresent: z.boolean(), connectionStatus: z.enum(["disconnected", "testing", "connecting", "connected", "unavailable", "failed"]),
     schemaState: z.enum(["unknown", "cached", "current_for_connection", "mismatched"]), schemaRevision: z.string().min(1),
-    enabledToolIds: z.array(z.string()), lastStatusMessage: z.string().optional(), failureCount: z.number().int().nonnegative()
+    enabledToolIds: z.array(z.string()), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })), lastStatusMessage: z.string().optional(), failureCount: z.number().int().nonnegative()
   })),
   connectedServers: z.number().int().nonnegative(), activeTools: z.number().int().nonnegative(), failureCount: z.number().int().nonnegative(),
   activeActivation: z.object({ activationId: z.string().uuid(), serverId: z.string().uuid(), schemaRevision: z.string().min(1), toolIds: z.array(z.string().min(1)), scope: z.enum(["project", "unscoped"]) }).optional()
@@ -512,15 +517,23 @@ const loadIntegrationStateCommandSchema = commandMetadataSchema.extend({ command
 const prepareOfficeTaskCommandSchema = commandMetadataSchema.extend({
   command: z.literal("office.task.prepare"),
   payload: z.object({
-    kind: z.enum(["create", "edit"]), format: z.enum(["docx", "pptx", "xlsx", "pdf"]), projectId: z.string().min(1), projectPath: z.string().min(1),
+    kind: z.enum(["create", "edit", "review"]), format: z.enum(["docx", "pptx", "xlsx", "pdf"]), projectId: z.string().min(1), projectPath: z.string().min(1),
     threadId: z.string().min(1), turnId: z.string().min(1), profile: modelProfileSchema.pick({ id: true, provider: true, model: true }),
     skillRevisionId: z.string().uuid(), outputDirectory: z.string().min(1), outputFileName: z.string().min(1).optional(), sourcePath: z.string().min(1).optional(),
     sourceReferences: z.array(z.string().min(1)).max(100).optional(), renderPreview: z.boolean().optional(), explicitIntent: z.literal(true)
   })
 });
+const chooseOfficeSourceCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("office.source.choose"),
+  payload: z.object({ format: z.enum(["docx", "pptx", "xlsx", "pdf"]) })
+});
 const runOfficeTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.task.run"), payload: z.object({ planId: z.string().uuid() }) });
 const cancelOfficeTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.task.cancel"), payload: z.object({ jobId: z.string().min(1) }) });
 const commitOfficeResultCommandSchema = commandMetadataSchema.extend({ command: z.literal("office.result.commit"), payload: z.object({ resultId: z.string().uuid() }) });
+const openOfficeArtifactCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("office.artifact.open"),
+  payload: z.object({ resultId: z.string().uuid(), artifact: z.enum(["staged_output", "change_summary", "preview"]), previewIndex: z.number().int().nonnegative().optional() })
+});
 const replaceOfficeOriginalCommandSchema = commandMetadataSchema.extend({
   command: z.literal("office.source.replace"),
   payload: z.object({ resultId: z.string().uuid(), sourcePath: z.string().min(1), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/), accessMode: z.enum(["standard", "full"]), confirmed: z.boolean(), duplicateRiskAcknowledged: z.boolean().optional(), simulateUnknownOutcome: z.boolean().optional() })
@@ -528,7 +541,7 @@ const replaceOfficeOriginalCommandSchema = commandMetadataSchema.extend({
 const listSkillCreatorDraftsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.list") });
 const prepareSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({
   command: z.literal("skill_creator.prepare"),
-  payload: z.object({ operation: z.enum(["create", "update"]), explicitIntent: z.literal(true), packageId: z.string().min(1), files: z.record(z.string().min(1), z.string().max(200_000)), dependencies: z.array(z.string().min(1)).max(100).optional(), draftId: z.string().uuid().optional(), targetRevisionId: z.string().uuid().optional() })
+  payload: z.object({ operation: z.enum(["create", "update"]), explicitIntent: z.literal(true), packageId: z.string().min(1), profileId: z.string().min(1).optional(), files: z.record(z.string().min(1), z.string().max(200_000)), dependencies: z.array(z.string().min(1)).max(100).optional(), draftId: z.string().uuid().optional(), targetRevisionId: z.string().uuid().optional() })
 });
 const reviewSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.review"), payload: z.object({ draftId: z.string().uuid() }) });
 const acceptSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.handoff"), payload: z.object({ draftId: z.string().uuid(), confirmed: z.literal(true), accessMode: z.enum(["standard", "full"]).optional() }) });
@@ -540,9 +553,10 @@ const runPageRecoveryCommandSchema = commandMetadataSchema.extend({
 });
 const cancelPageRecoveryCommandSchema = commandMetadataSchema.extend({ command: z.literal("page_recovery.cancel"), payload: z.object({ parseId: z.string().uuid() }) });
 const listMcpServersCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.server.list") });
+const testMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.server.test"), payload: z.object({ serverId: z.string().uuid() }) });
 const saveMcpServerCommandSchema = commandMetadataSchema.extend({
   command: z.literal("mcp.server.save"),
-  payload: z.object({ serverId: z.string().uuid().optional(), name: z.string().trim().min(1).max(120), transport: z.enum(["stdio", "http", "fixture"]), endpoint: z.string().min(1).optional(), command: z.string().min(1).optional(), args: z.array(z.string().max(400)).max(50).optional(), credentialRef: z.string().min(1).optional(), enabled: z.boolean(), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), enabledToolIds: z.array(z.string().min(1)).optional(), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })).optional() })
+  payload: z.object({ serverId: z.string().uuid().optional(), name: z.string().trim().min(1).max(120), transport: z.enum(["stdio", "http", "fixture"]), endpoint: z.string().min(1).optional(), command: z.string().min(1).optional(), args: z.array(z.string().max(400)).max(50).optional(), workingDirectory: z.string().min(1).optional(), credentialRef: z.string().min(1).optional(), enabled: z.boolean(), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), enabledToolIds: z.array(z.string().min(1)).optional(), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })).optional() })
 });
 const activateMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.activate"), payload: z.object({ serverId: z.string().uuid(), toolIds: z.array(z.string().min(1)).max(100), scope: z.enum(["project", "unscoped"]), connect: z.boolean().optional() }) });
 const disconnectMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.disconnect"), payload: z.object({ serverId: z.string().uuid() }) });
@@ -759,10 +773,12 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   activateSkillCommandSchema,
   disableSkillCommandSchema,
   loadIntegrationStateCommandSchema,
+  chooseOfficeSourceCommandSchema,
   prepareOfficeTaskCommandSchema,
   runOfficeTaskCommandSchema,
   cancelOfficeTaskCommandSchema,
   commitOfficeResultCommandSchema,
+  openOfficeArtifactCommandSchema,
   replaceOfficeOriginalCommandSchema,
   listSkillCreatorDraftsCommandSchema,
   prepareSkillCreatorDraftCommandSchema,
@@ -773,6 +789,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   runPageRecoveryCommandSchema,
   cancelPageRecoveryCommandSchema,
   listMcpServersCommandSchema,
+  testMcpServerCommandSchema,
   saveMcpServerCommandSchema,
   activateMcpServerCommandSchema,
   disconnectMcpServerCommandSchema,
@@ -988,6 +1005,14 @@ const integrationJobUpdatedEventSchema = eventMetadataSchema.extend({
 const integrationDiagnosticEventSchema = eventMetadataSchema.extend({
   event: z.literal("integration.diagnostic"),
   payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery", "mcp", "extension"]), code: z.string().min(1), message: z.string().min(1).max(1_200), recoverable: z.boolean() })
+});
+const officeSourceSelectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("office.source.selected"),
+  payload: z.object({ path: z.string().min(1).optional(), canceled: z.boolean() })
+});
+const officeArtifactOpenedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("office.artifact.opened"),
+  payload: z.object({ resultId: z.string().uuid(), artifact: z.enum(["staged_output", "change_summary", "preview"]) })
 });
 const profileCredentialUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("profile.credential.updated"), payload: z.object({ profile: modelProfileSchema }) });
 const promptRevisionsListedEventSchema = eventMetadataSchema.extend({
@@ -1289,6 +1314,8 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   integrationStateUpdatedEventSchema,
   integrationJobUpdatedEventSchema,
   integrationDiagnosticEventSchema,
+  officeSourceSelectedEventSchema,
+  officeArtifactOpenedEventSchema,
   profileCredentialUpdatedEventSchema,
   promptRevisionsListedEventSchema,
   promptRevisionCreatedEventSchema,
