@@ -1,7 +1,7 @@
 # C0 Integration Baseline Stabilization Executable Specification
 
-Date: 2026-07-22  
-Status: Proposed for implementation  
+Date: 2026-07-27  
+Status: Complete — baseline, runtime isolation, and release-gate semantics passed
 Blocked by: Learning Build G2 complete
 
 ## Outcome

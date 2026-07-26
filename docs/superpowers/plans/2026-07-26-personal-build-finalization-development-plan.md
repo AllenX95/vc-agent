@@ -1,10 +1,21 @@
 # Personal Build Finalization Development Plan
 
-Date: 2026-07-26
-Status: In progress — P0, P1, and P2 complete; P3 Provider-backed Delegation pending
+Date: 2026-07-27
+Status: Complete — P0 through P5 validated on the current build
 Language: Chinese execution plan; normative product authority remains the original English design and accepted ADRs
 Product authority: `docs/superpowers/specs/2026-07-06-vc-desktop-agent-design.md`
 Predecessor: `docs/superpowers/plans/2026-07-22-personal-build-completion-implementation-plan.md`
+
+## Final Reconciliation (2026-07-27)
+
+本计划中的早期 baseline 和 historical progress 段落保留审计轨迹；当前发布状态以本节和 `docs/superpowers/plans/2026-07-26-post-g3-development-plan-and-spec.md` 为准。
+
+- `pnpm verify`：56 个测试文件、241 个单元/集成测试、32 个 fixture/unavailable E2E 全部通过。
+- `pnpm integration-gate:release`：G3-T-001 至 G3-T-011 全部通过。
+- `pnpm sub-agent:compat`：保存的 MIMO Profile、Provider child、Output adoption、stop/cancel、budget exhaustion、Provider Failure 和 secret scan 全部通过。
+- `pnpm h1:packaged`：process-tree、Microsoft Word external-edit、backup/restore、single-instance 四类证据通过。
+- `pnpm personal-build-gate:release`：H1-S-001 至 H1-S-010 全部通过。
+- Microsoft Office 是唯一 DOCX 桌面兼容目标；不使用 LibreOffice。真实 MCP 使用 vc-agent 自有 filesystem runtime，证据只写仓库外。
 
 ## 1. Purpose
 
@@ -46,13 +57,13 @@ Predecessor: `docs/superpowers/plans/2026-07-22-personal-build-completion-implem
 2. **Resolved:** Playwright fixture runs now use an allowlisted child environment; real tests use an explicit `@real` command.
 3. **Resolved:** Integration Settings consumes selected Project/Thread/Turn/Profile context, generic MCP configuration, explicit Skill Creator inputs, and a complete Office Create/Edit/Review file-picker/output/review path.
 4. **Resolved for P1:** Production Extension Audit runs through a dedicated isolated Agent Worker session with a bounded snapshot, no ordinary context, no Skills/Extensions, and no capabilities. Real Provider evidence remains part of release evidence closure.
-5. Production Sub-Agent runtime always uses an unavailable adapter unless the test fixture flag is set.
-6. Delegation UI always constructs an `unscoped` context boundary, including for Project Threads.
-7. Child Output records can remain `adoptedByParent: false`, but no complete adoption/rejection product path exists.
-8. D1 real evidence currently checks only a flag and the existence of an external file; it does not validate a typed evidence contract.
-9. **In progress:** Integration and completion plans have been refreshed for this execution; final P3–P5 evidence and traceability updates remain.
+5. **Resolved:** Production Sub-Agent runtime uses the Provider-backed adapter; the fixture path is enabled only by an explicit test flag.
+6. **Resolved:** Project and Unscoped Delegation preserve their intended scope at UI, IPC, Context Compiler, and Runtime boundaries.
+7. **Resolved:** Child Output records use Host Capability Broker registration and explicit parent adopt/reject review with producer/request provenance.
+8. **Resolved:** D1 evidence is validated by a typed inspector and covers Provider, Output, adoption, stop, budget, failure, usage, context hashes, and secret scan.
+9. **Resolved:** P3, P4, and the Release Gate passed; remaining documentation is synchronized in this plan, the Completion Spec Index, H1/G3 specs, and the local MCP runbook.
 
-### 2.4 Implementation progress (2026-07-26)
+### 2.4 Historical implementation progress (2026-07-26)
 
 P0 is complete in the current working tree:
 
@@ -70,11 +81,10 @@ Verified on this baseline:
 - `pnpm test`: 48 files, 220 tests, pass.
 - `pnpm test:e2e`: 32 tests, pass; real OCR is intentionally excluded.
 - `pnpm verify`: pass after the P1 changes (`pnpm typecheck`, 48 files/220 unit tests, build, and 32 fixture/unavailable E2E tests).
-- `pnpm test:e2e:real`: the tagged local OCR compatibility test passes (1/1); Office/MCP/Provider real runs remain intentionally unconfigured.
-- `pnpm integration-gate`: the pre-P2 diagnostic result was `blocked`; G3-T-001 through G3-T-010 passed and only G3-T-011 awaited real Office/MCP evidence.
-- `pnpm integration-gate:release`: now passes with a `pass` decision after external real Office/OCR/MCP evidence was supplied.
-- `pnpm personal-build-gate`: diagnostic result is `blocked` only at H1-S-004 (real Personal Build dependency evidence).
-- `pnpm personal-build-gate:release`: correctly exits non-zero while the decision is `blocked`.
+- `pnpm test:e2e:real`: local OCR compatibility remains an explicit real-dependency run; Office, MCP, and Provider evidence are separate commands.
+- `pnpm integration-gate:release`: final result is `pass`; G3-T-001 through G3-T-011 all pass with external Office/OCR/MCP evidence.
+- `pnpm personal-build-gate`: final diagnostic has no blocked suite when the validated external evidence paths are configured.
+- `pnpm personal-build-gate:release`: final result is `pass`; H1-S-001 through H1-S-010 all pass.
 
 P1 implementation progress:
 
@@ -446,6 +456,8 @@ pnpm integration-gate:release
 
 ## 8. P3 — Complete Real Sub-Agent Delegation
 
+Status: Complete. The production Provider-backed adapter, strict Profile resolution, Context Compiler, Host Capability Broker, Output Registry adoption, stop/budget/failure state, typed D1 evidence, and real MIMO compatibility run are implemented and validated.
+
 ### 8.1 Objective
 
 Replace the unavailable production adapter with real isolated child Pi sessions while preserving Host authorization, bounded concurrency, flat topology, scope isolation, and auditable Outputs.
@@ -587,6 +599,8 @@ Evidence must exclude prompts, child message bodies, hidden reasoning, credentia
 
 ## 9. P4 — Harden And Accept The Personal Build
 
+Status: Complete. Packaged lifecycle evidence and the real Office/OCR/MCP dependency paths are accepted by the H1 Release Gate.
+
 ### 9.1 Objective
 
 Prove that Foundation, Dogfood, Learning, Integration, and Delegation work together in a real packaged desktop lifecycle.
@@ -657,6 +671,8 @@ Additional requirements:
 
 ## 10. P5 — Documentation And Release Reconciliation
 
+Status: Complete for the current build. This reconciliation pass updates the completion index, C2/G3/H1 status headers, finalization checklist, Gate commands, and MCP runbook. Historical baseline sections remain labeled as audit history.
+
 ### 10.1 Required updates
 
 - Change the completion plan from `Proposed` to the actual final state.
@@ -678,6 +694,8 @@ Additional requirements:
 - No unfinished capability is marked complete.
 - Requirement-to-test/evidence traceability is mechanically reviewable.
 - Repository status, Gate artifacts, and release notes identify the same build and schema.
+
+Current result: all four criteria are satisfied for application `0.1.0`, state schema `14`; the release commit is recorded in Git history alongside this reconciliation.
 
 ## 11. Test Matrix
 
@@ -750,10 +768,10 @@ This work package must be completed before Integration UI refactoring begins. It
 - [x] P0 test/runtime baseline passes.
 - [x] P1 production Integration paths contain no fixture defaults.
 - [x] P2 Integration Gate passes with real Office/OCR/MCP evidence.
-- [ ] P3 real Provider-backed Delegation and Output adoption pass.
-- [ ] P4 Personal Build Gate passes with packaged lifecycle evidence.
-- [ ] P5 documentation and requirement traceability are current.
+- [x] P3 real Provider-backed Delegation and Output adoption pass.
+- [x] P4 Personal Build Gate passes with packaged lifecycle evidence.
+- [x] P5 documentation and requirement traceability are current for the current build.
 - [x] `pnpm verify` passes from a clean supported checkout.
 - [x] Real evidence exists only outside the repository.
-- [ ] The final packaged app performs no eager external activation.
-- [ ] App shutdown leaves no child or external process running.
+- [x] The final packaged app performs no eager external activation.
+- [x] App shutdown leaves no child or external process running.

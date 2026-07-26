@@ -1,7 +1,7 @@
 # G3 之后的 Personal Build 开发方案与可执行 SPEC
 
 > 日期：2026-07-26
-> 状态：Implementation complete；P3/D1、P4-A/B/C 与 Release Gate 已完成，P5 文档收口同步中
+> 状态：Implementation complete；P3/D1、P4-A/B/C、P5 与 Release Gate 已完成
 > 范围：P3 Provider-backed Sub-Agent、P4 Personal Build Hardening、P5 发布一致性
 > 前置基线：P0/P1/P2 与 G3 已完成；Microsoft Office 是唯一 DOCX 桌面兼容性目标，不使用 LibreOffice
 
@@ -71,7 +71,7 @@
 | H1 打包证据 | `h1:packaged` 四类生命周期工作流均已通过 | 已完成；仍受整体 C2/G3 release gate 约束 |
 | Office/OCR 真实证据 | Microsoft Word COM 与本地 OCR 证据均有效 | 已完成；不使用 LibreOffice |
 | MCP 真实证据 | vc-agent 自有 `server-filesystem` 已通过 `lazy-read`、`confirmed-write`、`restart`，证据在仓库外 | 已完成 |
-| 文档状态 | 本文和 `docs/local-mcp-compatibility.md` 已记录实际配置；其余权威索引按发布流程同步 | 进行中 |
+| 文档状态 | 本文、Completion Spec Index、Finalization Plan、C2/G3/H1 specs、Gate runbook 和 MCP runbook 已同步 | 已完成 |
 
 ## 3. 是否需要提供 LLM Provider
 
@@ -414,7 +414,7 @@ pnpm h1:packaged
 
 ### 7.1 P5-REQ-001 状态同步
 
-状态：进行中。本文件已同步 P3/D1、H1、Office/OCR、MCP 和 Gate 的最新状态；仍需在发布流程中同步 Completion Spec Index、Finalization Plan。
+状态：已完成。本文件已同步 P3/D1、H1、Office/OCR、MCP 和 Gate 的最新状态，相关权威索引和 Finalization Plan 也已同步。
 
 更新 D1、H1、Completion Spec Index 和 Finalization Plan，清除 C2/G3 的过期 blocked 状态，并记录最终测试数量、证据 schema 和 Gate 命令。
 

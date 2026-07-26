@@ -1,7 +1,7 @@
 # Integration Build Executable Specification Index
 
-Date: 2026-07-22  
-Status: Approved for implementation  
+Date: 2026-07-27  
+Status: Complete — R1/I1-I6 and G3 accepted on the current build  
 Parent plan: `docs/superpowers/plans/2026-07-22-integration-build-implementation-plan.md`  
 Product authority: `docs/superpowers/specs/2026-07-06-vc-desktop-agent-design.md` and accepted ADRs
 

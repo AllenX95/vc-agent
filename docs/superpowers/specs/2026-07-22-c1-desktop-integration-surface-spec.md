@@ -1,7 +1,7 @@
 # C1 Desktop Integration Surface Executable Specification
 
-Date: 2026-07-22  
-Status: Implemented for the desktop fixture slice; real dependency acceptance remains C2  
+Date: 2026-07-27  
+Status: Complete — desktop Integration surface and real dependency acceptance passed
 Blocked by: C0 pass
 
 ## Outcome

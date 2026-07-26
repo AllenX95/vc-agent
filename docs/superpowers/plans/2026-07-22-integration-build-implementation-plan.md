@@ -2,6 +2,8 @@
 
 Date: 2026-07-22
 
+Status: Historical implementation plan; final Integration/G3 state is `pass` on the current build. See `docs/superpowers/plans/2026-07-26-post-g3-development-plan-and-spec.md` for the authoritative post-G3 status and evidence.
+
 Source: `docs/superpowers/specs/2026-07-06-vc-desktop-agent-design.md`
 
 Blocked by: completed Learning Build through commit `1dae091`.

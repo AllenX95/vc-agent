@@ -1,13 +1,15 @@
 # G3 Practical Integration Workflow Gate Executable Specification
 
-Date: 2026-07-22  
-Status: Approved for implementation  
+Date: 2026-07-27  
+Status: Complete — G3-T-001 through G3-T-011 passed on the current build  
 Parent: `2026-07-22-integration-slice-spec-index.md`  
-Blocked by: R1 and I1-I6 complete
+Blocked by: None
 
 ## Outcome
 
 The Integration Build is accepted only when the shared runtime and every integration has a real visible desktop path, deterministic persisted state, explicit unavailable behavior, restart safety, authorization evidence, and cross-Slice compatibility. Optional external dependencies need not all be installed, but their unavailable paths must be functional and honest.
+
+Closure evidence: `pnpm integration-gate:release` passed with Microsoft Word, local OCR, and vc-agent-owned filesystem MCP evidence. The real MCP path used `read_text_file` and `write_file` through `pi-mcp-adapter@1.5.1`; no fixture evidence was promoted to the release artifact.
 
 ## Non-goals
 

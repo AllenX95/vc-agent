@@ -1,12 +1,14 @@
 # D1 Explicit Sub-Agent Runtime Executable Specification
 
-Date: 2026-07-22  
-Status: Proposed for implementation  
-Blocked by: C2 and G3 pass
+Date: 2026-07-27  
+Status: Complete — D1 real Provider-backed evidence passed on the current build  
+Blocked by: None
 
 ## Outcome
 
 仅在用户对当前任务表达显式 Delegation intent 时，primary Agent 才可创建扁平、隔离、可预算、可停止、可审计的 Sub-Agent Tasks。普通 Turn 保持单 primary Agent、最小 prompt 和零隐藏辅助模型调用。
+
+Closure evidence: `pnpm sub-agent:compat` passed with the saved MIMO Profile, typed external evidence validation, Output capability/adoption, stop/cancel, budget exhaustion, explicit Provider Failure, and secret scan.
 
 ## Non-goals
 

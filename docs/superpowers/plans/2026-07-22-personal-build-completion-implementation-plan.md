@@ -1,9 +1,19 @@
 # Personal Build Completion Implementation Plan
 
-Date: 2026-07-22  
-Status: Proposed for implementation  
+Date: 2026-07-27  
+Status: Historical plan — completed and reconciled by `2026-07-26-post-g3-development-plan-and-spec.md`  
 Product authority: `docs/superpowers/specs/2026-07-06-vc-desktop-agent-design.md` and accepted ADRs  
 Starting point: committed Learning Build at `1dae091` plus the current uncommitted Integration worktree
+
+## Final state addendum (2026-07-27)
+
+The baseline and progress sections below describe the state before the final Provider, packaged lifecycle, and real dependency work. The current build is accepted by the release gates:
+
+- `pnpm verify`: 56 test files, 241 unit/integration tests, 32 fixture/unavailable E2E tests passed.
+- `pnpm integration-gate:release`: G3-T-001 through G3-T-011 passed.
+- `pnpm personal-build-gate:release`: H1-S-001 through H1-S-010 passed.
+- P3 Provider-backed Delegation and P4 packaged hardening are complete; P5 document reconciliation is recorded in the latest plan and completion index.
+- Real dependency evidence stays outside Git. DOCX uses Microsoft Word only; no LibreOffice fallback is supported.
 
 ## Objective
 
@@ -24,7 +34,9 @@ Starting point: committed Learning Build at `1dae091` plus the current uncommitt
 - Sub-Agent Runtime 的 deterministic core、IPC/UI、持久化、fixture 和 Electron 路径已实现；真实 Provider-backed child session 仍保持不可用。
 - 当前 `pnpm verify`：44 个测试文件、206 个测试；31 个 Electron E2E 中 30 个通过、1 个按未配置真实 OCR 环境跳过。
 
-## Progress Snapshot (2026-07-23)
+## Historical Progress Snapshot (2026-07-23)
+
+The bullets in this section are retained as dated implementation history. The final state is recorded in the addendum above and in the post-G3 development plan.
 
 - **C0:** closed for the current slice. Skills Directory is lazy at app launch; Project/Unscoped runtime, scheduler, migration and existing shutdown fixtures remain green.
 - **C1 / Skills:** closed for the first vertical slice. Typed `skills.*` IPC, Settings inventory, explicit import, compatibility inspection, activation, disable, restart restoration and no-eager-creation E2E are implemented.
