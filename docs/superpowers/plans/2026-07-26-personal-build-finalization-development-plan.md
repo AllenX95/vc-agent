@@ -1,7 +1,7 @@
 # Personal Build Finalization Development Plan
 
 Date: 2026-07-26
-Status: In progress — P0 and P1 complete; P2 real Office/MCP evidence and G3 closure pending
+Status: In progress — P0, P1, and P2 complete; P3 Provider-backed Delegation pending
 Language: Chinese execution plan; normative product authority remains the original English design and accepted ADRs
 Product authority: `docs/superpowers/specs/2026-07-06-vc-desktop-agent-design.md`
 Predecessor: `docs/superpowers/plans/2026-07-22-personal-build-completion-implementation-plan.md`
@@ -50,7 +50,7 @@ Predecessor: `docs/superpowers/plans/2026-07-22-personal-build-completion-implem
 6. Delegation UI always constructs an `unscoped` context boundary, including for Project Threads.
 7. Child Output records can remain `adoptedByParent: false`, but no complete adoption/rejection product path exists.
 8. D1 real evidence currently checks only a flag and the existence of an external file; it does not validate a typed evidence contract.
-9. **In progress:** Integration and completion plans have been refreshed for this execution; final P2–P5 evidence and traceability updates remain.
+9. **In progress:** Integration and completion plans have been refreshed for this execution; final P3–P5 evidence and traceability updates remain.
 
 ### 2.4 Implementation progress (2026-07-26)
 
@@ -71,8 +71,8 @@ Verified on this baseline:
 - `pnpm test:e2e`: 32 tests, pass; real OCR is intentionally excluded.
 - `pnpm verify`: pass after the P1 changes (`pnpm typecheck`, 48 files/220 unit tests, build, and 32 fixture/unavailable E2E tests).
 - `pnpm test:e2e:real`: the tagged local OCR compatibility test passes (1/1); Office/MCP/Provider real runs remain intentionally unconfigured.
-- `pnpm integration-gate`: diagnostic result is `blocked`; G3-T-001 through G3-T-010 pass and only G3-T-011 awaits real Office/MCP evidence.
-- `pnpm integration-gate:release`: correctly exits non-zero while the decision is `blocked`.
+- `pnpm integration-gate`: the pre-P2 diagnostic result was `blocked`; G3-T-001 through G3-T-010 passed and only G3-T-011 awaited real Office/MCP evidence.
+- `pnpm integration-gate:release`: now passes with a `pass` decision after external real Office/OCR/MCP evidence was supplied.
 - `pnpm personal-build-gate`: diagnostic result is `blocked` only at H1-S-004 (real Personal Build dependency evidence).
 - `pnpm personal-build-gate:release`: correctly exits non-zero while the decision is `blocked`.
 
@@ -93,7 +93,14 @@ P1 is complete in the current working tree:
 - The complete fixture Integration path, explicit Office Utility Worker runner, Office cancellation, unavailable behavior, restart dormancy, and passive no-activation paths pass.
 - `pnpm typecheck`, 50 files/224 unit tests, and 32 fixture/unavailable Electron E2E tests pass.
 
-Real Office/MCP evidence and the G3 `pass` decision remain P2 work; they are not fixture substitutes for P1.
+P2 is complete:
+
+- Provisioned the pinned Anthropic Office Skills source revision `fa0fa64bdc967915dc8399e803be67759e1e62b8` outside the repository.
+- Ran DOCX create, edit, and controlled replacement through an external stdin-manifest runner and emitted sanitized Office evidence outside the repository.
+- Installed the official `@modelcontextprotocol/server-filesystem@2026.7.10` outside the repository, scoped it to a dedicated sandbox, and exercised lazy read, confirmed write, and restart dormancy through `pi-mcp-adapter@1.5.1`.
+- Reused the already configured real OCR evidence.
+- `pnpm integration-gate:release` passes; G3-T-001 through G3-T-011 all pass and the Integration Gate decision is `pass`.
+- LibreOffice is not installed on this machine, so the additional DOCX PNG render inspection was unavailable; the required Office compatibility run still passed its structural OOXML validation without a hidden fallback.
 
 ## 3. Program Definition Of Done
 
@@ -362,6 +369,8 @@ Fixture audit remains injectable only in tests.
 - C1 fixture, unavailable, restart, failure, accessibility, and product-context E2E pass.
 
 ## 7. P2 — Close Real Office, MCP, And G3
+
+Status: Complete on 2026-07-26. Sanitized evidence and all dependency/runtime bytes remain outside Git.
 
 ### 7.1 Objective
 
@@ -739,11 +748,11 @@ This work package must be completed before Integration UI refactoring begins. It
 
 - [x] P0 test/runtime baseline passes.
 - [x] P1 production Integration paths contain no fixture defaults.
-- [ ] P2 Integration Gate passes with real Office/OCR/MCP evidence.
+- [x] P2 Integration Gate passes with real Office/OCR/MCP evidence.
 - [ ] P3 real Provider-backed Delegation and Output adoption pass.
 - [ ] P4 Personal Build Gate passes with packaged lifecycle evidence.
 - [ ] P5 documentation and requirement traceability are current.
 - [x] `pnpm verify` passes from a clean supported checkout.
-- [ ] Real evidence exists only outside the repository.
+- [x] Real evidence exists only outside the repository.
 - [ ] The final packaged app performs no eager external activation.
 - [ ] App shutdown leaves no child or external process running.

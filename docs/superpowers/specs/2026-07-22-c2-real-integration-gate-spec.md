@@ -1,12 +1,14 @@
 # C2 Real Integration And G3 Closure Executable Specification
 
 Date: 2026-07-22  
-Status: Fixture gate implemented; real dependency closure remains blocked  
-Blocked by: C1 pass
+Status: Complete — fixture and real dependency gate passed on 2026-07-26
+Blocked by: None
 
 ## Outcome
 
 用真实但不入库的用户依赖验证 Integration Build，并使 `G3 Practical Integration Workflow Gate` 从 `blocked` 变为 `pass`。
+
+Closure evidence: the pinned Anthropic Office source and external DOCX runner passed create/edit/replace, configured OCR evidence remained valid, and an external official filesystem MCP service passed lazy-read/confirmed-write/restart through `pi-mcp-adapter@1.5.1`. `pnpm integration-gate:release` reports `pass` for G3-T-001 through G3-T-011. Evidence files, dependency packages, generated documents, and MCP sandbox contents remain outside the repository.
 
 ## Real Dependency Matrix
 
