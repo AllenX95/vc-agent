@@ -157,7 +157,7 @@ export const integrationStateSchema = z.object({
 });
 export type IntegrationState = z.infer<typeof integrationStateSchema>;
 
-export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "extension_audit", "visual_material_analysis"]);
+export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "extension_audit", "visual_material_analysis", "sub_agent_default", "sub_agent_researcher", "sub_agent_critic", "sub_agent_synthesizer", "sub_agent_writer", "sub_agent_custom"]);
 export type TaskModelType = z.infer<typeof taskModelTypeSchema>;
 export const taskModelAssignmentSchema = z.object({ taskType: taskModelTypeSchema, profileId: z.string().min(1), updatedAt: z.string().datetime() });
 export type TaskModelAssignment = z.infer<typeof taskModelAssignmentSchema>;
@@ -758,6 +758,8 @@ const inspectSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: 
 const stopSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.stop"), payload: z.object({ runId: z.string().uuid(), reason: z.string().trim().max(200).optional() }) });
 const retrySubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.retry"), payload: z.object({ taskId: z.string().uuid() }) });
 const skipSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.skip"), payload: z.object({ taskId: z.string().uuid() }) });
+const adoptSubAgentHandoffCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.handoff.adopt"), payload: z.object({ taskId: z.string().uuid() }) });
+const rejectSubAgentHandoffCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.handoff.reject"), payload: z.object({ taskId: z.string().uuid() }) });
 const deleteSubAgentRecordCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.record.delete"), payload: z.object({ runId: z.string().uuid(), taskId: z.string().uuid().optional(), confirmed: z.literal(true) }) });
 
 export const hostCommandSchema = z.discriminatedUnion("command", [
@@ -888,6 +890,8 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   stopSubAgentRunCommandSchema,
   retrySubAgentTaskCommandSchema,
   skipSubAgentTaskCommandSchema,
+  adoptSubAgentHandoffCommandSchema,
+  rejectSubAgentHandoffCommandSchema,
   deleteSubAgentRecordCommandSchema
 ]);
 export type HostCommand = z.infer<typeof hostCommandSchema>;
@@ -1285,6 +1289,8 @@ const subAgentProjectionEventSchema = eventMetadataSchema.extend({
     "sub_agent.task.failed",
     "sub_agent.task.retry",
     "sub_agent.task.skipped",
+    "sub_agent.handoff.adopted",
+    "sub_agent.handoff.rejected",
     "sub_agent.record.deleted"
   ]),
   payload: z.object({ projection: subAgentProjectionSchema, task: subAgentTaskSchema.optional(), attempt: subAgentAttemptSchema.optional() })

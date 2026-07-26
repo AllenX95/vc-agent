@@ -16,6 +16,9 @@ test("creates only an explicit flat bounded Sub-Agent run and restores its task 
     expect(profile.event).toBe("profile.created");
     const thread = await invoke(window, "thread.create.unscoped", { title: "Delegation Parent" });
     const parentThreadId = (thread.payload as { thread: { id: string } }).thread.id;
+    const profileId = (profile.payload as { profile: { id: string } }).profile.id;
+    const selected = await invoke(window, "thread.profile.select", { threadId: parentThreadId, profileId });
+    expect(selected.event).toBe("thread.profile.selected");
     const outputPath = join(userDataDirectory, "delegation-output.md");
     const authorized = await invoke(window, "sub_agent.run.authorize", {
       parentThreadId, parentTurnId: "turn-explicit",

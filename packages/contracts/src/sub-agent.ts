@@ -31,7 +31,8 @@ export const subAgentProfileSnapshotSchema = z.object({
   name: z.string().min(1),
   provider: z.string().min(1),
   model: z.string().min(1),
-  thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"])
+  thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]),
+  resolutionSource: z.enum(["explicit_override", "role_assignment", "default_sub_agent", "primary_active"]).optional()
 });
 export type SubAgentProfileSnapshot = z.infer<typeof subAgentProfileSnapshotSchema>;
 
@@ -55,7 +56,8 @@ export const subAgentHandoffSchema = z.object({
   summary: z.string().trim().min(1).max(20_000),
   provenance: z.array(z.object({ referenceId: z.string().min(1).max(200), source: z.string().min(1).max(200) })).max(100),
   outputPath: z.string().min(1).max(4_096).optional(),
-  adoptedByParent: z.boolean()
+  adoptedByParent: z.boolean(),
+  reviewStatus: z.enum(["pending_parent_review", "adopted", "rejected"]).optional()
 });
 export type SubAgentHandoff = z.infer<typeof subAgentHandoffSchema>;
 
@@ -114,6 +116,7 @@ export const subAgentAttemptSchema = z.object({
   messages: z.array(z.object({ role: z.enum(["user", "assistant", "tool"]), content: z.string().max(20_000) })).max(20),
   toolEvents: z.array(z.object({ capability: z.string().min(1).max(120), status: z.enum(["started", "completed", "failed", "rejected"]), summary: z.string().max(1_200) })).max(100),
   usage: subAgentUsageSchema,
+  contextHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   failure: subAgentFailureSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()

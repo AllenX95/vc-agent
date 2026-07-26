@@ -20,6 +20,24 @@ describe("SubAgentRuntime", () => {
     expect(() => runtimeInstance.authorize({ parentThreadId: "thread-1", parentTurnId: "turn-1", explicitIntentEvidence: intent, tasks: [{ role: "writer", objective: "Write outside the approved root.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000, outputRoot: tmpdir() }, capabilitySet: ["write_output"], outputTarget: "C:\\outside\\target.md" }] })).toThrow("SUB_AGENT_OUTPUT_TARGET_OUTSIDE_SCOPE");
   });
 
+  it("records the strict role, default, and primary profile resolution source", async () => {
+    const roleProfile = { ...profile, profileId: "profile-role", name: "Role Profile", model: "role-v1" };
+    const root = await mkdtemp(join(tmpdir(), "vc-agent-sub-agent-resolution-"));
+    const runtimeInstance = new SubAgentRuntime({
+      path: join(root, "delegation", "runs.json"),
+      resolver: createSubAgentProfileResolver({ profiles: [profile, roleProfile], roleProfiles: { critic: roleProfile.profileId }, defaultProfileId: profile.profileId, primaryProfileId: profile.profileId }),
+      adapter: new FixtureSubAgentAdapter()
+    });
+    const projection = runtimeInstance.authorize({ parentThreadId: "thread-resolution", parentTurnId: "turn-resolution", explicitIntentEvidence: intent, tasks: [
+      { role: "critic", objective: "Use the role assignment.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] },
+      { role: "researcher", objective: "Use the default assignment.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] },
+      { role: "custom", objective: "Use the explicit override.", profileId: roleProfile.profileId, contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] }
+    ] });
+    expect(projection.tasks.map((task) => task.resolvedProfile.resolutionSource)).toEqual(["role_assignment", "default_sub_agent", "explicit_override"]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runtimeInstance.inspect(projection.run.id)?.attempts.map((attempt) => attempt.profile.resolutionSource)).toEqual(["role_assignment", "default_sub_agent", "explicit_override"]);
+  });
+
   it("runs a flat parallel research/critic pair and keeps provenance on write handoff", async () => {
     const runtimeInstance = await runtime({ delayMs: 5 });
     const projection = runtimeInstance.authorize({ parentThreadId: "thread-1", parentTurnId: "turn-1", explicitIntentEvidence: intent, tasks: [
@@ -44,6 +62,35 @@ describe("SubAgentRuntime", () => {
     expect(stopped.run.status).toBe("stopped");
     expect(stopped.tasks[0]?.status).toBe("stopped");
     expect(stopped.tasks[0]?.attemptIds).toHaveLength(1);
+  });
+
+  it("requires explicit parent review before a handoff is adopted or rejected", async () => {
+    const runtimeInstance = await runtime({ delayMs: 5 });
+    const projection = runtimeInstance.authorize({ parentThreadId: "thread-handoff", parentTurnId: "turn-handoff", explicitIntentEvidence: intent, tasks: [{ role: "writer", objective: "Write a bounded handoff.", contextBoundary: { scope: "unscoped", sourceReferenceIds: ["material:handoff"], maxChars: 1_000, outputRoot: tmpdir() }, capabilitySet: ["read_context", "write_output"], outputTarget: join(tmpdir(), "vc-agent-handoff.md") }] });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const completed = runtimeInstance.inspect(projection.run.id)!;
+    const task = completed.tasks[0]!;
+    expect(task.handoff?.reviewStatus).toBe("pending_parent_review");
+    runtimeInstance.adoptHandoff(task.id);
+    expect(runtimeInstance.inspect(projection.run.id)!.tasks[0]?.handoff).toMatchObject({ adoptedByParent: true, reviewStatus: "adopted" });
+    expect(() => runtimeInstance.rejectHandoff(task.id)).toThrow("SUB_AGENT_HANDOFF_ALREADY_REVIEWED");
+  });
+
+  it("preflights a shared token budget before starting a child attempt", async () => {
+    const runtimeInstance = await runtime({ delayMs: 5 });
+    const projection = runtimeInstance.authorize({
+      parentThreadId: "thread-budget",
+      parentTurnId: "turn-budget",
+      explicitIntentEvidence: intent,
+      sharedTokenBudget: 1,
+      tasks: [{ role: "researcher", objective: "This objective cannot fit in one token.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] }]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const final = runtimeInstance.inspect(projection.run.id)!;
+    expect(final.run.status).toBe("budget_exhausted");
+    expect(final.tasks[0]?.status).toBe("failed");
+    expect(final.tasks[0]?.attemptIds).toHaveLength(0);
+    expect(final.tasks[0]?.failure?.code).toBe("SUB_AGENT_BUDGET_EXHAUSTED");
   });
 
   it("enforces target collisions and deletion placeholders", async () => {

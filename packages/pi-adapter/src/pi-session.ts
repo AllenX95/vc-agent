@@ -72,6 +72,23 @@ export interface PiModelReference {
   readonly model: string;
 }
 
+/**
+ * Resolve user-facing Provider identifiers to the concrete pi-ai catalog.
+ *
+ * MiMo exposes both OpenAI and Anthropic compatibility URLs.  The current
+ * pi-ai catalog already ships the MiMo models under the `xiaomi` provider and
+ * its OpenAI-compatible transport, so the saved Anthropic base URL is an
+ * alias rather than a second catalog.  Keep the persisted Profile unchanged;
+ * only the Worker runtime uses this normalized reference.
+ */
+export function resolvePiModelProfile(input: { readonly provider: string; readonly model: string }): PiModelReference {
+  const provider = input.provider.trim().replace(/\/+$/u, "");
+  if (/^https:\/\/api\.xiaomimimo\.com\/anthropic$/iu.test(provider)) {
+    return { provider: "xiaomi", model: input.model };
+  }
+  return { provider, model: input.model };
+}
+
 export async function listKnownPiModels(): Promise<readonly PiModelReference[]> {
   const runtime = await ModelRuntime.create({
     credentials: new InMemoryCredentialStore(),
@@ -106,11 +123,12 @@ export async function createPiSessionUsingRuntime(
   onEvent: (event: PiSessionEvent) => void,
   modelRuntime: ModelRuntime
 ): Promise<PiSessionHandle> {
-  await modelRuntime.setRuntimeApiKey(config.profile.provider, config.profile.apiKey);
+  const runtimeProfile = resolvePiModelProfile(config.profile);
+  await modelRuntime.setRuntimeApiKey(runtimeProfile.provider, config.profile.apiKey);
 
-  const model = modelRuntime.getModel(config.profile.provider, config.profile.model);
+  const model = modelRuntime.getModel(runtimeProfile.provider, runtimeProfile.model);
   if (model === undefined) {
-    throw new Error(`Model not found: ${config.profile.provider}/${config.profile.model}`);
+    throw new Error(`Model not found: ${runtimeProfile.provider}/${runtimeProfile.model}`);
   }
 
   const resourceLoader = new SnapshotResourceLoader({

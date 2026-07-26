@@ -23,19 +23,24 @@ const workflowPatterns: Readonly<Record<PackagedEvidence["workflows"][number], s
 async function main(): Promise<void> {
   const evidencePath = resolveRequired(parseFlags(process.argv.slice(2)).evidence ?? process.env.VC_AGENT_H1_PACKAGED_EVIDENCE, "VC_AGENT_H1_PACKAGED_EVIDENCE");
   assertExternalPath(evidencePath);
-  const pattern = Object.values(workflowPatterns).join("|");
   const env = { ...process.env, NODE_ENV: "test" };
   delete env.VC_AGENT_REAL_OCR;
   delete env.VC_AGENT_REAL_OCR_EVIDENCE;
-  delete env.VC_AGENT_OCR_RUNTIME_ROOT;
   // This runner assumes the packaged Desktop artifacts were built by the
-  // caller (`pnpm build`). It executes only the four named Electron suites and
-  // captures Playwright's JSON summary in memory; no trace or test body is
-  // copied into the evidence file.
-  const result = await runPlaywright(["tests/e2e/lifecycle.spec.ts", "tests/e2e/empty-shell.spec.ts", "--grep", pattern, "--reporter=json"], env);
-  if (result.code !== 0) throw new Error(`H1_PACKAGED_E2E_FAILED:${sanitizeDiagnostic(`${result.stdout}\n${result.stderr}`)}`);
-  const summary = parsePlaywrightSummary(result.stdout);
-  if (summary.testCount < 4 || summary.failed > 0) throw new Error("H1_PACKAGED_E2E_INCOMPLETE");
+  // caller (`pnpm build`). Run each named workflow in its own Playwright
+  // process so one Electron lifecycle test cannot leave state that affects a
+  // later workflow. Only bounded JSON summaries stay in memory; no trace or
+  // test body is copied into the evidence file.
+  let testCount = 0;
+  const results: PackagedEvidence["results"] = [];
+  for (const [workflow, pattern] of Object.entries(workflowPatterns) as Array<[PackagedEvidence["workflows"][number], string]>) {
+    const result = await runPlaywright(["tests/e2e/lifecycle.spec.ts", "tests/e2e/empty-shell.spec.ts", "--grep", pattern, "--reporter=json"], env);
+    if (result.code !== 0) throw new Error(`H1_PACKAGED_E2E_FAILED:${workflow}:${sanitizeDiagnostic(`${result.stdout}\n${result.stderr}`)}`);
+    const summary = parsePlaywrightSummary(result.stdout);
+    if (summary.testCount !== 1 || summary.failed > 0) throw new Error(`H1_PACKAGED_E2E_INCOMPLETE:${workflow}`);
+    testCount += summary.testCount;
+    results.push({ workflow, status: "passed" });
+  }
   const evidence: PackagedEvidence = {
     schemaVersion: 1,
     sanitized: true,
@@ -43,12 +48,12 @@ async function main(): Promise<void> {
     buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
     runner: { mode: "playwright-electron", status: "ready" },
     workflows: ["process-tree", "external-edit", "backup-restore", "single-instance"],
-    results: ["process-tree", "external-edit", "backup-restore", "single-instance"].map((workflow) => ({ workflow, status: "passed" as const })),
-    testCount: summary.testCount
+    results,
+    testCount
   };
   mkdirSync(resolve(evidencePath, ".."), { recursive: true });
   writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + "\n", "utf8");
-  console.log(JSON.stringify({ status: "pass", evidencePath: "external/h1/packaged-lifecycle.json", testCount: summary.testCount, workflows: evidence.workflows }, null, 2));
+  console.log(JSON.stringify({ status: "pass", evidencePath: "external/h1/packaged-lifecycle.json", testCount, workflows: evidence.workflows }, null, 2));
 }
 
 function runPlaywright(args: readonly string[], env: NodeJS.ProcessEnv): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> {

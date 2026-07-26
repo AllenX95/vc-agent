@@ -6,6 +6,7 @@ import {
   IPC_SCHEMA_VERSION,
   canonicalParseSchema,
   hostCommandSchema,
+  type ArtifactRecord,
   type ActorRef,
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
@@ -32,17 +33,22 @@ import {
   type SkillInventoryItem as ContractSkillInventoryItem,
   type IntegrationState,
   type IntegrationJobSummary,
-  type SubAgentProfileSnapshot
+  type SubAgentProfileSnapshot,
+  type SubAgentRole,
+  type RuntimeResourceSnapshot,
+  type SubAgentContextBoundary,
+  type TaskModelType
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
 import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, FixtureSubAgentAdapter, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentRuntime, UnavailableSubAgentAdapter, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, FixtureSubAgentAdapter, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
+import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
 import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
@@ -166,6 +172,7 @@ let skillCreatorWorkflow: SkillCreationWorkflow | null = null;
 let pageRecoveryPipeline: PageRecoveryPipeline | null = null;
 let mcpIntegration: McpIntegrationManager | null = null;
 let subAgentRuntime: SubAgentRuntime | null = null;
+let subAgentProviderExecutor: DesktopSubAgentProviderExecutor | null = null;
 let lastPageRecoveryParse: IntegrationState["pageRecovery"]["lastParse"] | undefined;
 let externalNetworkRequests = 0;
 let shuttingDown = false;
@@ -457,21 +464,127 @@ function resolveDreamProfile(profileId?: string): ModelProfile | undefined {
   return effectiveId === undefined ? undefined : stateStore.getModelProfile(effectiveId);
 }
 
-function resolveSubAgentProfile(input: { readonly role: "researcher" | "critic" | "synthesizer" | "writer" | "custom"; readonly requestedProfileId?: string }): SubAgentProfileSnapshot | undefined {
+function resolveSubAgentProfile(input: { readonly role: "researcher" | "critic" | "synthesizer" | "writer" | "custom"; readonly requestedProfileId?: string; readonly parentThreadId?: string }): SubAgentProfileSnapshot | undefined {
   if (stateStore === null) return undefined;
-  const profiles = stateStore.listModelProfiles();
-  const roleTask: Record<typeof input.role, "independent_evidence" | "memory_aware_reflection" | "document_generation" | "ordinary_conversation"> = {
-    researcher: "independent_evidence",
-    critic: "independent_evidence",
-    synthesizer: "memory_aware_reflection",
-    writer: "document_generation",
-    custom: "ordinary_conversation"
-  };
-  const requested = input.requestedProfileId;
-  const roleAssignment = stateStore.getTaskModelAssignment(roleTask[input.role])?.profileId;
-  const selectedId = requested ?? roleAssignment ?? profiles[0]?.id;
+  const parentThread = input.parentThreadId === undefined ? undefined : stateStore.getThread(input.parentThreadId);
+  if (parentThread === undefined) return undefined;
+  const roleAssignment = stateStore.getTaskModelAssignment(subAgentAssignmentTaskType(input.role))?.profileId;
+  const defaultAssignment = stateStore.getTaskModelAssignment("sub_agent_default")?.profileId;
+  const selectedId = input.requestedProfileId ?? roleAssignment ?? defaultAssignment ?? parentThread.activeProfileId;
   const selected = selectedId === undefined ? undefined : stateStore.getModelProfile(selectedId);
-  return selected === undefined ? undefined : { profileId: selected.id, name: selected.name, provider: selected.provider, model: selected.model, thinkingLevel: selected.thinkingLevel };
+  if (selected !== undefined && parentThread.scope === "project" && !stateStore.isProjectProfileAuthorized(parentThread.projectId, selected.id)) return undefined;
+  const resolutionSource = input.requestedProfileId !== undefined
+    ? "explicit_override" as const
+    : roleAssignment !== undefined
+      ? "role_assignment" as const
+      : defaultAssignment !== undefined
+        ? "default_sub_agent" as const
+        : "primary_active" as const;
+  return selected === undefined ? undefined : { profileId: selected.id, name: selected.name, provider: selected.provider, model: selected.model, thinkingLevel: selected.thinkingLevel, resolutionSource };
+}
+
+function subAgentAssignmentTaskType(role: SubAgentRole): TaskModelType {
+  return `sub_agent_${role}` as TaskModelType;
+}
+
+async function resolveSubAgentCapability(input: SubAgentCapabilityExecutionContext): Promise<CapabilityExecutionResult> {
+  const fail = (code: string, content: string, status: CapabilityExecutionResult["status"] = "rejected"): CapabilityExecutionResult => ({ schemaVersion: 1, requestId: input.request.requestId, status, code, content: content.slice(0, 20_000) });
+  if (stateStore === null || capabilityGateway === null) return fail("SUB_AGENT_CAPABILITY_UNAVAILABLE", "The Host capability broker is not initialized.", "failed");
+  const parentThread = stateStore.getThread(input.parentThreadId);
+  if (parentThread === undefined) return fail("SUB_AGENT_PARENT_THREAD_UNAVAILABLE", "The parent Thread is no longer available.", "failed");
+  if (parentThread.scope !== input.contextBoundary.scope) return fail("SUB_AGENT_SCOPE_REJECTED", "The capability request crossed the parent Sub-Agent scope boundary.");
+  if (parentThread.scope === "project" && parentThread.projectId !== input.contextBoundary.projectId) return fail("SUB_AGENT_SCOPE_REJECTED", "The capability request crossed the parent Project boundary.");
+  const activeCapabilityIds = providerCapabilityIds(input.capabilitySet, input.contextBoundary.scope);
+  if (!activeCapabilityIds.includes(input.request.capabilityId)) return fail("SUB_AGENT_CAPABILITY_NOT_ALLOWED", "This capability was not authorized for the Sub-Agent task.");
+  const request: CapabilityExecutionRequest = {
+    ...input.request,
+    expectedStateVersion: parentThread.stateVersion,
+    actor: { actorType: "sub_agent", actorId: input.taskId, parentActorId: "primary-agent" },
+    provenance: { producerType: "sub_agent", producerId: input.taskId }
+  };
+  const outputLocation = parentThread.scope === "project"
+    ? (() => { const project = stateStore!.getProject(parentThread.projectId); return project === undefined ? undefined : join(project.path, "outputs"); })()
+    : input.contextBoundary.outputRoot ?? parentThread.outputLocation;
+  const decision = await capabilityGateway.request(request, {
+    accessMode: stateStore.getAccessMode(),
+    scope: input.contextBoundary.scope,
+    stateVersion: parentThread.stateVersion,
+    activeCapabilityIds,
+    outputIntent: input.capabilitySet.includes("write_output"),
+    ...(outputLocation === undefined ? {} : { outputLocation })
+  });
+  if (decision.type === "confirmation_required") return fail("SUB_AGENT_CONFIRMATION_REQUIRED", "This capability requires an interactive parent confirmation and was not executed.");
+  let result = decision.result;
+  if (result.artifact !== undefined && result.status === "completed") {
+    try {
+      // The provider Worker uses an isolated synthetic Thread/Turn for model
+      // execution. Artifacts are owned by the parent Thread, however: the
+      // persistence layer enforces a foreign key to persisted threads. Keep
+      // the Sub-Agent producer/capability request provenance while projecting
+      // the source to the parent conversation before registration.
+      const registeredArtifact: ArtifactRecord = {
+        ...result.artifact,
+        source: {
+          ...result.artifact.source,
+          threadId: input.parentThreadId,
+          turnId: input.parentTurnId
+        }
+      };
+      stateStore.recordArtifact(registeredArtifact);
+      result = { ...result, artifact: registeredArtifact };
+      if (parentThread.scope === "project") {
+        const project = stateStore.getProject(parentThread.projectId);
+        if (project === undefined) throw new Error("Project not found");
+        const projectOutput = projectOutputs.record({
+          projectId: project.id,
+          projectPath: project.path,
+          artifact: registeredArtifact,
+          profile: { id: input.profile.profileId, provider: input.profile.provider, model: input.profile.model },
+          capabilityId: request.capabilityId,
+          ...(typeof request.arguments.skillId === "string" ? { skillId: request.arguments.skillId } : {}),
+          sourceReferences: Array.isArray(request.arguments.sourceReferences) ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string") : [],
+          warnings: Array.isArray(request.arguments.warnings) ? request.arguments.warnings.filter((value): value is string => typeof value === "string") : [],
+          relatedArtifacts: Array.isArray(request.arguments.relatedArtifacts) ? request.arguments.relatedArtifacts.flatMap((value) => { const parsed = zRelatedArtifact(value); return parsed === undefined ? [] : [parsed]; }) : []
+        });
+        emit({ ...eventMetadata(request.correlationId, input.parentThreadId), event: "project.outputs.updated", payload: { projectId: projectOutput.projectId, outputs: projectOutputs.list(projectOutput.projectId, project.path) } });
+      }
+    } catch {
+      result = { schemaVersion: 1, requestId: result.requestId, status: "unknown_outcome", code: "ARTIFACT_COMMIT_UNKNOWN", content: "The Sub-Agent file write completed but Output registration could not be confirmed." };
+    }
+  }
+  return result;
+}
+
+async function resolveSubAgentContextReference(input: { readonly referenceId: string; readonly boundary: SubAgentContextBoundary }): Promise<{ readonly source: string; readonly content: string } | undefined> {
+  if (input.boundary.scope !== "project" || input.boundary.projectId === undefined || stateStore === null) return undefined;
+  const project = stateStore.getProject(input.boundary.projectId);
+  if (project === undefined) return undefined;
+  if (input.referenceId.startsWith("project-context:")) {
+    const sectionId = input.referenceId.slice("project-context:".length).split("@")[0];
+    const document = projectContexts.load(project.id, project.path, false);
+    const section = document?.sections.find((candidate) => candidate.id === sectionId || candidate.title === sectionId);
+    return section === undefined ? undefined : { source: `project-context:${section.id}`, content: `${section.title}\n${section.content}` };
+  }
+  if (!input.referenceId.startsWith("material:")) return undefined;
+  const reference = input.referenceId.slice("material:".length);
+  const [materialId, blockPart] = reference.split("/block:", 2);
+  const material = stateStore.listMaterials(project.id).find((candidate) => candidate.id === materialId);
+  if (material === undefined || material.availability !== "active") return undefined;
+  let parsed = stateStore.getCurrentParsedMaterial(material.id);
+  if (parsed === undefined) {
+    const parsedEvent = await parseMaterial(`sub-agent-context:${material.id}`, material.id);
+    if (parsedEvent.event !== "material.parse.completed") return undefined;
+    parsed = stateStore.getCurrentParsedMaterial(material.id);
+  }
+  if (parsed === undefined) return undefined;
+  try {
+    const canonical = canonicalParseSchema.parse(JSON.parse(readFileSync(join(project.path, parsed.artifact_path), "utf8")));
+    const blocks = blockPart === undefined ? canonical.blocks : canonical.blocks.filter((block) => block.id === blockPart);
+    const content = blocks.map((block) => block.rows === undefined ? block.text ?? "" : block.rows.map((row) => row.join(" | ")).join("\n")).filter(Boolean).join("\n\n");
+    return content.length === 0 ? undefined : { source: `material:${material.id}`, content };
+  } catch {
+    return undefined;
+  }
 }
 
 function subAgentHostEvent(event: SubAgentRuntimeEvent): HostEvent {
@@ -1516,6 +1629,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           for (const task of command.payload.tasks) {
             if (parentThread.scope === "project" && (task.contextBoundary.scope !== "project" || task.contextBoundary.projectId !== parentThread.projectId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Project Sub-Agent tasks must remain inside the parent Project scope.");
             if (parentThread.scope === "unscoped" && task.contextBoundary.scope !== "unscoped") return diagnostic(command.correlationId, "HOST_FAILURE", "Unscoped Sub-Agent tasks cannot acquire Project scope.");
+            if (parentThread.scope === "project" && task.profileId !== undefined && !stateStore.isProjectProfileAuthorized(parentThread.projectId, task.profileId)) return diagnostic(command.correlationId, "HOST_FAILURE", "The requested Sub-Agent Model Profile is not authorized in the parent Project.");
           }
           const projection = subAgentRuntime.authorize(command.payload);
           return { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.authorized", payload: { projection } };
@@ -1548,6 +1662,20 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skipping a Sub-Agent task requires explicit User action.");
         const projection = subAgentRuntime.skip(command.payload.taskId);
         return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.task.skipped", payload: { projection } };
+      }
+      case "sub_agent.handoff.adopt": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Adopting a Sub-Agent handoff requires explicit User action.");
+        try {
+          const projection = subAgentRuntime.adoptHandoff(command.payload.taskId);
+          return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.handoff.adopted", payload: { projection } };
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Sub-Agent handoff could not be adopted."); }
+      }
+      case "sub_agent.handoff.reject": {
+        if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Rejecting a Sub-Agent handoff requires explicit User action.");
+        try {
+          const projection = subAgentRuntime.rejectHandoff(command.payload.taskId);
+          return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.handoff.rejected", payload: { projection } };
+        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Sub-Agent handoff could not be rejected."); }
       }
       case "sub_agent.record.delete": {
         if (command.actor.actorType !== "user" || subAgentRuntime === null || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Deleting Sub-Agent records requires explicit User confirmation.");
@@ -2419,6 +2547,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
 
 function handleWorkerEvent(workerEvent: WorkerEvent): void {
   if (extensionAuditWorker?.handleEvent(workerEvent) === true) return;
+  if (subAgentProviderExecutor?.handleEvent(workerEvent) === true) return;
   if (workerEvent.event === "trajectory.acknowledged") {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
@@ -3174,10 +3303,34 @@ app.whenReady().then(() => {
     supervisor: workerSupervisor,
     root: join(app.getPath("userData"), "integrations", "extensions", "audit-sessions")
   });
+  subAgentProviderExecutor = new DesktopSubAgentProviderExecutor({
+    supervisor: workerSupervisor,
+    root: app.getPath("userData"),
+    resolveProjectPath: (projectId) => stateStore?.getProject(projectId)?.path,
+    resolveCredential: (profileId) => {
+      const profile = stateStore?.getModelProfile(profileId);
+      if (profile === undefined) return undefined;
+      const encrypted = stateStore?.getEncryptedCredential(profile.credentialRef);
+      if (encrypted === undefined) return undefined;
+      try { return credentials.decrypt(encrypted); } catch { return undefined; }
+    },
+    resources: (): RuntimeResourceSnapshot => {
+      const revision = stateStore?.getActiveSystemPromptRevision();
+      return {
+        schemaVersion: 1,
+        revisionId: revision?.id ?? "sub-agent-fallback-v1",
+        systemPrompt: revision?.content ?? SHIPPED_MINIMAL_VC_SYSTEM_PROMPT,
+        appendSystemPrompt: []
+      };
+    },
+    extensions: () => extensionRuntimeSnapshot(),
+    resolveCapability: resolveSubAgentCapability
+  });
+  const subAgentContextCompiler = new SubAgentContextCompiler({ resolve: resolveSubAgentContextReference });
   subAgentRuntime = new SubAgentRuntime({
     path: join(app.getPath("userData"), "delegation", "runs.json"),
     resolver: { resolve: resolveSubAgentProfile },
-    adapter: process.env.VC_AGENT_TEST_SUB_AGENT_FIXTURE === "1" ? new FixtureSubAgentAdapter({ delayMs: 5 }) : new UnavailableSubAgentAdapter(),
+    adapter: process.env.VC_AGENT_TEST_SUB_AGENT_FIXTURE === "1" ? new FixtureSubAgentAdapter({ delayMs: 5 }) : new ProviderSubAgentAdapter(subAgentProviderExecutor, { contextCompiler: subAgentContextCompiler }),
     scheduler: executionScheduler,
     capacity: Math.max(1, Math.min(EXECUTION_CAPACITY, Number.parseInt(process.env.VC_AGENT_SUB_AGENT_CAPACITY ?? String(EXECUTION_CAPACITY), 10) || EXECUTION_CAPACITY)),
     readOnly: stateStore.isReadOnlyRecovery,

@@ -8,6 +8,7 @@ import {
   createSubAgentProfileResolver,
   writePersonalBuildGateReport,
   inspectPackagedLifecycleEvidence,
+  inspectSubAgentCompatibilityEvidence,
   gateExitCode,
   type PersonalBuildAcceptanceCriterion,
   type PersonalBuildExecutionMode,
@@ -48,7 +49,8 @@ async function main(): Promise<void> {
       ...(ocrReady ? [] : ["OCR"]),
       ...(mcpReady ? [] : ["MCP"])
     ];
-    const d1RealAvailable = process.env.VC_AGENT_REAL_SUB_AGENT === "1" && isExternalEvidence(process.env.VC_AGENT_REAL_SUB_AGENT_EVIDENCE);
+    const d1Evidence = process.env.VC_AGENT_REAL_SUB_AGENT === "1" ? inspectSubAgentCompatibilityEvidence({ path: process.env.VC_AGENT_REAL_SUB_AGENT_EVIDENCE, repositoryRoot: process.cwd() }) : { valid: false, reason: "real Sub-Agent compatibility evidence is not configured" };
+    const d1RealAvailable = d1Evidence.valid;
     const packagedLifecycle = inspectPackagedLifecycleEvidence({ path: process.env.VC_AGENT_H1_PACKAGED_EVIDENCE, repositoryRoot: process.cwd() });
     const packagedLifecycleReady = packagedLifecycle.valid;
     if (packagedLifecycleReady) {
@@ -217,8 +219,6 @@ function readIntegrationComponents(path: string): Record<"office" | "ocr" | "mcp
     return { office: String(parsed.environmentDoctor?.office?.status ?? "attention"), ocr: String(parsed.environmentDoctor?.ocr?.status ?? "attention"), mcp: String(parsed.environmentDoctor?.mcp?.status ?? "attention") };
   } catch { return { office: "attention", ocr: "attention", mcp: "attention" }; }
 }
-function isExternalEvidence(path: string | undefined): boolean { return path !== undefined && existsSync(resolve(path)) && resolve(path) !== resolve(process.cwd()) && !resolve(path).startsWith(resolve(process.cwd()) + "\\"); }
-
 function buildAcceptanceMatrix(scenarios: readonly Scenario[], input: { c2Blocked: boolean; d1RealAvailable: boolean; packagedLifecycleReady: boolean }): PersonalBuildAcceptanceCriterion[] {
   const statusFor = (id: string, blocked = false): PersonalBuildGateStatus => blocked ? "blocked" : scenarios.some((item) => item.status === "fail" && item.testId === id) ? "fail" : "pass";
   return [

@@ -21,6 +21,8 @@ import {
   type SubAgentUsage
 } from "@vc-agent/contracts";
 import type { BoundedExecutionScheduler, ModelExecutionLease } from "./execution-scheduler.js";
+import type { SubAgentContextBundle } from "./sub-agent-context.js";
+import { estimateTokens } from "./system-prompt.js";
 
 export interface SubAgentExecutionInput {
   readonly run: SubAgentRun;
@@ -34,6 +36,31 @@ export interface SubAgentExecutionResult {
   readonly usage: SubAgentUsage;
   readonly handoff?: SubAgentHandoff;
   readonly toolEvents?: readonly { capability: string; status: "started" | "completed" | "failed" | "rejected"; summary: string }[];
+  readonly contextHash?: string;
+}
+
+export interface SubAgentProviderExecutionInput {
+  readonly attemptId: string;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly parentThreadId: string;
+  readonly parentTurnId: string;
+  readonly profile: SubAgentProfileSnapshot;
+  readonly prompt: string;
+  readonly contextBoundary: SubAgentTask["contextBoundary"];
+  readonly capabilitySet: readonly SubAgentCapability[];
+  readonly contextBundle?: SubAgentContextBundle;
+  readonly outputTarget?: string;
+  readonly signal: AbortSignal;
+}
+
+export interface SubAgentProviderExecutionResult {
+  readonly assistantMessage: string;
+  readonly usage: SubAgentUsage;
+  readonly handoff?: SubAgentHandoff;
+  readonly toolEvents?: readonly { capability: string; status: "started" | "completed" | "failed" | "rejected"; summary: string }[];
+  readonly contextHash?: string;
+  readonly contextBundle?: SubAgentContextBundle;
 }
 
 export interface SubAgentAdapter {
@@ -43,7 +70,7 @@ export interface SubAgentAdapter {
 }
 
 export interface SubAgentProfileResolver {
-  resolve(input: { readonly role: SubAgentRole; readonly requestedProfileId?: string }): SubAgentProfileSnapshot | undefined;
+  resolve(input: { readonly role: SubAgentRole; readonly requestedProfileId?: string; readonly parentThreadId?: string }): SubAgentProfileSnapshot | undefined;
 }
 
 export interface SubAgentRuntimeEvent {
@@ -61,6 +88,8 @@ export interface SubAgentRuntimeEvent {
     | "sub_agent.task.failed"
     | "sub_agent.task.retry"
     | "sub_agent.task.skipped"
+    | "sub_agent.handoff.adopted"
+    | "sub_agent.handoff.rejected"
     | "sub_agent.record.deleted"
     | "sub_agent.attempt.created"
     | "sub_agent.budget.exhausted";
@@ -171,7 +200,7 @@ export class SubAgentRuntime {
     this.#runs.set(id, run);
     for (const raw of input.tasks) {
       const parsed = subAgentTaskInputSchema.parse(raw);
-      const profile = this.#resolver.resolve({ role: parsed.role, ...(parsed.profileId === undefined ? {} : { requestedProfileId: parsed.profileId }) });
+      const profile = this.#resolver.resolve({ role: parsed.role, parentThreadId: input.parentThreadId, ...(parsed.profileId === undefined ? {} : { requestedProfileId: parsed.profileId }) });
       if (profile === undefined) throw new Error(`SUB_AGENT_PROFILE_UNAVAILABLE:${parsed.role}`);
       validateCapabilities(parsed.capabilitySet);
       if (parsed.contextBoundary.scope === "project" && parsed.contextBoundary.projectId === undefined) throw new Error("SUB_AGENT_PROJECT_SCOPE_REQUIRED");
@@ -250,6 +279,14 @@ export class SubAgentRuntime {
     return this.#projection(task.runId);
   }
 
+  adoptHandoff(taskId: string): SubAgentProjection | undefined {
+    return this.#reviewHandoff(taskId, "adopted");
+  }
+
+  rejectHandoff(taskId: string): SubAgentProjection | undefined {
+    return this.#reviewHandoff(taskId, "rejected");
+  }
+
   deleteRecord(runId: string, taskId?: string): SubAgentProjection | undefined {
     const run = this.#runs.get(runId);
     if (run === undefined) return undefined;
@@ -324,6 +361,15 @@ export class SubAgentRuntime {
         this.#budgetExhausted(run.id);
         continue;
       }
+      // Perform a conservative preflight before creating a Provider request.
+      // The objective is the only payload guaranteed to be known here; the
+      // adapter adds bounded context and system instructions later. Refusing
+      // when even this minimum estimate cannot fit prevents a request that is
+      // already over the shared run budget.
+      if (run.sharedTokenBudget !== undefined && run.usage.totalTokens + estimateTokens(task.objective) > run.sharedTokenBudget) {
+        this.#budgetExhausted(run.id);
+        continue;
+      }
       const attempt: SubAgentAttempt = {
         schemaVersion: 1, id: randomUUID(), taskId, instructionRevision: task.attemptIds.length + 1, profile: task.resolvedProfile,
         status: "created", messages: [{ role: "user", content: sanitizeText(task.objective, 20_000) }], toolEvents: [], usage: zeroUsage(), createdAt: this.#timestamp(), updatedAt: this.#timestamp()
@@ -375,7 +421,7 @@ export class SubAgentRuntime {
         return;
       }
       if (result.handoff?.outputPath !== undefined && task.outputTarget !== undefined && normalizeTarget(result.handoff.outputPath) !== task.outputTarget) throw new Error("SUB_AGENT_OUTPUT_TARGET_MISMATCH");
-      const nextAttempt = { ...this.#attempts.get(attemptId)!, status: "completed" as const, messages: [{ role: "user" as const, content: sanitizeText(task.objective, 20_000) }, { role: "assistant" as const, content: sanitizeText(result.assistantMessage, 20_000) }], toolEvents: (result.toolEvents ?? []).map((item) => ({ ...item, summary: sanitizeText(item.summary, 1_200) })), usage, updatedAt: this.#timestamp() };
+      const nextAttempt = { ...this.#attempts.get(attemptId)!, status: "completed" as const, messages: [{ role: "user" as const, content: sanitizeText(task.objective, 20_000) }, { role: "assistant" as const, content: sanitizeText(result.assistantMessage, 20_000) }], toolEvents: (result.toolEvents ?? []).map((item) => ({ ...item, summary: sanitizeText(item.summary, 1_200) })), usage, ...(result.contextHash === undefined ? {} : { contextHash: result.contextHash }), updatedAt: this.#timestamp() };
       this.#attempts.set(attemptId, nextAttempt);
       const nextTask = { ...updatedTask, status: "completed" as const, handoff: result.handoff === undefined ? undefined : sanitizeHandoff(result.handoff), usage: addUsage(updatedTask.usage, usage), updatedAt: this.#timestamp() };
       this.#tasks.set(taskId, nextTask);
@@ -440,6 +486,23 @@ export class SubAgentRuntime {
     this.#runs.set(runId, next);
     this.#save();
     this.#emit({ event: failed ? "sub_agent.task.updated" : "sub_agent.run.completed", projection: this.#projection(runId) });
+  }
+
+  #reviewHandoff(taskId: string, reviewStatus: "adopted" | "rejected"): SubAgentProjection | undefined {
+    const task = this.#tasks.get(taskId);
+    if (task === undefined) return undefined;
+    if (task.handoff === undefined) throw new Error("SUB_AGENT_HANDOFF_NOT_AVAILABLE");
+    if (task.handoff.adoptedByParent || task.handoff.reviewStatus === "adopted" || task.handoff.reviewStatus === "rejected") throw new Error("SUB_AGENT_HANDOFF_ALREADY_REVIEWED");
+    const nextTask: SubAgentTask = {
+      ...task,
+      handoff: { ...task.handoff, adoptedByParent: reviewStatus === "adopted", reviewStatus },
+      updatedAt: this.#timestamp()
+    };
+    this.#tasks.set(taskId, nextTask);
+    this.#save();
+    const projection = this.#projection(task.runId);
+    this.#emit({ event: reviewStatus === "adopted" ? "sub_agent.handoff.adopted" : "sub_agent.handoff.rejected", projection, task: nextTask });
+    return projection;
   }
 
   #projection(runId: string): SubAgentProjection {
@@ -521,7 +584,7 @@ export class FixtureSubAgentAdapter implements SubAgentAdapter {
     return {
       assistantMessage: `Fixture ${input.task.role} result ${digest}: ${input.task.objective.slice(0, 500)}`,
       usage: { inputTokens: Math.max(1, Math.ceil(input.task.objective.length / 4)), outputTokens: 48, totalTokens: Math.max(1, Math.ceil(input.task.objective.length / 4)) + 48 },
-      ...(outputPath === undefined ? {} : { handoff: { summary: `Fixture output for ${input.task.role}.`, provenance: [{ referenceId: `sub-agent:${input.attempt.id}`, source: "fixture" }], outputPath, adoptedByParent: false } }),
+      ...(outputPath === undefined ? {} : { handoff: { summary: `Fixture output for ${input.task.role}.`, provenance: [{ referenceId: `sub-agent:${input.attempt.id}`, source: "fixture" }], outputPath, adoptedByParent: false, reviewStatus: "pending_parent_review" as const } }),
       toolEvents: input.task.capabilitySet.map((capability) => ({ capability, status: "completed" as const, summary: "Fixture capability completed without external I/O." }))
     };
   }
@@ -536,8 +599,15 @@ export function createSubAgentProfileResolver(input: {
   const byId = new Map(input.profiles.map((profile) => [profile.profileId, profile]));
   return {
     resolve: ({ role, requestedProfileId }) => {
-      const id = requestedProfileId ?? input.roleProfiles?.[role] ?? input.defaultProfileId ?? input.primaryProfileId;
-      return id === undefined ? undefined : byId.get(id);
+      const selection = requestedProfileId === undefined
+        ? input.roleProfiles?.[role] === undefined
+          ? input.defaultProfileId === undefined
+            ? { id: input.primaryProfileId, resolutionSource: "primary_active" as const }
+            : { id: input.defaultProfileId, resolutionSource: "default_sub_agent" as const }
+          : { id: input.roleProfiles[role], resolutionSource: "role_assignment" as const }
+        : { id: requestedProfileId, resolutionSource: "explicit_override" as const };
+      const profile = selection.id === undefined ? undefined : byId.get(selection.id);
+      return profile === undefined ? undefined : { ...profile, resolutionSource: selection.resolutionSource };
     }
   };
 }

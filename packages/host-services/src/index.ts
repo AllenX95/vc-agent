@@ -32,10 +32,13 @@ export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutc
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";
-export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, createSubAgentProfileResolver, zeroSubAgentUsage, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
+export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, createSubAgentProfileResolver, zeroSubAgentUsage, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
+export { ProviderSubAgentAdapter, type SubAgentProviderExecutor } from "./sub-agent-provider-adapter.js";
+export { SubAgentContextCompiler, type SubAgentContextBundle, type SubAgentContextEntry, type SubAgentContextResolution, type SubAgentContextResolver } from "./sub-agent-context.js";
 export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, type PersonalBuildDependency, type PersonalBuildExecutionMode, type PersonalBuildGateArtifacts, type PersonalBuildGateInput, type PersonalBuildGateReport, type PersonalBuildGateStatus, type PersonalBuildScenarioResult } from "./personal-build-gate.js";
 export { inspectRealDependencyEvidence, type RealDependencyEvidenceCheck, type RealDependencyKind } from "./real-dependency-evidence.js";
 export { inspectPackagedLifecycleEvidence, type PackagedLifecycleEvidenceCheck } from "./personal-build-evidence.js";
+export { inspectSubAgentCompatibilityEvidence, type SubAgentCompatibilityEvidenceCheck } from "./sub-agent-evidence.js";
 export { gateExitCode, type GateDecision } from "./gate-cli.js";
 export { resolveVcAgentSkillsRoot, resolveVcAgentUserDataRoot } from "./app-data-paths.js";
 export {
