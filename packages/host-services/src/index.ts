@@ -36,6 +36,7 @@ export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, cr
 export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, type PersonalBuildDependency, type PersonalBuildExecutionMode, type PersonalBuildGateArtifacts, type PersonalBuildGateInput, type PersonalBuildGateReport, type PersonalBuildGateStatus, type PersonalBuildScenarioResult } from "./personal-build-gate.js";
 export { inspectRealDependencyEvidence, type RealDependencyEvidenceCheck, type RealDependencyKind } from "./real-dependency-evidence.js";
 export { inspectPackagedLifecycleEvidence, type PackagedLifecycleEvidenceCheck } from "./personal-build-evidence.js";
+export { gateExitCode, type GateDecision } from "./gate-cli.js";
 export {
   AgentRuntimeSupervisor,
   LocalJobSupervisor,

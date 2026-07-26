@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalParseSchema, utilityJobCommandSchema, type OfficeSkillJobCommand, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
+import { resolveParserPython } from "./python-runtime.js";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Utility Worker requires an Electron Utility Process parent port");
@@ -243,7 +244,7 @@ function terminateOfficeChild(child: ChildProcessWithoutNullStreams): void {
 }
 
 function spawnPython(scriptName: string, executable?: string): ChildProcessWithoutNullStreams {
-  const python = executable ?? process.env.VC_AGENT_PYTHON?.trim() ?? "python";
+  const python = resolveParserPython(executable === undefined ? {} : { executable });
   const script = join(dirname(fileURLToPath(import.meta.url)), scriptName);
   const child = spawn(python, [script], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: parserEnvironment() });
   children.add(child);
@@ -269,6 +270,7 @@ function parserEnvironment(): NodeJS.ProcessEnv {
     TEMP: process.env.TEMP ?? "",
     TMP: process.env.TMP ?? "",
     PYTHONUTF8: "1",
+    ...(process.env.VC_AGENT_OCR_RUNTIME_ROOT === undefined ? {} : { VC_AGENT_OCR_RUNTIME_ROOT: process.env.VC_AGENT_OCR_RUNTIME_ROOT }),
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True",
     ...(process.env.VC_AGENT_OCR_MODELS_ROOT === undefined ? {} : { VC_AGENT_OCR_MODELS_ROOT: process.env.VC_AGENT_OCR_MODELS_ROOT })
   };

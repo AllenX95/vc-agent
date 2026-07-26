@@ -4,10 +4,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { testEnvironment } from "./test-environment";
 
 const runtimeRoot = process.env.VC_AGENT_OCR_RUNTIME_ROOT;
 
-test("calls the validated PaddleOCR and OvisOCR2 runtimes through vc-agent", async () => {
+test("@real calls the validated PaddleOCR and OvisOCR2 runtimes through vc-agent", async () => {
   test.skip(runtimeRoot === undefined || !existsSync(join(runtimeRoot, "runtime-manifest.json")), "A validated local OCR runtime is required.");
   test.setTimeout(240_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-real-ocr-user-"));
@@ -19,7 +20,7 @@ test("calls the validated PaddleOCR and OvisOCR2 runtimes through vc-agent", asy
   const application = await electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", VC_AGENT_REAL_OCR: "1", VC_AGENT_OCR_RUNTIME_ROOT: runtimeRoot!, VC_AGENT_OCR_DEVICE: "auto", VC_AGENT_USER_DATA_DIR: userDataDirectory, VC_AGENT_TEST_PROJECT_PATH: projectDirectory }
+    env: testEnvironment({ VC_AGENT_REAL_OCR: "1", VC_AGENT_OCR_RUNTIME_ROOT: runtimeRoot!, VC_AGENT_OCR_DEVICE: "auto", VC_AGENT_USER_DATA_DIR: userDataDirectory, VC_AGENT_TEST_PROJECT_PATH: projectDirectory })
   });
   try {
     const window = await application.firstWindow();

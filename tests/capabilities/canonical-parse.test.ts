@@ -6,15 +6,17 @@ import { spawnSync } from "node:child_process";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { canonicalParseSchema, type CanonicalParse } from "@vc-agent/contracts";
 import { BASELINE_PARSER_ADAPTERS, expectedParserIdentity } from "@vc-agent/host-services";
+import { resolveParserPython } from "../../apps/utility-worker/src/python-runtime";
 
 const directories: string[] = [];
 const parserPath = resolve("apps/utility-worker/src/parser.py");
+const parserPython = resolveParserPython();
 
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 beforeAll(() => {
-  const check = spawnSync("python", ["-c", "import pymupdf, docx, pptx, openpyxl, yaml"], { encoding: "utf8" });
-  if (check.status !== 0) throw new Error(`Pinned parser dependencies are unavailable: ${check.stderr}`);
+  const check = spawnSync(parserPython, ["-c", "import pymupdf, docx, pptx, openpyxl, yaml"], { encoding: "utf8" });
+  if (check.status !== 0) throw new Error(`Pinned parser dependencies are unavailable via ${parserPython}: ${check.stderr}`);
 });
 
 describe("Canonical Parse adapters", () => {
@@ -38,7 +40,7 @@ p=Presentation(); s=p.slides.add_slide(p.slide_layouts[1]); s.shapes.title.text=
 w=Workbook(); ws=w.active; ws.title='Metrics'; ws.append(['Year','Revenue']); ws.append([2026,10]); w.save(root+'/model.xlsx')
 pdf=pymupdf.open(); page=pdf.new_page(); page.insert_text((72,72),'Native PDF investment evidence'); pdf.new_page(); pdf.save(root+'/report.pdf')
 `;
-    expect(spawnSync("python", ["-c", fixtureScript, directory], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync(parserPython, ["-c", fixtureScript, directory], { encoding: "utf8" }).status).toBe(0);
     writeFileSync(join(directory, "memo.md"), "# Thesis\nMarkdown evidence");
     writeFileSync(join(directory, "data.csv"), "Year,Revenue\n2026,10");
     writeFileSync(join(directory, "facts.json"), '{"company":"Acme"}');
@@ -69,7 +71,7 @@ function runParser(directory: string, name: string): CanonicalParse {
   const absolutePath = join(directory, name);
   const sourceHash = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
   const command = { schemaVersion: 1, jobId: crypto.randomUUID(), command: "material.parse", material: { id: crypto.randomUUID(), projectId: crypto.randomUUID(), relativePath: name, mediaType: "application/octet-stream", sourceHash, absolutePath }, stagingDirectory: join(directory, "stage"), timeoutMs: 30_000, maxOutputBytes: 10_000_000 };
-  const result = spawnSync("python", [parserPath], { input: JSON.stringify(command), encoding: "utf8", maxBuffer: 10_000_000 });
+  const result = spawnSync(parserPython, [parserPath], { input: JSON.stringify(command), encoding: "utf8", maxBuffer: 10_000_000 });
   if (result.status !== 0) throw new Error(result.stderr.trim());
   return canonicalParseSchema.parse(JSON.parse(result.stdout));
 }

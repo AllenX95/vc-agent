@@ -8,6 +8,7 @@ import {
   createSubAgentProfileResolver,
   writePersonalBuildGateReport,
   inspectPackagedLifecycleEvidence,
+  gateExitCode,
   type PersonalBuildAcceptanceCriterion,
   type PersonalBuildExecutionMode,
   type PersonalBuildGateStatus,
@@ -106,7 +107,7 @@ async function main(): Promise<void> {
       secretScanInputs: ["credentialRef: local-reference-only", "no prompt, Memory, OCR text, MCP body or package bytes exported", "fixture adapter made zero provider requests"]
     });
     console.log(JSON.stringify({ decision: report.report.decision, jsonPath: report.jsonPath, markdownPath: report.markdownPath, scenarios: report.report.executedTests.map(({ testId, status }) => ({ testId, status })) }, null, 2));
-    if (report.report.decision === "fail") process.exitCode = 1;
+    process.exitCode = gateExitCode(report.report.decision, process.argv.includes("--require-pass"));
   }
   rmSync(workRoot, { recursive: true, force: true });
 }

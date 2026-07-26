@@ -16,6 +16,7 @@ import {
   pageTextBlock,
   PINNED_PI_MCP_ADAPTER_VERSION,
   inspectRealDependencyEvidence,
+  gateExitCode,
   type McpAdapterConnection,
   type McpServerRecord,
   type McpToolSchema,
@@ -84,7 +85,7 @@ async function main(): Promise<void> {
       secretScanInputs: ["credentialRef: local-reference-only", "no package bytes or OCR text exported"]
     });
     console.log(JSON.stringify({ decision: report.report.decision, jsonPath: report.jsonPath, markdownPath: report.markdownPath, scenarios: report.report.executedTests.map((item) => ({ testId: item.testId, status: item.status })) }, null, 2));
-    if (report.report.decision === "fail") process.exitCode = 1;
+    process.exitCode = gateExitCode(report.report.decision, process.argv.includes("--require-pass"));
   }
   rmSync(workRoot, { recursive: true, force: true });
 }

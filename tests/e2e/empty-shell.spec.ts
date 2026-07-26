@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { LongTermMemoryStore } from "@vc-agent/host-services";
+import { testEnvironment } from "./test-environment";
 
 test("launches the empty shell without activating execution resources", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-e2e-"));
@@ -11,7 +12,7 @@ test("launches the empty shell without activating execution resources", async ()
   const application = await electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory }
+    env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory })
   });
 
   try {
@@ -369,7 +370,7 @@ test("backs up and mechanically restores Personal Cognition without Project meta
     await window.getByRole("button", { name: "Save Memory" }).click();
     await window.locator(".settings-tabs").getByRole("tab", { name: "General" }).click();
     await window.getByRole("button", { name: "Create backup" }).click();
-    await expect(window.getByRole("status")).toContainText("Backup created");
+    await expect(window.getByText(/^Backup created:/)).toBeVisible();
     const bundle = join(backupParent, readdirSync(backupParent)[0]!);
     const manifest = readFileSync(join(bundle, "manifest.json"), "utf8");
     const state = readFileSync(join(bundle, "domains", "personal-state.json"), "utf8");
@@ -556,7 +557,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
   const application = await electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory }
+    env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory })
   });
 
   try {
@@ -574,7 +575,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
 
     await window.getByRole("button", { name: "Adjust profile" }).click();
     await window.getByRole("button", { name: "New profile" }).click();
-    await window.getByLabel("Name").fill("Invalid key fixture");
+    await window.getByRole("textbox", { name: "Name", exact: true }).fill("Invalid key fixture");
     await window.getByLabel("Provider").fill("anthropic");
     await window.getByLabel("Model").fill("claude-sonnet-4-5");
     await window.getByLabel("API key").fill(apiKey);
@@ -1771,7 +1772,7 @@ async function launchApplication(root: string, userDataDirectory: string, extraE
   return electron.launch({
     args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory, ...extraEnvironment }
+    env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory, ...extraEnvironment })
   });
 }
 

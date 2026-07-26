@@ -159,6 +159,7 @@ function utilityEnvironment(): NodeJS.ProcessEnv {
     TMP: process.env.TMP ?? "",
     PYTHONUTF8: "1",
     ...(process.env.VC_AGENT_PYTHON === undefined ? {} : { VC_AGENT_PYTHON: process.env.VC_AGENT_PYTHON }),
+    ...(process.env.VC_AGENT_OCR_RUNTIME_ROOT === undefined ? {} : { VC_AGENT_OCR_RUNTIME_ROOT: process.env.VC_AGENT_OCR_RUNTIME_ROOT }),
     ...(process.env.VC_AGENT_OCR_PYTHON === undefined ? {} : { VC_AGENT_OCR_PYTHON: process.env.VC_AGENT_OCR_PYTHON }),
     ...(process.env.VC_AGENT_OCR_MODELS_ROOT === undefined ? {} : { VC_AGENT_OCR_MODELS_ROOT: process.env.VC_AGENT_OCR_MODELS_ROOT })
   };

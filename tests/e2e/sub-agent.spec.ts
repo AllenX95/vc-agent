@@ -2,11 +2,12 @@ import { _electron as electron, expect, test } from "@playwright/test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { testEnvironment } from "./test-environment";
 
 test("creates only an explicit flat bounded Sub-Agent run and restores its task tree", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-sub-agent-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
-  const application = await electron.launch({ args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`], cwd: root, env: { ...process.env, NODE_ENV: "test", VC_AGENT_USER_DATA_DIR: userDataDirectory, VC_AGENT_TEST_SUB_AGENT_FIXTURE: "1" } });
+  const application = await electron.launch({ args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`], cwd: root, env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory, VC_AGENT_TEST_SUB_AGENT_FIXTURE: "1" }) });
   try {
     const window = await application.firstWindow();
     await expect(window.getByTestId("empty-workspace")).toBeVisible();
