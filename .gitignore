@@ -10,3 +10,5 @@ test-results/
 .vite/
 __pycache__/
 *.pyc
+release/
+packaging/parser-runtime/

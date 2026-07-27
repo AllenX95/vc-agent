@@ -48,6 +48,7 @@ import {
   ExternalLink,
   Folder,
   FolderOpen,
+  Languages,
   KeyRound,
   MessageSquare,
   Minimize2,
@@ -61,6 +62,7 @@ import {
   SlidersHorizontal,
   Trash2
 } from "lucide-react";
+import { useUiLanguage } from "./i18n";
 
 type View = "workspace" | "settings";
 const TASK_MODEL_TYPES: Array<{ id: TaskModelType; label: string }> = [
@@ -116,6 +118,7 @@ function RecoveryBanner({ bootstrap }: { bootstrap: BootstrapState | null }) {
 }
 
 export function App() {
+  const [uiLanguage, toggleUiLanguage] = useUiLanguage();
   const [view, setView] = useState<View>("workspace");
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [diagnostic, setDiagnostic] = useState<HostEvent | null>(null);
@@ -674,7 +677,10 @@ export function App() {
       <aside className="left-rail" aria-label="Navigation">
         <div className="brand-row">
           <div className="brand-mark">VC</div><span>vc-agent</span>
-          <button className="icon-button" type="button" title="Search" aria-label="Search" disabled><Search size={17} /></button>
+          <div className="brand-actions">
+            <button className="language-button" type="button" title="Language" aria-label="Language" onClick={toggleUiLanguage}><Languages size={16} /><span>{uiLanguage === "en" ? "中" : "EN"}</span></button>
+            <button className="icon-button" type="button" title="Search" aria-label="Search" disabled><Search size={17} /></button>
+          </div>
         </div>
         <nav className="navigation-groups">
           <section>

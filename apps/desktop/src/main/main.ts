@@ -48,6 +48,7 @@ import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
+import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
 import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
 
@@ -2668,6 +2669,29 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     return;
   }
 
+  if (context.compactionOnly === true) {
+    executionScheduler!.recordFailure();
+    const record: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+      event: "thread.compaction.failed",
+      payload: { reason: "manual", failure: workerEvent.failure }
+    };
+    trajectoryStore!.append(record);
+    finishTurn(context);
+    acknowledgeTrajectory(context, record);
+    emit({
+      ...ipcMetadata(record),
+      event: "thread.compaction.failed",
+      payload: {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        reason: "manual",
+        failure: workerEvent.failure
+      }
+    });
+    return;
+  }
+
   if (workerEvent.failure.code === "WORKER_EXITED") {
     interruptTurn(context, "worker_exit", workerEvent.workerSequence);
     return;
@@ -3287,6 +3311,18 @@ function createMainWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
+  const runtimePaths = resolveDesktopRuntimePaths({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    mainDirectory: __dirname
+  });
+  if (app.isPackaged) {
+    const missingRuntimeComponents = validatePackagedRuntimePaths(runtimePaths);
+    if (missingRuntimeComponents.length > 0) {
+      throw new Error(`PACKAGED_RUNTIME_INCOMPLETE:${missingRuntimeComponents.join(",")}`);
+    }
+  }
+  if (runtimePaths.parserPython !== undefined) process.env.VC_AGENT_PYTHON = runtimePaths.parserPython;
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     if (details.url.startsWith("http://") || details.url.startsWith("https://")) externalNetworkRequests += 1;
     callback({});
@@ -3298,7 +3334,7 @@ app.whenReady().then(() => {
   skillsDirectory = new SkillPackageManager({ root: join(app.getPath("userData"), "skills") });
   skillProjector = new SkillResourceProjector({ manager: skillsDirectory });
   executionScheduler = new BoundedExecutionScheduler({ capacity: EXECUTION_CAPACITY, store: stateStore });
-  workerSupervisor = new AgentWorkerSupervisor(join(__dirname, "../../../agent-worker/dist/index.js"), handleWorkerEvent);
+  workerSupervisor = new AgentWorkerSupervisor(runtimePaths.agentWorkerEntry, handleWorkerEvent);
   extensionAuditWorker = new ExtensionAuditWorkerExecutor({
     supervisor: workerSupervisor,
     root: join(app.getPath("userData"), "integrations", "extensions", "audit-sessions")
@@ -3354,7 +3390,7 @@ app.whenReady().then(() => {
     isGloballyIdle: () => (executionScheduler?.telemetry().runningCount ?? 0) === 0 && (workerSupervisor?.activity.activeSessions ?? 0) === 0,
     terminateWorkers: () => { workerSupervisor?.closeAll(); }
   });
-  utilityJobRunner = new UtilityJobRunner(join(__dirname, "../../../utility-worker/dist/index.js"));
+  utilityJobRunner = new UtilityJobRunner(runtimePaths.utilityWorkerEntry);
   officeOrchestrator = new OfficeSkillOrchestrator({ skills: skillsDirectory, adapter: createDesktopOfficeAdapter({ runner: utilityJobRunner }), root: join(app.getPath("userData"), "integrations", "office") });
   skillCreatorWorkflow = new SkillCreationWorkflow({ manager: skillsDirectory, root: join(app.getPath("userData"), "integrations", "skill-creator") });
   const ocrRuntimeRoot = resolve(process.env.VC_AGENT_OCR_RUNTIME_ROOT ?? join(process.env.LOCALAPPDATA ?? app.getPath("userData"), "vc-agent", "runtimes", "ocr"));

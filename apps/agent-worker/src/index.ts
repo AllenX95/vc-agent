@@ -65,6 +65,7 @@ parentPort.on("message", (messageEvent) => {
   else if (parsed.data.command === "trajectory.acknowledge") acknowledgeTrajectory(parsed.data);
   else resolveCapabilityExecution(parsed.data);
 });
+parentPort.postMessage({ schemaVersion: IPC_SCHEMA_VERSION, event: "worker.ready" });
 
 async function executeTurn(command: ExecuteCommand): Promise<void> {
   const runtime = sessions.get(command.threadId) ?? emptySession();
@@ -97,6 +98,13 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
   runtime.compactionUsed = false;
   let failureSent = false;
   try {
+    if (
+      process.env.NODE_ENV === "test" &&
+      process.env.VC_AGENT_TEST_WORKER_CRASH_ON_COMPACTION === "1" &&
+      command.compactOnly === true
+    ) {
+      process.exit(86);
+    }
     if (process.env.NODE_ENV === "test" && command.profile.provider === "vc-agent-reflection-provider-failure-faux") {
       throw new Error(JSON.stringify({ error: { code: "FIXTURE_PROVIDER_REJECTED", message: "Provider rejected credential " + command.profile.apiKey, request_id: "req-reflection-fixture" } }));
     }

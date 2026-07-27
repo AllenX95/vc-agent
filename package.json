@@ -1,14 +1,21 @@
 {
   "name": "vc-agent",
   "version": "0.1.0",
+  "description": "Single-user desktop agent for Project and Unscoped VC work.",
+  "author": "VC Agent",
   "private": true,
   "type": "module",
+  "main": "apps/desktop/dist/main/main.js",
   "packageManager": "pnpm@10.10.0",
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
     "build": "pnpm --filter @vc-agent/agent-worker build && pnpm --filter @vc-agent/utility-worker build && pnpm --filter @vc-agent/desktop build",
+    "parser-runtime:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-parser-runtime.ps1",
+    "package:verify-inputs": "pnpm exec esbuild scripts/verify-packaging-inputs.ts --bundle --platform=node --format=cjs --outfile=test-results/verify-packaging-inputs.cjs && node test-results/verify-packaging-inputs.cjs",
+    "package:win:dir": "pnpm build && pnpm parser-runtime:prepare && pnpm package:verify-inputs && electron-builder --win dir --x64",
+    "package:win": "pnpm build && pnpm parser-runtime:prepare && pnpm package:verify-inputs && electron-builder --win nsis --x64",
     "dev": "pnpm build && electron apps/desktop/dist/main/main.js",
     "test": "vitest run",
     "integration-gate": "pnpm exec esbuild scripts/run-integration-gate.ts --bundle --platform=node --format=cjs --outfile=test-results/run-integration-gate.cjs && pnpm vitest run tests/host-services/integration-gate.test.ts && node test-results/run-integration-gate.cjs",
@@ -22,6 +29,8 @@
     "h1:packaged": "pnpm build && pnpm exec esbuild scripts/run-packaged-h1-evidence.ts --bundle --platform=node --format=cjs --outfile=test-results/run-packaged-h1-evidence.cjs && node test-results/run-packaged-h1-evidence.cjs",
     "test:e2e": "pnpm build && playwright test --grep-invert @real",
     "test:e2e:real": "pnpm build && playwright test --grep @real",
+    "test:e2e:packaged": "playwright test tests/e2e/packaged.spec.ts",
+    "test:e2e:installed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-installed-package-smoke.ps1",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm test:e2e"
   },
@@ -34,6 +43,7 @@
     "@vc-agent/persistence": "workspace:*",
     "@vc-agent/pi-adapter": "workspace:*",
     "electron": "43.1.1",
+    "electron-builder": "26.15.3",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   },

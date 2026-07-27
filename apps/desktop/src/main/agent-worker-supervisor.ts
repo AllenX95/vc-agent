@@ -15,9 +15,16 @@ interface WorkerRecord {
   readonly ownerKey: string;
   readonly workerRevision: string;
   readonly process: UtilityProcess;
-  readonly spawned: Promise<void>;
+  readonly bootSettled: Promise<void>;
+  settleBoot(): void;
+  bootState: "starting" | "ready" | "failed";
+  bootTimeout?: NodeJS.Timeout;
+  stderrTail: string;
   readonly sessions: Map<string, SessionRecord>;
 }
+
+const WORKER_READY_TIMEOUT_MS = 5_000;
+const WORKER_STDERR_LIMIT = 8_192;
 
 export interface WorkerActivity {
   readonly agentWorkersStarted: number;
@@ -76,24 +83,32 @@ export class AgentWorkerSupervisor {
     }
     session.activeCommand = command;
     record.sessions.set(command.threadId, session);
-    await record.spawned;
+    await record.bootSettled;
+    if (record.bootState !== "ready" || this.#workers.get(ownerKey) !== record) return;
     record.process.postMessage({ ...command, ownerKey, workerRevision, sessionKey });
   }
 
   stop(command: Extract<WorkerCommand, { command: "turn.stop" }>): void {
     const found = this.#findSession(command.threadId, command.turnId);
     if (found === undefined) return;
-    void found.record.spawned.then(() => found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey })).catch(() => undefined);
+    void found.record.bootSettled.then(() => {
+      if (found.record.bootState !== "ready") return;
+      found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+    });
   }
 
   acknowledge(command: Extract<WorkerCommand, { command: "trajectory.acknowledge" }>): void {
     const found = this.#findSession(command.threadId);
-    if (found !== undefined) found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+    if (found !== undefined && found.record.bootState === "ready") {
+      found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+    }
   }
 
   resolveCapability(command: Extract<WorkerCommand, { command: "capability.execution.resolve" }>): void {
     const found = this.#findSession(command.threadId, command.turnId);
-    if (found !== undefined) found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+    if (found !== undefined && found.record.bootState === "ready") {
+      found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+    }
   }
 
   retire(ownerKeyOrThreadId: string): void {
@@ -122,17 +137,40 @@ export class AgentWorkerSupervisor {
   #startWorker(ownerKey: string, workerRevision: string): WorkerRecord {
     const child = utilityProcess.fork(this.#workerEntry, [], {
       serviceName: `vc-agent-${ownerKey.replace(/[^a-zA-Z0-9-]/gu, "-").slice(0, 180)}`,
-      stdio: "ignore"
+      stdio: "pipe"
     });
-    let resolveSpawn!: () => void;
-    let rejectSpawn!: (error: Error) => void;
-    const spawned = new Promise<void>((resolve, reject) => { resolveSpawn = resolve; rejectSpawn = reject; });
-    const record: WorkerRecord = { ownerKey, workerRevision, process: child, spawned, sessions: new Map() };
+    let settleBoot!: () => void;
+    const bootSettled = new Promise<void>((resolve) => { settleBoot = resolve; });
+    const record: WorkerRecord = {
+      ownerKey,
+      workerRevision,
+      process: child,
+      bootSettled,
+      settleBoot,
+      bootState: "starting",
+      stderrTail: "",
+      sessions: new Map()
+    };
     this.#workers.set(ownerKey, record);
     this.#agentWorkersStarted += 1;
 
-    child.once("spawn", resolveSpawn);
+    child.stderr?.on("data", (chunk) => {
+      record.stderrTail = `${record.stderrTail}${String(chunk)}`.slice(-WORKER_STDERR_LIMIT);
+    });
+    child.once("spawn", () => {
+      record.bootTimeout = setTimeout(() => {
+        this.#failWorker(record, null, "Agent Worker readiness timed out.");
+        child.kill();
+      }, WORKER_READY_TIMEOUT_MS);
+    });
     child.on("message", (rawEvent) => {
+      if (isWorkerReady(rawEvent)) {
+        if (record.bootState !== "starting") return;
+        record.bootState = "ready";
+        if (record.bootTimeout !== undefined) clearTimeout(record.bootTimeout);
+        record.settleBoot();
+        return;
+      }
       const parsed = workerEventSchema.safeParse(rawEvent);
       if (!parsed.success) return;
       const event = parsed.data;
@@ -155,36 +193,49 @@ export class AgentWorkerSupervisor {
       if (isTerminal(event, session.activeCommand)) delete session.activeCommand;
       this.#onEvent(event);
     });
-    child.once("error", (error) => rejectSpawn(new Error(error)));
-    child.on("exit", (code: number) => {
-      if (this.#workers.get(ownerKey) !== record) return;
-      const signal: string | null = null;
-      this.#workers.delete(ownerKey);
-      this.#workerCrashes += 1;
-      for (const session of record.sessions.values()) {
-        const active = session.activeCommand;
-        if (active === undefined) continue;
-        this.#onEvent({
-          schemaVersion: 1,
-          correlationId: active.correlationId,
-          threadId: active.threadId,
-          turnId: active.turnId,
-          ownerKey,
-          workerRevision,
-          sessionKey: session.sessionKey,
-          workerSequence: (session.lastWorkerSequenceByTurn.get(active.turnId) ?? 0) + 1,
-          event: "turn.failed",
-          failure: {
-            kind: "worker",
-            code: "AGENT_WORKER_CRASHED",
-            message: `Agent Worker crashed before completion${code === null ? "" : ` (code ${code}${signal === null ? "" : `, ${signal}`})`}.`,
-            provider: active.profile.provider,
-            model: active.profile.model
-          }
-        });
-      }
+    child.once("error", (error) => {
+      this.#failWorker(record, null, String(error));
+      child.kill();
     });
+    child.on("exit", (code: number) => this.#failWorker(record, code));
     return record;
+  }
+
+  #failWorker(record: WorkerRecord, code: number | null, fallbackDetail?: string): void {
+    if (this.#workers.get(record.ownerKey) !== record) return;
+    this.#workers.delete(record.ownerKey);
+    const bootFailure = record.bootState === "starting";
+    record.bootState = "failed";
+    if (record.bootTimeout !== undefined) clearTimeout(record.bootTimeout);
+    record.settleBoot();
+    this.#workerCrashes += 1;
+    const detail = sanitizeWorkerDiagnostic(record.stderrTail || fallbackDetail || "");
+    for (const session of record.sessions.values()) {
+      const active = session.activeCommand;
+      if (active === undefined) continue;
+      this.#onEvent({
+        schemaVersion: 1,
+        correlationId: active.correlationId,
+        threadId: active.threadId,
+        turnId: active.turnId,
+        ownerKey: record.ownerKey,
+        workerRevision: record.workerRevision,
+        sessionKey: session.sessionKey,
+        workerSequence: (session.lastWorkerSequenceByTurn.get(active.turnId) ?? 0) + 1,
+        event: "turn.failed",
+        failure: {
+          kind: "worker",
+          code: bootFailure ? "AGENT_WORKER_BOOT_FAILED" : "AGENT_WORKER_CRASHED",
+          message: [
+            bootFailure ? "Agent Worker failed to initialize" : "Agent Worker crashed before completion",
+            code === null ? "." : ` (code ${code}).`,
+            detail === "" ? "" : ` ${detail}`
+          ].join(""),
+          provider: active.profile.provider,
+          model: active.profile.model
+        }
+      });
+    }
   }
 
   #findSession(threadId: string, turnId?: string): { record: WorkerRecord; session: SessionRecord } | undefined {
@@ -202,4 +253,21 @@ function ownerKeyFor(command: ExecuteCommand): string {
 
 function isTerminal(event: WorkerEvent, active: ExecuteCommand | undefined): boolean {
   return event.event === "turn.completed" || event.event === "turn.failed" || event.event === "turn.interrupted" || (active?.compactOnly === true && (event.event === "thread.compaction.completed" || event.event === "thread.compaction.failed"));
+}
+
+function isWorkerReady(value: unknown): value is { readonly schemaVersion: 1; readonly event: "worker.ready" } {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { schemaVersion?: unknown; event?: unknown };
+  return candidate.schemaVersion === 1 && candidate.event === "worker.ready";
+}
+
+function sanitizeWorkerDiagnostic(value: string): string {
+  return value
+    .replace(/(?:api[_-]?key|authorization|bearer|password|token)\s*[:=]\s*\S+/giu, "<redacted-field>")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "<redacted-key>")
+    .replace(/file:\/\/\/[A-Za-z]:\/[^\s)]+/gu, "<local-path>")
+    .replace(/[A-Za-z]:\\[^\r\n)]+/gu, "<local-path>")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(-1_500);
 }

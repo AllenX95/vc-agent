@@ -1,0 +1,7 @@
+VC Agent includes third-party components distributed under their respective
+licenses. The release process must replace this placeholder with a generated
+dependency license inventory before any build is distributed outside the
+single-user Personal Build scope.
+
+Core runtime families include Electron, React, Pi SDK/runtime,
+pi-mcp-adapter, PDF parsing libraries, and the bundled Python parser packages.
