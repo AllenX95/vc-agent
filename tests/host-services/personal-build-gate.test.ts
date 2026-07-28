@@ -8,7 +8,7 @@ describe("personal build gate report", () => {
   it("writes the five execution modes, matrix and sanitized evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "vc-agent-personal-build-report-"));
     const artifacts = writePersonalBuildGateReport(root, {
-      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 }, migrationVersions: [1, 14], evidenceRoot: root,
+      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 }, migrationVersions: [1, 16], evidenceRoot: root,
       dependencyInventory: [{ name: "fixture", status: "ready", version: "v1" }],
       environmentDoctor: { storage: { status: "ready", message: "Credential references only." } },
       scenarios: [
@@ -37,7 +37,7 @@ describe("personal build gate report", () => {
         schemaVersion: 1,
         sanitized: true,
         kind: "h1-packaged-compatibility",
-        buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
+        buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 },
         runner: { mode: "playwright-electron", status: "ready" },
         workflows: ["process-tree", "external-edit", "backup-restore", "single-instance"],
         results: ["process-tree", "external-edit", "backup-restore", "single-instance"].map((workflow) => ({ workflow, status: "passed" })),

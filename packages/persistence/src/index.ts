@@ -19,6 +19,8 @@ interface ProfileRow {
   model: string;
   credential_ref: string;
   thinking_level: string;
+  context_window: number | null;
+  max_output_tokens: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +34,7 @@ interface ThreadRow {
   scope: "unscoped" | "project";
   project_id: string | null;
   archived_at: string | null;
+  deleted_at: string | null;
   created_at: string;
 }
 
@@ -119,7 +122,19 @@ export interface CreateModelProfileInput {
   readonly provider: string;
   readonly model: string;
   readonly thinkingLevel: ThinkingLevel;
+  readonly contextWindow?: number;
+  readonly maxOutputTokens?: number;
   readonly encryptedCredential: Uint8Array;
+}
+
+export interface UpdateModelProfileInput {
+  readonly name: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly thinkingLevel: ThinkingLevel;
+  readonly contextWindow?: number;
+  readonly maxOutputTokens?: number;
+  readonly encryptedCredential?: Uint8Array;
 }
 
 export interface RuntimeActivitySnapshot {
@@ -135,6 +150,8 @@ export interface PersonalCognitionProfile {
   readonly provider: string;
   readonly model: string;
   readonly thinkingLevel: ThinkingLevel;
+  readonly contextWindow?: number;
+  readonly maxOutputTokens?: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -217,6 +234,8 @@ export class HostStateStore {
         model TEXT NOT NULL,
         credential_ref TEXT NOT NULL UNIQUE REFERENCES protected_credentials(id),
         thinking_level TEXT NOT NULL,
+        context_window INTEGER,
+        max_output_tokens INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
@@ -417,6 +436,15 @@ export class HostStateStore {
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (14, ?)")
         .run(new Date().toISOString());
+      if (!this.#columnExists("threads", "deleted_at")) this.#database.exec("ALTER TABLE threads ADD COLUMN deleted_at TEXT");
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (15, ?)")
+        .run(new Date().toISOString());
+      if (!this.#columnExists("model_profiles", "context_window")) this.#database.exec("ALTER TABLE model_profiles ADD COLUMN context_window INTEGER");
+      if (!this.#columnExists("model_profiles", "max_output_tokens")) this.#database.exec("ALTER TABLE model_profiles ADD COLUMN max_output_tokens INTEGER");
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (16, ?)")
+        .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
       const integrity = this.#database.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
@@ -550,7 +578,7 @@ export class HostStateStore {
       accessMode: this.getAccessMode(),
       entityCounts: {
         projects: this.#count("projects"),
-        threads: this.#count("threads"),
+        threads: this.listThreads().length,
         modelProfiles: this.#count("model_profiles"),
         taskAssignments: this.#count("task_model_assignments")
       },
@@ -568,6 +596,7 @@ export class HostStateStore {
   }
 
   createModelProfile(input: CreateModelProfileInput): ModelProfile {
+    assertModelLimitOverrides(input);
     const id = randomUUID();
     const credentialRef = randomUUID();
     const now = new Date().toISOString();
@@ -581,16 +610,50 @@ export class HostStateStore {
       this.#database
         .prepare(
           `INSERT INTO model_profiles(
-            id, name, provider, model, credential_ref, thinking_level, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            id, name, provider, model, credential_ref, thinking_level, context_window, max_output_tokens, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(id, input.name, input.provider, input.model, credentialRef, input.thinkingLevel, now, now);
+        .run(id, input.name, input.provider, input.model, credentialRef, input.thinkingLevel, input.contextWindow ?? null, input.maxOutputTokens ?? null, now, now);
       this.#database.exec("COMMIT");
     } catch (error) {
       this.#database.exec("ROLLBACK");
       throw error;
     }
-    return { id, name: input.name, provider: input.provider, model: input.model, credentialRef, thinkingLevel: input.thinkingLevel, createdAt: now, updatedAt: now };
+    return {
+      id, name: input.name, provider: input.provider, model: input.model, credentialRef, thinkingLevel: input.thinkingLevel,
+      ...(input.contextWindow === undefined ? {} : { contextWindow: input.contextWindow }),
+      ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
+      createdAt: now, updatedAt: now
+    };
+  }
+
+  updateModelProfile(profileId: string, input: UpdateModelProfileInput): ModelProfile {
+    assertModelLimitOverrides(input);
+    const profile = this.getModelProfile(profileId);
+    if (profile === undefined) throw new Error("Model Profile not found");
+    const credentialRef = input.encryptedCredential === undefined ? profile.credentialRef : randomUUID();
+    const now = new Date().toISOString();
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      if (input.encryptedCredential === undefined) {
+        this.#database.prepare("UPDATE protected_credentials SET provider = ? WHERE id = ?").run(input.provider, profile.credentialRef);
+      } else {
+        this.#database.prepare("INSERT INTO protected_credentials(id, provider, encrypted_value, created_at) VALUES (?, ?, ?, ?)").run(credentialRef, input.provider, input.encryptedCredential, now);
+      }
+      this.#database.prepare(`
+        UPDATE model_profiles
+        SET name = ?, provider = ?, model = ?, credential_ref = ?, thinking_level = ?, context_window = ?, max_output_tokens = ?, updated_at = ?
+        WHERE id = ?
+      `).run(input.name, input.provider, input.model, credentialRef, input.thinkingLevel, input.contextWindow ?? null, input.maxOutputTokens ?? null, now, profileId);
+      if (credentialRef !== profile.credentialRef) {
+        this.#database.prepare("DELETE FROM protected_credentials WHERE id = ?").run(profile.credentialRef);
+      }
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getModelProfile(profileId)!;
   }
 
   listModelProfiles(): ModelProfile[] {
@@ -1092,27 +1155,62 @@ export class HostStateStore {
   }
 
   listThreads(): Thread[] {
-    return (this.#database.prepare("SELECT * FROM threads ORDER BY created_at ASC").all() as unknown as ThreadRow[]).map(mapThread);
+    const query = this.#columnExists("threads", "deleted_at")
+      ? "SELECT * FROM threads WHERE deleted_at IS NULL ORDER BY created_at ASC"
+      : "SELECT * FROM threads ORDER BY created_at ASC";
+    return (this.#database.prepare(query).all() as unknown as ThreadRow[]).map(mapThread);
   }
 
   listProjectThreads(projectId: string): ProjectThread[] {
-    return (this.#database.prepare("SELECT * FROM threads WHERE scope = 'project' AND project_id = ? ORDER BY created_at").all(projectId) as unknown as ThreadRow[])
+    const query = this.#columnExists("threads", "deleted_at")
+      ? "SELECT * FROM threads WHERE scope = 'project' AND project_id = ? AND deleted_at IS NULL ORDER BY created_at"
+      : "SELECT * FROM threads WHERE scope = 'project' AND project_id = ? ORDER BY created_at";
+    return (this.#database.prepare(query).all(projectId) as unknown as ThreadRow[])
       .map(mapThread) as ProjectThread[];
   }
 
   getThread(id: string): Thread | undefined {
-    const row = this.#database.prepare("SELECT * FROM threads WHERE id = ?").get(id) as ThreadRow | undefined;
+    const query = this.#columnExists("threads", "deleted_at")
+      ? "SELECT * FROM threads WHERE id = ? AND deleted_at IS NULL"
+      : "SELECT * FROM threads WHERE id = ?";
+    const row = this.#database.prepare(query).get(id) as ThreadRow | undefined;
     return row === undefined ? undefined : mapThread(row);
   }
 
   setThreadArchived(threadId: string, archived: boolean): Thread {
-    const result = this.#database.prepare("UPDATE threads SET archived_at = ?, state_version = state_version + 1 WHERE id = ?").run(archived ? new Date().toISOString() : null, threadId);
+    const result = this.#database.prepare("UPDATE threads SET archived_at = ?, state_version = state_version + 1 WHERE id = ? AND deleted_at IS NULL").run(archived ? new Date().toISOString() : null, threadId);
     if (result.changes !== 1) throw new Error("Thread not found");
     return this.getThread(threadId)!;
   }
 
+  deleteThread(threadId: string): boolean {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.#database.prepare(`
+        UPDATE threads
+        SET deleted_at = ?, archived_at = NULL, state_version = state_version + 1
+        WHERE id = ? AND deleted_at IS NULL
+      `).run(new Date().toISOString(), threadId);
+      if (result.changes !== 1) {
+        this.#database.exec("ROLLBACK");
+        return false;
+      }
+      this.#database.prepare("DELETE FROM execution_queue WHERE thread_id = ?").run(threadId);
+      this.#database.prepare("DELETE FROM physical_contexts WHERE thread_id = ?").run(threadId);
+      this.#database.prepare("DELETE FROM reflection_runs WHERE thread_id = ?").run(threadId);
+      this.#database.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listUnscopedThreads(): UnscopedThread[] {
-    const rows = this.#database.prepare("SELECT * FROM threads WHERE scope = 'unscoped' ORDER BY created_at ASC").all() as unknown as ThreadRow[];
+    const query = this.#columnExists("threads", "deleted_at")
+      ? "SELECT * FROM threads WHERE scope = 'unscoped' AND deleted_at IS NULL ORDER BY created_at ASC"
+      : "SELECT * FROM threads WHERE scope = 'unscoped' ORDER BY created_at ASC";
+    const rows = this.#database.prepare(query).all() as unknown as ThreadRow[];
     return rows.map(mapThread) as UnscopedThread[];
   }
 
@@ -1159,7 +1257,17 @@ export class HostStateStore {
     return {
       schemaVersion: 1,
       accessMode: this.getAccessMode(),
-      profiles: this.listModelProfiles().map(({ credentialRef: _credentialRef, ...profile }) => profile),
+      profiles: this.listModelProfiles().map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        provider: profile.provider,
+        model: profile.model,
+        thinkingLevel: profile.thinkingLevel,
+        ...(profile.contextWindow === undefined ? {} : { contextWindow: profile.contextWindow }),
+        ...(profile.maxOutputTokens === undefined ? {} : { maxOutputTokens: profile.maxOutputTokens }),
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt
+      })),
       taskAssignments: this.listTaskModelAssignments(),
       promptRevisions: this.listSystemPromptRevisions(),
       activePromptRevisionId: activePromptRevision.id
@@ -1197,9 +1305,9 @@ export class HostStateStore {
         this.#database.prepare("INSERT INTO protected_credentials(id, provider, encrypted_value, created_at) VALUES (?, ?, ?, ?)")
           .run(credentialRef, profile.provider, new Uint8Array(), now);
         this.#database.prepare(`
-          INSERT INTO model_profiles(id, name, provider, model, credential_ref, thinking_level, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(profile.id, profile.name, profile.provider, profile.model, credentialRef, profile.thinkingLevel, profile.createdAt, profile.updatedAt);
+          INSERT INTO model_profiles(id, name, provider, model, credential_ref, thinking_level, context_window, max_output_tokens, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(profile.id, profile.name, profile.provider, profile.model, credentialRef, profile.thinkingLevel, profile.contextWindow ?? null, profile.maxOutputTokens ?? null, profile.createdAt, profile.updatedAt);
       }
       for (const assignment of snapshot.taskAssignments) {
         this.#database.prepare("INSERT INTO task_model_assignments(task_type, profile_id, updated_at) VALUES (?, ?, ?)")
@@ -1257,7 +1365,17 @@ export class HostStateStore {
 
   ensureDefaultSystemPrompt(content: string): SystemPromptRevision {
     const active = this.getActiveSystemPromptRevision();
-    if (active !== undefined) return active;
+    if (active !== undefined) {
+      if (active.source !== "shipped_default" || active.content === content) return active;
+      const revision = this.#createSystemPromptRevision({
+        content,
+        source: "shipped_default",
+        sourceRevision: active,
+        changeNote: "Updated shipped default"
+      });
+      this.activateSystemPromptRevision(revision.id);
+      return revision;
+    }
     const revision = this.#createSystemPromptRevision({ content, source: "shipped_default" });
     this.#database.prepare("INSERT OR REPLACE INTO application_settings(key, value, updated_at) VALUES ('active_prompt_revision_id', ?, ?)")
       .run(revision.id, new Date().toISOString());
@@ -1365,8 +1483,21 @@ function validatePersonalCognitionState(snapshot: PersonalCognitionState): void 
   if (snapshot.accessMode !== "standard" && snapshot.accessMode !== "full") throw new Error("Invalid Personal Cognition Access Mode");
   const profileIds = new Set(snapshot.profiles.map((profile) => profile.id));
   if (profileIds.size !== snapshot.profiles.length) throw new Error("Duplicate Model Profile id in Personal Cognition state");
+  for (const profile of snapshot.profiles) assertModelLimitOverrides(profile);
   if (!snapshot.promptRevisions.some((revision) => revision.id === snapshot.activePromptRevisionId)) throw new Error("Active System Prompt Revision is missing");
   for (const assignment of snapshot.taskAssignments) if (!profileIds.has(assignment.profileId)) throw new Error("Task Model Assignment references a missing Profile");
+}
+
+function assertModelLimitOverrides(input: { readonly contextWindow?: number; readonly maxOutputTokens?: number }): void {
+  if (input.contextWindow !== undefined && (!Number.isInteger(input.contextWindow) || input.contextWindow < 1_024 || input.contextWindow > 100_000_000)) {
+    throw new Error("Invalid Model Profile context window override");
+  }
+  if (input.maxOutputTokens !== undefined && (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > 10_000_000)) {
+    throw new Error("Invalid Model Profile max output tokens override");
+  }
+  if (input.contextWindow !== undefined && input.maxOutputTokens !== undefined && input.maxOutputTokens >= input.contextWindow) {
+    throw new Error("Model Profile max output tokens must be smaller than its context window");
+  }
 }
 
 function mapProfile(row: ProfileRow): ModelProfile {
@@ -1377,6 +1508,8 @@ function mapProfile(row: ProfileRow): ModelProfile {
     model: row.model,
     credentialRef: row.credential_ref,
     thinkingLevel: row.thinking_level as ThinkingLevel,
+    ...(row.context_window === null ? {} : { contextWindow: row.context_window }),
+    ...(row.max_output_tokens === null ? {} : { maxOutputTokens: row.max_output_tokens }),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

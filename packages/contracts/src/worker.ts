@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
+import { contextUsageSchema, IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
-import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema } from "./capability.js";
+import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema, capabilitySurfaceSnapshotSchema } from "./capability.js";
 
 const runtimeSkillDecisionSchema = z.object({
   packageId: z.string().min(1),
@@ -82,6 +82,8 @@ const executeTurn = workerCommandBase.extend({
   contextHistory: z.array(physicalContextHistoryItemSchema),
   estimatedInputTokens: z.number().int().nonnegative(),
   currentInputTokens: z.number().int().nonnegative(),
+  /** New surface contract; activeCapabilities remains for replay compatibility during migration. */
+  capabilitySurface: capabilitySurfaceSnapshotSchema.optional(),
   activeCapabilities: z.array(z.string().min(1)),
   expectedStateVersion: z.number().int().positive(),
   executionScope: z.discriminatedUnion("kind", [
@@ -93,7 +95,9 @@ const executeTurn = workerCommandBase.extend({
     provider: z.string().min(1),
     model: z.string().min(1),
     apiKey: z.string().min(1),
-    thinkingLevel: thinkingLevelSchema
+    thinkingLevel: thinkingLevelSchema,
+    contextWindow: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().positive().optional()
   }),
   resources: runtimeResourceSnapshotSchema,
   extensions: extensionInventorySnapshotSchema
@@ -126,14 +130,17 @@ const contextReady = workerEventBase.extend({
   event: z.literal("physical_context.ready"),
   sessionFile: z.string().min(1),
   reconciliation: z.enum(["resumed", "missing", "host_ahead", "pi_ahead", "irreconcilable"]),
-  retainedTurnCount: z.number().int().nonnegative()
+  retainedTurnCount: z.number().int().nonnegative(),
+  contextUsage: contextUsageSchema.optional()
 });
 const started = workerEventBase.extend({ event: z.literal("turn.started") });
 const delta = workerEventBase.extend({ event: z.literal("message.delta"), delta: z.string() });
+const thinkingDelta = workerEventBase.extend({ event: z.literal("thinking.delta"), delta: z.string() });
 const completed = workerEventBase.extend({
   event: z.literal("turn.completed"),
   message: z.string(),
   usage: usageSchema,
+  contextUsage: contextUsageSchema.optional(),
   responseId: z.string().optional(),
   piEntryId: z.string().optional()
 });
@@ -160,5 +167,5 @@ const compactionFailed = workerEventBase.extend({
   failure: providerFailureSchema
 });
 
-export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, completed, failed, interrupted, acknowledged, capabilityRequested, compactionStarted, compactionCompleted, compactionFailed]);
+export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, thinkingDelta, completed, failed, interrupted, acknowledged, capabilityRequested, compactionStarted, compactionCompleted, compactionFailed]);
 export type WorkerEvent = z.infer<typeof workerEventSchema>;

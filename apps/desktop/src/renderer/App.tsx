@@ -4,6 +4,7 @@ import {
   createCommand,
   hostEventSchema,
   type BootstrapState,
+  type ContextUsage,
   type DreamDueProposal,
   type DreamBatch,
   type DreamReviewState,
@@ -92,12 +93,23 @@ type ConversationItem =
       turnId: string;
       role: "assistant";
       text: string;
+      thinking: string;
       status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
       profile?: TrajectoryProfile;
       usage?: TokenUsage;
       latencyMs?: number;
       recalledStateEstimatedTokens?: number;
-      prompt?: { revisionId: string; contributions: PromptContribution };
+      prompt?: {
+        revisionId: string;
+        contributions: PromptContribution;
+        capabilitySurface?: {
+          revision: string;
+          visibleCapabilityIds: readonly string[];
+          requestableCapabilityCount: number;
+          initialToolSchemaEstimatedTokens: number;
+          preloadHintCount: number;
+        };
+      };
       failure?: ProviderFailure;
       retryText?: string;
     };
@@ -140,6 +152,7 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Record<string, ConversationItem[]>>({});
+  const [sessionContextByThread, setSessionContextByThread] = useState<Record<string, ContextUsage>>({});
   const [prompt, setPrompt] = useState("");
   const [profileFormOpen, setProfileFormOpen] = useState(false);
   const [profileChange, setProfileChange] = useState<Extract<HostEvent, { event: "thread.profile.change.required" }> | null>(null);
@@ -169,7 +182,7 @@ export function App() {
   const [pendingDreamReminder, setPendingDreamReminder] = useState<PendingDreamReminder | null>(null);
   const [dreamLaunchProfileId, setDreamLaunchProfileId] = useState<string | null>(null);
   const [dreamNoticeDismissed, setDreamNoticeDismissed] = useState(false);
-  const [deleteHistoryThreadId, setDeleteHistoryThreadId] = useState<string | null>(null);
+  const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
   const longTermMemoryDirty = useRef(false);
   const activeThreadIdRef = useRef<string | null>(null);
   const pendingProfileSelections = useRef<Record<string, Promise<unknown>>>({});
@@ -177,6 +190,7 @@ export function App() {
   activeThreadIdRef.current = activeThreadId;
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  const activeSessionContext = activeThreadId === null ? undefined : sessionContextByThread[activeThreadId];
   const activeProfile = profiles.find((profile) => profile.id === activeThread?.activeProfileId);
   const activeProject = activeThread?.scope === "project" ? projects.find((project) => project.id === activeThread.projectId) : undefined;
   const activeReflection = reflectionRuns.find((run) => run.threadId === activeThreadId);
@@ -260,6 +274,7 @@ export function App() {
       case "sub_agent.budget.exhausted":
         setSubAgentProjections((current) => ({ ...current, [event.payload.projection.run.id]: event.payload.projection }));
         break;
+      case "profile.updated":
       case "profile.credential.updated": setProfiles((current) => [...current.filter((item) => item.id !== event.payload.profile.id), event.payload.profile]); break;
       case "task_model_assignments.listed": setTaskAssignments(event.payload.assignments); break;
       case "task_model_assignment.updated": setTaskAssignments((current) => event.payload.assignment === undefined ? current.filter((item) => item.taskType !== event.payload.taskType) : [...current.filter((item) => item.taskType !== event.payload.taskType), event.payload.assignment]); break;
@@ -321,11 +336,19 @@ export function App() {
         break;
       case "thread.trajectory.deleted":
         setConversations((current) => ({ ...current, [event.payload.threadId]: [] }));
+        setSessionContextByThread((current) => Object.fromEntries(Object.entries(current).filter(([threadId]) => threadId !== event.payload.threadId)));
         setMemoryCandidates((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !event.payload.removedCandidateIds.includes(id))));
-        setDeleteHistoryThreadId(null);
         break;
       case "thread.archived":
         setThreads((current) => [...current.filter((item) => item.id !== event.payload.thread.id), event.payload.thread]);
+        break;
+      case "thread.deleted":
+        setThreads((current) => current.filter((item) => item.id !== event.payload.threadId));
+        setConversations((current) => Object.fromEntries(Object.entries(current).filter(([threadId]) => threadId !== event.payload.threadId)));
+        setSessionContextByThread((current) => Object.fromEntries(Object.entries(current).filter(([threadId]) => threadId !== event.payload.threadId)));
+        setMemoryCandidates((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !event.payload.removedCandidateIds.includes(id))));
+        setActiveThreadId((current) => current === event.payload.threadId ? null : current);
+        setDeleteThreadId(null);
         break;
       case "project.outputs.listed":
       case "project.outputs.updated": setOutputsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.outputs })); break;
@@ -350,6 +373,10 @@ export function App() {
       case "threads.listed": setThreads(event.payload.threads); break;
       case "thread.trajectory.loaded":
         setConversations((current) => ({ ...current, [event.payload.threadId]: projectTrajectory(event.payload.turns, event.payload.activities) }));
+        {
+          const contextUsage = [...event.payload.turns].reverse().find((turn) => turn.contextUsage !== undefined)?.contextUsage;
+          if (contextUsage !== undefined) setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: contextUsage }));
+        }
         break;
       case "thread.created":
         setThreads((current) => [...current, event.payload.thread]);
@@ -393,8 +420,15 @@ export function App() {
       case "message.delta":
         setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: item.text + event.payload.delta, status: "streaming" })));
         break;
+      case "thinking.delta":
+        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, thinking: item.thinking + event.payload.delta, status: "streaming" })));
+        break;
+      case "session.context.updated":
+        setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage }));
+        break;
       case "turn.completed":
         setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
+        if (event.payload.contextUsage !== undefined) setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage! }));
         break;
       case "turn.failed":
         setConversations((current) => failTurn(current, event.payload));
@@ -558,10 +592,10 @@ export function App() {
     void invoke(createCommand({ command: "dream.reminder.defer", payload: { until } }));
   };
 
-  const deleteThreadHistory = async () => {
-    if (deleteHistoryThreadId === null) return;
-    const event = await invoke(createCommand({ command: "thread.trajectory.delete", payload: { threadId: deleteHistoryThreadId, confirmed: true } }));
-    if (event?.event === "thread.trajectory.deleted") void invoke(createCommand({ command: "dream.state.load" }));
+  const deleteThread = async () => {
+    if (deleteThreadId === null) return;
+    const event = await invoke(createCommand({ command: "thread.delete", payload: { threadId: deleteThreadId, confirmed: true } }));
+    if (event?.event === "thread.deleted") void invoke(createCommand({ command: "dream.state.load" }));
   };
 
   const resolveProfileChange = (action: "continue_current_thread" | "start_new_thread") => {
@@ -718,7 +752,7 @@ export function App() {
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread history" aria-label="Delete thread history" onClick={() => setDeleteHistoryThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
+            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
             <div className="message-list">
               {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} outputLocation={activeThread.scope === "unscoped" ? activeThread.outputLocation : undefined} outcomes={reflectionOutcomes[activeReflection.id] ?? { judgments: [], learningProposals: [] }} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} prepareOutcomes={() => submit("Prepare a Judgment Record and one de-identified Long-term Learning Proposal from this Reflection.")} confirmJudgment={(draftId) => void invoke(createCommand({ command: "reflection.judgment.confirm", payload: { draftId } }))} discardOutcome={(draftId) => void invoke(createCommand({ command: "reflection.outcome.discard", payload: { draftId } }))} prepareLearningPatch={(proposalId, judgmentDraftId) => void invoke(createCommand({ command: "reflection.learning.prepare_patch", payload: { proposalId, judgmentDraftId } }))} />}
               {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
@@ -747,7 +781,7 @@ export function App() {
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
         {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>{reflectionLaunch.scope === "project" ? "The first pass is isolated from Project Memory and Long-term Memory." : "The first pass uses only frozen User inputs and public evidence. It cannot access Project State or Memory."}</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder={reflectionLaunch.scope === "project" ? "Review this Project broadly" : "Review this investment question broadly"} /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
         {dreamLaunchProfileId !== null && <div className="workspace-dialog dream-launch" role="dialog" aria-label="Start Dream"><strong>Start Dream</strong><span>This creates one frozen cross-project review batch. It does not authorize any Memory write.</span><label>Dream Model Profile<select aria-label="Dream Model Profile" value={dreamLaunchProfileId} onChange={(event) => setDreamLaunchProfileId(event.target.value)}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setDreamLaunchProfileId(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchDream()} disabled={dreamLaunchProfileId === ""}>Create Dream Batch</button></div></div>}
-        {deleteHistoryThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread history"><strong>Delete thread history?</strong><span>This removes the retained conversation and physical context. Unapproved candidate and Dream source text from this task will also be removed. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteHistoryThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThreadHistory()}>Delete history</button></div></div>}
+        {deleteThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread"><strong>Delete this thread?</strong><span>This removes the Thread from the project, together with its retained conversation, physical context, queued work, unapproved candidates, and Dream source text. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThread()}>Delete thread</button></div></div>}
         {view === "workspace" && preparedMemoryPatch && <div className="workspace-dialog reflection-memory-patch" role="dialog" aria-label="Reflection Memory patch preview"><strong>Confirm Long-term Memory change</strong><span>This is a separate confirmation after the Judgment Record. Review the lineage and file diffs before committing.</span><p>{preparedMemoryPatch.rationale}</p><pre>{preparedMemoryPatch.lineageDiff}</pre>{preparedMemoryPatch.files.map((file) => <details key={file.kind} open={file.changed}><summary>{file.kind.replaceAll("_", " ")} · {file.changed ? "changed" : "unchanged"}</summary><span title={file.path}>{file.path}</span><pre>{file.diff}</pre></details>)}<div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.discard", payload: { patchId: preparedMemoryPatch.id } }))}>Discard</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.commit", payload: { patchId: preparedMemoryPatch.id, confirmed: true } }))}>Confirm Memory change</button></div></div>}
 
         {view === "workspace" && activeThread !== undefined && (activeReflection === undefined || activeReflection.status === "dialogue_active") && (
@@ -759,7 +793,11 @@ export function App() {
                 <div><span>{item.status === "draft" ? "Unsent draft" : item.reason === "thread_active" ? "Waiting for this task" : "Waiting for capacity"} · {activeThread.scope} · {profiles.find((profile) => profile.id === item.requestedProfileId)?.name ?? "No profile"} · {new Date(item.submittedAt).toLocaleTimeString()}</span>{index > 0 && <button type="button" onClick={() => void invoke(createCommand({ command: "execution_queue.reorder", payload: { itemId: item.id, beforeItemId: items[index - 1]!.id } }))}>Up</button>}{item.status === "draft" && <button type="button" onClick={() => void invoke(createCommand({ command: "execution_queue.activate", payload: { itemId: item.id } }))}>Send</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "execution_queue.cancel", payload: { itemId: item.id } }))}>Cancel</button></div>
               </div>)}
             </div>}
-            <textarea aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : hasActiveTurn ? "Queue a follow-up" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={readOnlyRecovery} />
+            <textarea aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : hasActiveTurn ? "Queue a follow-up" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              if (prompt.trim().length > 0) void submit();
+            }} disabled={readOnlyRecovery} />
             <div className="composer-footer">
               <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={activeReflection !== undefined || hasActiveTurn || profiles.length === 0 || readOnlyRecovery}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
@@ -1080,14 +1118,46 @@ function SettingsView({ bootstrap, profiles, taskAssignments, projects, material
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [thinkingLevel, setThinkingLevel] = useState<ModelProfile["thinkingLevel"]>("off");
+  const [contextWindow, setContextWindow] = useState("");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("");
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [credentialProfileId, setCredentialProfileId] = useState<string | null>(null);
   const [replacementCredential, setReplacementCredential] = useState("");
-  const valid = name.trim() && provider.trim() && model.trim() && apiKey;
+  const parsedContextWindow = contextWindow === "" ? undefined : Number(contextWindow);
+  const parsedMaxOutputTokens = maxOutputTokens === "" ? undefined : Number(maxOutputTokens);
+  const limitsValid =
+    (parsedContextWindow === undefined || (Number.isInteger(parsedContextWindow) && parsedContextWindow >= 1_024)) &&
+    (parsedMaxOutputTokens === undefined || (Number.isInteger(parsedMaxOutputTokens) && parsedMaxOutputTokens >= 1)) &&
+    (parsedContextWindow === undefined || parsedMaxOutputTokens === undefined || parsedMaxOutputTokens < parsedContextWindow);
+  const valid = Boolean(name.trim() && provider.trim() && model.trim() && (editingProfileId !== null || apiKey) && limitsValid);
+  const resetProfileForm = () => {
+    setEditingProfileId(null);
+    setName(""); setProvider(""); setModel(""); setApiKey(""); setThinkingLevel("off"); setContextWindow(""); setMaxOutputTokens("");
+  };
+  const editProfile = (profile: ModelProfile) => {
+    setEditingProfileId(profile.id);
+    setName(profile.name);
+    setProvider(profile.provider);
+    setModel(profile.model);
+    setApiKey("");
+    setThinkingLevel(profile.thinkingLevel);
+    setContextWindow(profile.contextWindow === undefined ? "" : String(profile.contextWindow));
+    setMaxOutputTokens(profile.maxOutputTokens === undefined ? "" : String(profile.maxOutputTokens));
+    setFormOpen(true);
+  };
   const save = (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
-    void invoke(createCommand({ command: "profile.create", payload: { name, provider, model, apiKey, thinkingLevel } })).then(() => {
-      setName(""); setProvider(""); setModel(""); setApiKey(""); setThinkingLevel("off");
+    const limits = {
+      ...(parsedContextWindow === undefined ? {} : { contextWindow: parsedContextWindow }),
+      ...(parsedMaxOutputTokens === undefined ? {} : { maxOutputTokens: parsedMaxOutputTokens })
+    };
+    const command = editingProfileId === null
+      ? createCommand({ command: "profile.create", payload: { name, provider, model, apiKey, thinkingLevel, ...limits } })
+      : createCommand({ command: "profile.update", payload: { profileId: editingProfileId, name, provider, model, thinkingLevel, ...limits, ...(apiKey ? { apiKey } : {}) } });
+    void invoke(command).then(() => {
+      resetProfileForm();
+      setFormOpen(false);
     });
   };
   const openMemory = () => {
@@ -1109,16 +1179,19 @@ function SettingsView({ bootstrap, profiles, taskAssignments, projects, material
       <div className="settings-section personal-cognition-settings"><div className="settings-section-header"><div><h2>Personal Cognition Backup</h2><p>Portable, checksummed cognition only. Projects, workflow state, trajectories, and credentials are excluded.</p></div></div><div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.restore" }))}>Restore backup</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.backup.create" }))}>Create backup</button></div>{personalCognitionNotice && <span role="status" title={personalCognitionNotice}>{personalCognitionNotice}</span>}</div>
       <SkillsSettings packages={skillPackages} root={skillsRoot} lastReport={lastSkillReport} invoke={invoke} />
       <div className="settings-section profile-settings">
-        <div className="settings-section-header"><div><h2>Model Profiles</h2><p>Credentials are protected by Windows and stored only by reference.</p></div><button className="compact-button" type="button" onClick={() => setFormOpen(!formOpen)}><Plus size={15} /> New profile</button></div>
+        <div className="settings-section-header"><div><h2>Model Profiles</h2><p>Credentials are protected by Windows and stored only by reference.</p></div><button className="compact-button" type="button" onClick={() => { resetProfileForm(); setFormOpen(!formOpen); }}><Plus size={15} /> New profile</button></div>
         {formOpen && <form className="profile-form" onSubmit={save}>
           <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
           <label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="anthropic" /></label>
           <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="model id" /></label>
-          <label>API key<span className="secret-input"><KeyRound size={14} /><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /></span></label>
+          <label>API key<span className="secret-input"><KeyRound size={14} /><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" placeholder={editingProfileId === null ? "" : "Leave blank to keep current key"} /></span></label>
           <label>Reasoning<select value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value as ModelProfile["thinkingLevel"])}><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-          <div className="form-actions"><button type="button" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={!valid}>Save profile</button></div>
+          <label>Context window override<input aria-label="Context window override" type="number" min={1024} step={1} value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="Auto from pi catalog" /></label>
+          <label>Max output tokens override<input aria-label="Max output tokens override" type="number" min={1} step={1} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="Auto from pi catalog" /></label>
+          {!limitsValid && <span className="profile-limit-error" role="alert">Use positive whole numbers; max output tokens must be smaller than the context window.</span>}
+          <div className="form-actions"><button type="button" onClick={() => { resetProfileForm(); setFormOpen(false); }}>Cancel</button><button className="primary-button" type="submit" disabled={!valid}>Save profile</button></div>
         </form>}
-        <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span>{profile.credentialRef.startsWith("setup-required-") && <><span>Credential setup required after restore</span>{credentialProfileId === profile.id ? <span className="secret-input"><KeyRound size={14} /><input aria-label={`Credential for ${profile.name}`} type="password" value={replacementCredential} onChange={(event) => setReplacementCredential(event.target.value)} autoComplete="off" /><button type="button" disabled={!replacementCredential} onClick={() => void invoke(createCommand({ command: "profile.credential.set", payload: { profileId: profile.id, apiKey: replacementCredential } })).then(() => { setCredentialProfileId(null); setReplacementCredential(""); })}>Save credential</button></span> : <button type="button" onClick={() => setCredentialProfileId(profile.id)}>Set credential</button>}</>}</div><span>{profile.thinkingLevel}</span></div>)}</div>
+        <div className="profile-list">{profiles.length === 0 ? <p className="empty-setting">No model profiles</p> : profiles.map((profile) => <div className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><span>{profile.provider} / {profile.model}</span><span>Context {profile.contextWindow === undefined ? "auto" : formatExactTokenCount(profile.contextWindow)} · Output {profile.maxOutputTokens === undefined ? "auto" : formatExactTokenCount(profile.maxOutputTokens)}</span>{profile.credentialRef.startsWith("setup-required-") && <><span>Credential setup required after restore</span>{credentialProfileId === profile.id ? <span className="secret-input"><KeyRound size={14} /><input aria-label={`Credential for ${profile.name}`} type="password" value={replacementCredential} onChange={(event) => setReplacementCredential(event.target.value)} autoComplete="off" /><button type="button" disabled={!replacementCredential} onClick={() => void invoke(createCommand({ command: "profile.credential.set", payload: { profileId: profile.id, apiKey: replacementCredential } })).then(() => { setCredentialProfileId(null); setReplacementCredential(""); })}>Save credential</button></span> : <button type="button" onClick={() => setCredentialProfileId(profile.id)}>Set credential</button>}</>}</div><div className="profile-row-actions"><span>{profile.thinkingLevel}</span><button type="button" aria-label={`Edit ${profile.name}`} onClick={() => editProfile(profile)}>Edit</button></div></div>)}</div>
       </div>
       <div className="settings-section task-assignment-settings"><div className="settings-section-header"><div><h2>Task Model Assignments</h2><p>Workflow defaults; launch-time selection remains available.</p></div></div>{TASK_MODEL_TYPES.map((task) => <label key={task.id}><span>{task.label}</span><select aria-label={`${task.label} Profile`} value={taskAssignments.find((item) => item.taskType === task.id)?.profileId ?? ""} onChange={(event) => void invoke(createCommand(event.target.value === "" ? { command: "task_model_assignment.clear", payload: { taskType: task.id } } : { command: "task_model_assignment.set", payload: { taskType: task.id, profileId: event.target.value } }))}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</option>)}</select></label>)}</div>
       <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
@@ -1278,12 +1351,36 @@ function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted
   if (item.role === "tool") return <div className={`tool-activity ${item.status}`}><div><strong>{item.capabilityId}</strong><span>{item.status.replace("_", " ")}</span></div>{item.capabilityId === "web_search" || item.capabilityId === "web_fetch" ? <WebSourceResult text={item.text} /> : <p>{item.text}</p>}{item.artifact && <a href={`#artifact-${item.artifact.id}`} title={item.artifact.destination}>{item.artifact.mediaType} · {item.artifact.destination}</a>}</div>;
   return <article className={`message assistant-message ${item.status}`}>
     <div className="message-meta"><span>vc-agent</span>{item.profile && <span>{item.profile.provider} / {item.profile.model}</span>}</div>
+    {item.thinking && <details className="thinking-block"><summary>Thinking</summary><div>{item.thinking}</div></details>}
     {item.text && <div className="message-content">{item.text}</div>}
     {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">Working</div>}
     {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div>{item.failure.code === "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={chooseOutput}>Choose output location</button>}<button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button>{item.failure.code !== "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={configure}>Adjust profile</button>}</div></div>}
     {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
-    {item.usage && <div className="usage-row">Completed · {item.usage.input} input · {item.usage.output} output tokens{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} prompt + ${item.prompt.contributions.toolSchemaEstimatedTokens} tools + ${item.prompt.contributions.contextEstimatedTokens} retained + ${item.prompt.contributions.outputReserveEstimatedTokens} reserve est.)` : ""}{item.recalledStateEstimatedTokens === undefined ? "" : ` · recall ${item.recalledStateEstimatedTokens} est.`}{item.latencyMs === undefined ? "" : ` · ${item.latencyMs} ms`}</div>}
+    {item.usage && <div className="usage-row">Input {formatExactTokenCount(item.usage.input)} · Reasoning {item.usage.reasoning === undefined ? "—" : formatExactTokenCount(item.usage.reasoning)} · Output {formatExactTokenCount(item.usage.output)}{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} prompt + ${item.prompt.contributions.toolSchemaEstimatedTokens} tools + ${item.prompt.contributions.contextEstimatedTokens} retained + ${item.prompt.contributions.outputReserveEstimatedTokens} reserve est.)` : ""}{item.prompt?.capabilitySurface === undefined ? "" : ` · surface ${item.prompt.capabilitySurface.visibleCapabilityIds.join(", ") || "none"} +${item.prompt.capabilitySurface.requestableCapabilityCount} on-demand`}{item.recalledStateEstimatedTokens === undefined ? "" : ` · recall ${item.recalledStateEstimatedTokens} est.`}{item.latencyMs === undefined ? "" : ` · ${item.latencyMs} ms`}</div>}
   </article>;
+}
+
+function ContextUsageIndicator({ usage }: { usage: ContextUsage | undefined }) {
+  if (usage === undefined) return null;
+  const used = usage.tokens === null ? "—" : formatTokenCount(usage.tokens);
+  const total = formatTokenCount(usage.contextWindow);
+  const percent = usage.percent === null ? "unknown" : `${usage.percent.toFixed(1)}%`;
+  const exactUsed = usage.tokens === null ? "unknown" : formatExactTokenCount(usage.tokens);
+  const exactTotal = formatExactTokenCount(usage.contextWindow);
+  return <div className="context-usage" aria-label={`Session context ${exactUsed} of ${exactTotal} tokens, ${percent}`} title={`Current physical session context: ${exactUsed} / ${exactTotal} tokens (${percent})`}>
+    <span>Context {used} / {total}</span>
+    <span className="context-usage-track" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.max(0, usage.percent ?? 0))}%` }} /></span>
+  </div>;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens < 1_000) return String(Math.round(tokens));
+  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}m`;
+}
+
+function formatExactTokenCount(tokens: number): string {
+  return Math.round(tokens).toLocaleString();
 }
 
 function WebSourceResult({ text }: { text: string }) {
@@ -1329,12 +1426,13 @@ function projectTrajectory(
       turnId: turn.turnId,
       role: "assistant",
       text: turn.assistantText,
+      thinking: "",
       status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
       ...(turn.profile === undefined ? {} : { profile: turn.profile }),
       ...(turn.usage === undefined ? {} : { usage: turn.usage }),
       ...(turn.latencyMs === undefined ? {} : { latencyMs: turn.latencyMs }),
       ...(turn.recalledStateEstimatedTokens === undefined ? {} : { recalledStateEstimatedTokens: turn.recalledStateEstimatedTokens }),
-      ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions } }),
+      ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions, ...(turn.prompt.capabilitySurface === undefined ? {} : { capabilitySurface: turn.prompt.capabilitySurface }) } }),
       ...(turn.failure === undefined ? {} : { failure: turn.failure, retryText: turn.text })
     };
     return [
@@ -1381,8 +1479,8 @@ function updateToolActivity(current: Record<string, ConversationItem[]>, payload
   return { ...current, [payload.threadId]: exists ? items.map((item) => item.id === tool.id ? tool : item) : [...items, tool] };
 }
 
-function appendTurn(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string, profile: ModelProfile, prompt: { revisionId: string; contributions: PromptContribution }) {
-  return { ...current, [threadId]: [...(current[threadId] ?? []), { id: `${turnId}:user`, turnId, role: "user", text }, { id: `${turnId}:assistant`, turnId, role: "assistant", text: "", status: "queued", profile, retryText: text, prompt }] } satisfies Record<string, ConversationItem[]>;
+function appendTurn(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, text: string, profile: ModelProfile, prompt: Extract<ConversationItem, { role: "assistant" }>['prompt']) {
+  return { ...current, [threadId]: [...(current[threadId] ?? []), { id: `${turnId}:user`, turnId, role: "user", text }, { id: `${turnId}:assistant`, turnId, role: "assistant", text: "", thinking: "", status: "queued", profile, retryText: text, prompt }] } satisfies Record<string, ConversationItem[]>;
 }
 
 function updateAssistant(current: Record<string, ConversationItem[]>, threadId: string, turnId: string, update: (item: Extract<ConversationItem, { role: "assistant" }>) => Extract<ConversationItem, { role: "assistant" }>) {
@@ -1392,7 +1490,7 @@ function updateAssistant(current: Record<string, ConversationItem[]>, threadId: 
 function failTurn(current: Record<string, ConversationItem[]>, payload: Extract<HostEvent, { event: "turn.failed" }>["payload"]) {
   const existing = (current[payload.threadId] ?? []).some((item) => item.turnId === payload.turnId);
   if (!existing) {
-    return { ...current, [payload.threadId]: [...(current[payload.threadId] ?? []), { id: `${payload.turnId}:user`, turnId: payload.turnId, role: "user", text: payload.text }, { id: `${payload.turnId}:assistant`, turnId: payload.turnId, role: "assistant", text: "", status: "failed", failure: payload.failure, ...(payload.profile === undefined ? {} : { profile: payload.profile }), retryText: payload.text }] } satisfies Record<string, ConversationItem[]>;
+    return { ...current, [payload.threadId]: [...(current[payload.threadId] ?? []), { id: `${payload.turnId}:user`, turnId: payload.turnId, role: "user", text: payload.text }, { id: `${payload.turnId}:assistant`, turnId: payload.turnId, role: "assistant", text: "", thinking: "", status: "failed", failure: payload.failure, ...(payload.profile === undefined ? {} : { profile: payload.profile }), retryText: payload.text }] } satisfies Record<string, ConversationItem[]>;
   }
   return updateAssistant(current, payload.threadId, payload.turnId, (item) => ({ ...item, status: "failed", failure: payload.failure, retryText: payload.text }));
 }

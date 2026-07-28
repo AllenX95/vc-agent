@@ -39,9 +39,9 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, coreCapabilitiesForScope, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMemoryCandidateSignal, detectOutputIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalMetadata, retrievalTrajectorySummary, selectEligibleDreamTrajectory, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type DreamSynthesisInput, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, FixtureSubAgentAdapter, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { CapabilityRegistry, capabilitiesForTurn, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
@@ -51,6 +51,7 @@ import { ProtectedCredentialService } from "./protected-credential-service.js";
 import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
 import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
+import { HostTurnExecutionModule, type DreamExecutionContext, type DreamSynthesisExecutionContext, type ReflectionExecutionContext, type TurnContext } from "./turn-execution.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
 const EVENT_CHANNEL = "vc-agent:event";
@@ -90,67 +91,12 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "sub_agent.run.inspect"
 ]);
 
-interface TurnContext {
-  readonly correlationId: string;
-  readonly threadId: string;
-  readonly turnId: string;
-  readonly text: string;
-  readonly profile: ModelProfile;
-  readonly outputIntent: boolean;
-  readonly memoryRecallMode: "none" | "automatic" | "explicit";
-  readonly longTermMemoryCardIds: Set<string>;
-  readonly activeCapabilities: string[];
-  readonly expectedStateVersion: number;
-  readonly promptRevision: SystemPromptRevision;
-  readonly retryOfTurnId?: string;
-  readonly compactionOnly?: true;
-  readonly reflectionRunId?: string;
-  readonly reflectionOutcomeIntent: boolean;
-  readonly appendSystemPrompt?: readonly string[];
-  readonly submittedAtMs: number;
-  recalledStateEstimatedTokens: number;
-  recallBodyBytes: number;
-}
-
-interface ReflectionExecutionContext {
-  readonly correlationId: string;
-  readonly runId: string;
-  readonly threadId: string;
-  readonly turnId: string;
-  readonly scope: "project" | "unscoped";
-  readonly projectId?: string;
-  readonly activeCapabilities: readonly string[];
-  readonly outputLocation?: string;
-  readonly profile: ModelProfile;
-  readonly expectedStateVersion: number;
-  readonly promptRevision: SystemPromptRevision;
-}
-
-interface DreamExecutionContext {
-  readonly correlationId: string;
-  readonly batchId: string;
-  readonly scope: DreamExtractionScope;
-  readonly executionThreadId: string;
-  readonly turnId: string;
-  readonly profile: ModelProfile;
-  readonly allowedSourceReferences: readonly string[];
-}
-
-interface DreamSynthesisExecutionContext {
-  readonly correlationId: string;
-  readonly batchId: string;
-  readonly executionThreadId: string;
-  readonly turnId: string;
-  readonly profile: ModelProfile;
-  readonly input: DreamSynthesisInput;
-  readonly forbiddenTerms: readonly string[];
-}
-
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
+let turnExecution: HostTurnExecutionModule | null = null;
 let extensionAuditWorker: ExtensionAuditWorkerExecutor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
 let utilityJobRunner: UtilityJobRunner | null = null;
@@ -180,14 +126,9 @@ let shuttingDown = false;
 let shutdownPromise: Promise<void> | null = null;
 let allowQuitAfterShutdown = false;
 const sequenceByThread = new Map<string, number>();
-const turnContexts = new Map<string, TurnContext>();
-const reflectionContexts = new Map<string, ReflectionExecutionContext>();
-const dreamContexts = new Map<string, DreamExecutionContext>();
-const dreamSynthesisContexts = new Map<string, DreamSynthesisExecutionContext>();
 const integrationJobs = new Map<string, IntegrationJobSummary>();
 const mcpActivations = new Map<string, { readonly activationId: string; readonly serverId: string; readonly schemaRevision: string; readonly toolIds: readonly string[]; readonly scope: "project" | "unscoped" }>();
 let integrationJobsPath: string | undefined;
-const activeTurnByThread = new Map<string, string>();
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
@@ -481,7 +422,16 @@ function resolveSubAgentProfile(input: { readonly role: "researcher" | "critic" 
       : defaultAssignment !== undefined
         ? "default_sub_agent" as const
         : "primary_active" as const;
-  return selected === undefined ? undefined : { profileId: selected.id, name: selected.name, provider: selected.provider, model: selected.model, thinkingLevel: selected.thinkingLevel, resolutionSource };
+  return selected === undefined ? undefined : {
+    profileId: selected.id,
+    name: selected.name,
+    provider: selected.provider,
+    model: selected.model,
+    thinkingLevel: selected.thinkingLevel,
+    ...(selected.contextWindow === undefined ? {} : { contextWindow: selected.contextWindow }),
+    ...(selected.maxOutputTokens === undefined ? {} : { maxOutputTokens: selected.maxOutputTokens }),
+    resolutionSource
+  };
 }
 
 function subAgentAssignmentTaskType(role: SubAgentRole): TaskModelType {
@@ -672,7 +622,6 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
   const extractionContext = buildDreamScopeExtractionContext(currentBatch, scope, projectMemory);
   const prompt = buildDreamScopeExtractionPrompt(extractionContext);
   const context: DreamExecutionContext = { correlationId, batchId: batch.id, scope, executionThreadId, turnId, profile, allowedSourceReferences: [...scope.sourceReferences, ...(extractionContext.projectMemory?.map((entry) => entry.sourceReference) ?? [])] };
-  dreamContexts.set(turnId, context);
   if (scope.kind === "project") stateStore!.authorizeProjectProfile(scope.projectId!, profile.id, profile.provider);
   const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
     schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
@@ -684,11 +633,11 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
     activeCapabilities: [], expectedStateVersion: 1,
     executionScope: scope.kind === "project" ? { kind: "project", projectId: scope.projectId! } : { kind: "unscoped", threadId: executionThreadId },
     prompt,
-    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_EXTRACTION_STAGE_INSTRUCTIONS] },
     extensions: extensionRuntimeSnapshot()
   };
-  void workerSupervisor!.execute(workerCommand).catch(() => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
+  turnExecution!.start({ kind: "dream", context }, workerCommand, () => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
 }
 
@@ -725,18 +674,17 @@ function startDreamGlobalSynthesis(correlationId: string, batchId: string): Host
   }
   const prompt = buildDreamGlobalSynthesisPrompt(input);
   const context: DreamSynthesisExecutionContext = { correlationId, batchId: batch.id, executionThreadId, turnId, profile, input, forbiddenTerms };
-  dreamSynthesisContexts.set(turnId, context);
   const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
     schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
     cwd: app.getPath("userData"), threadDirectory: join(app.getPath("userData"), "memory", "dream", "synthesis-work", batch.id), contextHistory: [],
     estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
     currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
     activeCapabilities: [], expectedStateVersion: 1, executionScope: { kind: "unscoped", threadId: executionThreadId }, prompt,
-    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS] },
     extensions: extensionRuntimeSnapshot()
   };
-  void workerSupervisor!.execute(workerCommand).catch(() => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
+  turnExecution!.start({ kind: "dream_synthesis", context }, workerCommand, () => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
 }
 
@@ -1069,9 +1017,24 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           provider: command.payload.provider,
           model: command.payload.model,
           thinkingLevel: command.payload.thinkingLevel,
+          ...(command.payload.contextWindow === undefined ? {} : { contextWindow: command.payload.contextWindow }),
+          ...(command.payload.maxOutputTokens === undefined ? {} : { maxOutputTokens: command.payload.maxOutputTokens }),
           encryptedCredential: credentials.encrypt(command.payload.apiKey)
         });
         return { ...eventMetadata(command.correlationId), event: "profile.created", payload: { profile } };
+      }
+      case "profile.update": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Model Profile editing requires explicit User action.");
+        const profile = stateStore.updateModelProfile(command.payload.profileId, {
+          name: command.payload.name,
+          provider: command.payload.provider,
+          model: command.payload.model,
+          thinkingLevel: command.payload.thinkingLevel,
+          ...(command.payload.contextWindow === undefined ? {} : { contextWindow: command.payload.contextWindow }),
+          ...(command.payload.maxOutputTokens === undefined ? {} : { maxOutputTokens: command.payload.maxOutputTokens }),
+          ...(command.payload.apiKey === undefined ? {} : { encryptedCredential: credentials.encrypt(command.payload.apiKey) })
+        });
+        return { ...eventMetadata(command.correlationId), event: "profile.updated", payload: { profile } };
       }
       case "profile.credential.set": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Credential setup requires explicit User action.");
@@ -1533,7 +1496,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         };
       case "thread.trajectory.delete": {
         if (command.actor.actorType !== "user" || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread history deletion requires explicit User confirmation.");
-        if (activeTurnByThread.has(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting its history.");
+        if (turnExecution!.isThreadActive(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting its history.");
         if (stateStore.getThread(command.payload.threadId) === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
         const before = dreamReviews?.load().batches ?? [];
         const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
@@ -1547,9 +1510,25 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "thread.archive.set": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Thread archival requires explicit User action.");
-        if (activeTurnByThread.has(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing archive state.");
+        if (turnExecution!.isThreadActive(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing archive state.");
         const thread = stateStore.setThreadArchived(command.payload.threadId, command.payload.archived);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.archived", payload: { thread } };
+      }
+      case "thread.delete": {
+        if (command.actor.actorType !== "user" || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread deletion requires explicit User confirmation.");
+        if (turnExecution!.isThreadActive(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting this Thread.");
+        if (stateStore.getThread(command.payload.threadId) === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
+        const before = dreamReviews?.load().batches ?? [];
+        const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
+        const removedCandidateIds = memoryCandidates?.removeByThread(command.payload.threadId) ?? [];
+        dreamReviews?.redactThreadSources(command.payload.threadId);
+        subAgentRuntime?.deleteForParentThread(command.payload.threadId);
+        workerSupervisor?.discardThread(command.payload.threadId);
+        trajectoryStore.deleteThreadHistory(command.payload.threadId);
+        if (!stateStore.deleteThread(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
+        loadedPromptByThread.delete(command.payload.threadId);
+        sequenceByThread.delete(command.payload.threadId);
+        return { ...eventMetadata(command.correlationId, command.payload.threadId), event: "thread.deleted", payload: { threadId: command.payload.threadId, removedCandidateIds, affectedBatchIds } };
       }
       case "thread.create.unscoped": {
         const thread = stateStore.createUnscopedThread(command.payload.title);
@@ -1564,7 +1543,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "thread.profile.change.resolve":
         return resolveThreadProfileChange(command.correlationId, command.payload);
       case "thread.output.location.choose": {
-        if (activeTurnByThread.has(command.payload.threadId)) {
+        if (turnExecution!.isThreadActive(command.payload.threadId)) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Output Location.");
         }
         const thread = stateStore.getThread(command.payload.threadId);
@@ -1607,7 +1586,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "thread.compact":
         return compactThread(command.correlationId, command.payload.threadId);
       case "turn.stop": {
-        const context = turnContexts.get(command.payload.turnId);
+        const context = turnExecution!.getTurn(command.payload.turnId);
         if (context === undefined || context.threadId !== command.payload.threadId) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "The requested Turn is not active.");
         }
@@ -1867,7 +1846,6 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
     expectedStateVersion: thread.stateVersion,
     promptRevision
   };
-  reflectionContexts.set(turnId, context);
   const createdAt = new Date().toISOString();
   const prompt = buildIndependentEvidencePrompt({ objective: run.objective, ...(run.focus === undefined ? {} : { focus: run.focus }), brief: run.brief, createdAt });
   const stageInstructions = run.scope === "project" ? INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS : INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS;
@@ -1887,18 +1865,18 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
     expectedStateVersion: thread.stateVersion,
     executionScope: run.scope === "project" ? { kind: "project", projectId: run.projectId } : { kind: "unscoped", threadId: run.threadId },
     prompt,
-    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [stageInstructions] },
     extensions: extensionRuntimeSnapshot()
   };
-  void workerSupervisor!.execute(workerCommand).catch(() => failReflectionExecution(context, {
+  turnExecution!.start({ kind: "reflection", context }, workerCommand, () => failReflectionExecution(context, {
     kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before the Independent Evidence Pass completed.", provider: profile.provider, model: profile.model
   }));
   return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
 }
 
 function stopIndependentAssessment(correlationId: string, runId: string): HostEvent {
-  const context = [...reflectionContexts.values()].find((candidate) => candidate.runId === runId);
+  const context = turnExecution!.findReflection(runId);
   const run = stateStore!.getReflectionRun(runId);
   if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
   if (context !== undefined) {
@@ -2128,7 +2106,7 @@ function selectThreadProfile(correlationId: string, threadId: string, profileId:
   const thread = stateStore!.getThread(threadId);
   const requested = stateStore!.getModelProfile(profileId);
   if (thread === undefined || requested === undefined) throw new Error("Thread or Profile not found");
-  if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
+  if (turnExecution!.isThreadActive(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
   const previous = trajectoryStore!.lastProfile(threadId);
   if (previous !== undefined && previous.provider !== requested.provider) {
     return {
@@ -2156,7 +2134,7 @@ function resolveThreadProfileChange(
   const requested = stateStore!.getModelProfile(input.profileId);
   const previous = trajectoryStore!.lastProfile(input.threadId);
   if (source === undefined || requested === undefined || previous === undefined) throw new Error("Profile change is stale");
-  if (activeTurnByThread.has(input.threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
+  if (turnExecution!.isThreadActive(input.threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before changing its Model Profile.");
 
   let destination = source;
   let retainedContext: "visible-retained-trajectory" | "none" = "visible-retained-trajectory";
@@ -2205,7 +2183,7 @@ function submitTurn(
   const turnId = options.turnId ?? randomUUID();
   const thread = stateStore!.getThread(input.threadId);
   if (thread === undefined) throw new Error("Thread not found");
-  if (activeTurnByThread.has(input.threadId)) {
+  if (turnExecution!.isThreadActive(input.threadId)) {
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Turn");
@@ -2216,12 +2194,35 @@ function submitTurn(
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
-  const activeCapabilities = reflectionRun === undefined
-    ? [...coreCapabilitiesForScope(thread.scope)]
-    : thread.scope === "project" ? ["memory_recall", "reflection_evidence_drilldown", "project_state_recall"] : ["memory_recall"];
-  if (reflectionOutcomeIntent) activeCapabilities.push("reflection_outcome_propose");
-  if (reflectionRun === undefined && detectWebResearchIntent(input.text)) activeCapabilities.push("web_search", "web_fetch");
-  if (reflectionRun === undefined && outputIntent) activeCapabilities.push("output.write_text");
+  const preloadHints = reflectionRun === undefined
+    ? capabilitiesForTurn({
+        scope: thread.scope,
+        materialRecall: detectMaterialRecallIntent(input.text),
+        projectStateRecall: detectProjectStateRecallIntent(input.text),
+        memoryRecall: memoryRecallMode !== "none",
+        webResearch: detectWebResearchIntent(input.text),
+        outputWrite: outputIntent
+      })
+    : [];
+  const fixedCapabilityIds = reflectionRun === undefined
+    ? []
+    : [...(thread.scope === "project" ? ["memory_recall", "reflection_evidence_drilldown", "project_state_recall"] : ["memory_recall"]), ...(reflectionOutcomeIntent ? ["reflection_outcome_propose"] : [])];
+  const capabilitySurface = createTurnCapabilitySurface({
+    kind: reflectionRun === undefined ? "ordinary" : "reflection_dialogue",
+    scope: thread.scope,
+    inventory: capabilityRegistry!.inventory(),
+    preloadHints,
+    fixedCapabilityIds,
+    outputRequested: outputIntent,
+    explicitMemoryRecall: memoryRecallMode === "explicit",
+    availability: {
+      materials: thread.scope === "project" && stateStore!.listMaterials(thread.projectId).length > 0,
+      projectContext: thread.scope === "project",
+      publicWeb: capabilityRegistry!.get("web_search") !== undefined && capabilityRegistry!.get("web_fetch") !== undefined,
+      directAttachments: false
+    }
+  });
+  const activeCapabilities = [...capabilitySurface.visibleCapabilityIds];
   const physical = stateStore!.getPhysicalContext(input.threadId);
   if (physical?.sessionFile !== undefined && !existsSync(physical.sessionFile)) loadedPromptByThread.delete(input.threadId);
   const promptRevision = reflectionRun === undefined ? loadedPromptByThread.get(input.threadId) ?? stateStore!.getActiveSystemPromptRevision() : stateStore!.getSystemPromptRevision(reflectionRun.promptSnapshot.revisionId);
@@ -2241,6 +2242,13 @@ function submitTurn(
       outputReserveEstimatedTokens: 2_048,
       skillEstimatedTokens: 0,
       materialEstimatedTokens: 0
+    },
+    capabilitySurface: {
+      revision: capabilitySurface.revision,
+      visibleCapabilityIds: [...capabilitySurface.visibleCapabilityIds],
+      requestableCapabilityCount: capabilitySurface.requestableCatalog.length,
+      initialToolSchemaEstimatedTokens: capabilitySurface.initialToolSchemaEstimatedTokens,
+      preloadHintCount: preloadHints.length
     }
   };
   const dreamEligibility = reflectionRun?.status === "dialogue_active" ? detectReflectionDreamEligibility(input.text) : undefined;
@@ -2331,19 +2339,20 @@ function submitTurn(
     reflectionOutcomeIntent,
     longTermMemoryCardIds: new Set(),
     activeCapabilities,
+    executableCapabilityIds: [...capabilitySurface.executableCapabilityIds],
+    capabilitySurface,
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
     recalledStateEstimatedTokens: 0,
     recallBodyBytes: 0,
+    capabilityActivationCount: 0,
     ...(reflectionRun === undefined ? {} : { reflectionRunId: reflectionRun.id }),
     ...((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).length === 0 ? {} : { appendSystemPrompt: options.appendSystemPrompt ?? [MEMORY_AWARE_REFLECTION_INSTRUCTIONS] }),
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
   if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
-  turnContexts.set(turnId, context);
-  activeTurnByThread.set(input.threadId, turnId);
   inflight!.begin({
     schemaVersion: 1,
     checkpointId: randomUUID(),
@@ -2373,18 +2382,14 @@ function submitTurn(
     contextHistory,
     estimatedInputTokens: Object.values(promptTelemetry.contributions).reduce((sum, value) => sum + value, 0),
     currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
+    capabilitySurface,
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
     executionScope: thread.scope === "project"
       ? { kind: "project", projectId: thread.projectId }
       : { kind: "unscoped", threadId: thread.id },
     prompt: workerPrompt,
-    profile: {
-      provider: profile.provider,
-      model: profile.model,
-      apiKey: credentials.decrypt(encrypted),
-      thinkingLevel: profile.thinkingLevel
-    },
+    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: {
       schemaVersion: 1,
       revisionId: promptRevision.id,
@@ -2394,7 +2399,7 @@ function submitTurn(
     },
     extensions: extensionRuntimeSnapshot()
   };
-  void workerSupervisor!.execute(workerCommand).catch(() => interruptTurn(context, "worker_exit", 0));
+  turnExecution!.start({ kind: "turn", context }, workerCommand, () => interruptTurn(context, "worker_exit", 0));
   return {
     ...ipcMetadata(submitted),
     event: "turn.accepted",
@@ -2428,7 +2433,7 @@ function submitOrQueueTurn(correlationId: string, input: { threadId: string; tex
   const reflection = stateStore!.getReflectionRunByThread(thread.id);
   const requestedProfileId = reflection?.memoryAwareProfileId ?? thread.activeProfileId;
   if (requestedProfileId === undefined || (reflection !== undefined && reflection.status !== "dialogue_active")) return submitTurn(correlationId, input);
-  const reason = activeTurnByThread.has(thread.id) ? "thread_active" as const : !executionScheduler!.hasCapacity() ? "capacity" as const : undefined;
+  const reason = turnExecution!.isThreadActive(thread.id) ? "thread_active" as const : !executionScheduler!.hasCapacity() ? "capacity" as const : undefined;
   if (reason === undefined) return submitTurn(correlationId, input);
   const item = stateStore!.enqueueOrdinaryTurn({
     threadId: thread.id,
@@ -2445,7 +2450,7 @@ function drainExecutionQueue(correlationId: string = randomUUID()): void {
   if (shuttingDown || stateStore === null || stateStore.isReadOnlyRecovery) return;
   while (executionScheduler!.hasCapacity()) {
     const item = stateStore.listExecutionQueue().find((candidate) => {
-      if (candidate.status !== "queued" || activeTurnByThread.has(candidate.threadId)) return false;
+      if (candidate.status !== "queued" || turnExecution!.isThreadActive(candidate.threadId)) return false;
       const candidateThread = stateStore!.getThread(candidate.threadId);
       if (candidateThread === undefined) return true;
       const effectiveProfileId = stateStore!.getReflectionRunByThread(candidateThread.id)?.memoryAwareProfileId ?? candidateThread.activeProfileId;
@@ -2474,7 +2479,7 @@ function drainExecutionQueue(correlationId: string = randomUUID()): void {
 function compactThread(correlationId: string, threadId: string): HostEvent {
   const thread = stateStore!.getThread(threadId);
   if (thread === undefined) throw new Error("Thread not found");
-  if (activeTurnByThread.has(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before compacting this Thread.");
+  if (turnExecution!.isThreadActive(threadId)) return diagnostic(correlationId, "HOST_FAILURE", "Stop the active Turn before compacting this Thread.");
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Thread compaction");
   const profile = thread.activeProfileId === undefined ? undefined : stateStore!.getModelProfile(thread.activeProfileId);
   if (profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Model Profile not configured");
@@ -2488,6 +2493,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
   const turnId = randomUUID();
   const contextHistory = trajectoryStore!.contextHistory(threadId);
   const physical = stateStore!.getPhysicalContext(threadId);
+  const capabilitySurface = createTurnCapabilitySurface({ kind: "compaction", scope: thread.scope, inventory: capabilityRegistry!.inventory() });
   const context: TurnContext = {
     correlationId,
     threadId,
@@ -2499,17 +2505,18 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     reflectionOutcomeIntent: false,
     longTermMemoryCardIds: new Set(),
     activeCapabilities: [],
+    executableCapabilityIds: [],
+    capabilitySurface,
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
     recalledStateEstimatedTokens: 0,
     recallBodyBytes: 0,
+    capabilityActivationCount: 0,
     compactionOnly: true
   };
   const admission = executionScheduler!.admit({ id: turnId, scopeKey: threadId, kind: "compaction" });
   if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Thread compaction");
-  turnContexts.set(turnId, context);
-  activeTurnByThread.set(threadId, turnId);
   const started: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, threadId, turnId, USER_ACTOR, USER_PROVENANCE),
     event: "thread.compaction.started",
@@ -2531,15 +2538,16 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     contextHistory,
     estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(JSON.stringify(contextHistory)),
     currentInputTokens: estimateTokens(promptRevision.content),
+    capabilitySurface,
     activeCapabilities: [],
     expectedStateVersion: thread.stateVersion,
     executionScope: thread.scope === "project" ? { kind: "project", projectId: thread.projectId } : { kind: "unscoped", threadId },
     prompt: "Manual Thread Compaction",
-    profile: { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel },
+    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [] },
     extensions: extensionRuntimeSnapshot()
   };
-  void workerSupervisor!.execute(command).catch(() => {
+  turnExecution!.start({ kind: "turn", context }, command, () => {
     finishTurn(context);
     emit(diagnostic(correlationId, "HOST_FAILURE", "Agent Worker exited during Thread compaction."));
   });
@@ -2553,23 +2561,21 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
   }
-  const synthesisContext = dreamSynthesisContexts.get(workerEvent.turnId);
-  if (synthesisContext !== undefined) {
-    handleDreamSynthesisWorkerEvent(synthesisContext, workerEvent);
+  const execution = turnExecution?.route(workerEvent.turnId);
+  if (execution === undefined) return;
+  if (execution.kind === "dream_synthesis") {
+    handleDreamSynthesisWorkerEvent(execution.context, workerEvent);
     return;
   }
-  const dreamContext = dreamContexts.get(workerEvent.turnId);
-  if (dreamContext !== undefined) {
-    handleDreamWorkerEvent(dreamContext, workerEvent);
+  if (execution.kind === "dream") {
+    handleDreamWorkerEvent(execution.context, workerEvent);
     return;
   }
-  const reflectionContext = reflectionContexts.get(workerEvent.turnId);
-  if (reflectionContext !== undefined) {
-    void handleReflectionWorkerEvent(reflectionContext, workerEvent);
+  if (execution.kind === "reflection") {
+    void handleReflectionWorkerEvent(execution.context, workerEvent);
     return;
   }
-  const context = turnContexts.get(workerEvent.turnId);
-  if (context === undefined) return;
+  const context = execution.context;
 
   if (workerEvent.event === "capability.execution.requested") {
     void processCapabilityRequest(context, workerEvent);
@@ -2615,6 +2621,10 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
       trajectoryStore!.append(record);
       emit({ ...ipcMetadata(record), event: "physical_context.rebuilt", payload: { threadId: context.threadId, turnId: context.turnId, ...record.payload } });
     }
+    if (workerEvent.contextUsage !== undefined) {
+      const metadata = eventMetadata(context.correlationId, context.threadId, HOST_ACTOR, HOST_PROVENANCE);
+      emit({ ...metadata, event: "session.context.updated", payload: { threadId: context.threadId, contextUsage: workerEvent.contextUsage } });
+    }
     return;
   }
 
@@ -2637,6 +2647,12 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     return;
   }
 
+  if (workerEvent.event === "thinking.delta") {
+    const metadata = eventMetadata(context.correlationId, context.threadId, AGENT_ACTOR, AGENT_PROVENANCE);
+    emit({ ...metadata, event: "thinking.delta", payload: { threadId: context.threadId, turnId: context.turnId, delta: workerEvent.delta } });
+    return;
+  }
+
   if (workerEvent.event === "turn.completed") {
     const latencyMs = Date.now() - context.submittedAtMs;
     const recalledStateEstimatedTokens = context.recalledStateEstimatedTokens;
@@ -2647,6 +2663,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
         message: workerEvent.message,
         profile: toTrajectoryProfile(context.profile),
         usage: workerEvent.usage,
+        ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }),
         latencyMs,
         recalledStateEstimatedTokens,
         ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }),
@@ -2660,7 +2677,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     }
     finishTurn(context);
     acknowledgeTrajectory(context, record);
-    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
     return;
   }
 
@@ -2717,7 +2734,7 @@ function handleDreamSynthesisWorkerEvent(context: DreamSynthesisExecutionContext
     workerSupervisor?.resolveCapability({ schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId, threadId: context.executionThreadId, turnId: context.turnId, result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "DREAM_SYNTHESIS_CAPABILITY_NOT_ALLOWED", content: "Global Dream Synthesis receives only approved de-identified summaries and cannot use tools." } });
     return;
   }
-  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
   if (workerEvent.event === "turn.completed") {
     try {
       const batch = dreamReviews!.load().batches.find((item) => item.id === context.batchId);
@@ -2739,14 +2756,14 @@ function handleDreamSynthesisWorkerEvent(context: DreamSynthesisExecutionContext
 }
 
 function failDreamSynthesisExecution(context: DreamSynthesisExecutionContext, failure: ProviderFailure): void {
-  if (!dreamSynthesisContexts.has(context.turnId)) return;
+  if (!turnExecution!.isActive({ kind: "dream_synthesis", context })) return;
   executionScheduler!.recordFailure();
   try { dreamReviews?.failSynthesis(context.batchId, failure); }
   finally { finishDreamSynthesisExecution(context); emit(dreamStateEvent(context.correlationId)); }
 }
 
 function finishDreamSynthesisExecution(context: DreamSynthesisExecutionContext): void {
-  dreamSynthesisContexts.delete(context.turnId);
+  turnExecution?.finish({ kind: "dream_synthesis", context });
   executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.executionThreadId);
   queueMicrotask(() => drainExecutionQueue());
@@ -2761,7 +2778,7 @@ function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: Wor
     });
     return;
   }
-  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
   if (workerEvent.event === "turn.completed") {
     try {
       const result = parseDreamScopeSummary(workerEvent.message, context.scope, context.allowedSourceReferences);
@@ -2781,7 +2798,7 @@ function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: Wor
 }
 
 function failDreamExecution(context: DreamExecutionContext, failure: ProviderFailure): void {
-  if (!dreamContexts.has(context.turnId)) return;
+  if (!turnExecution!.isActive({ kind: "dream", context })) return;
   executionScheduler!.recordFailure();
   try { dreamReviews?.failScope(context.batchId, context.scope.id, failure); }
   finally {
@@ -2791,7 +2808,7 @@ function failDreamExecution(context: DreamExecutionContext, failure: ProviderFai
 }
 
 function finishDreamExecution(context: DreamExecutionContext): void {
-  dreamContexts.delete(context.turnId);
+  turnExecution?.finish({ kind: "dream", context });
   executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.executionThreadId);
   queueMicrotask(() => drainExecutionQueue());
@@ -2834,7 +2851,7 @@ async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, 
     emitReflectionRun(context.correlationId, run);
     return;
   }
-  if (workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
   if (workerEvent.event === "turn.completed") {
     try {
       const assessment = parseIndependentAssessment(workerEvent.message);
@@ -2865,7 +2882,7 @@ function resolveReflectionCapability(context: ReflectionExecutionContext, result
 }
 
 function failReflectionExecution(context: ReflectionExecutionContext, failure: ProviderFailure): void {
-  if (!reflectionContexts.has(context.turnId)) return;
+  if (!turnExecution!.isActive({ kind: "reflection", context })) return;
   executionScheduler!.recordFailure();
   const current = stateStore!.getReflectionRun(context.runId);
   if (current?.status !== "independent_running") return;
@@ -2875,7 +2892,7 @@ function failReflectionExecution(context: ReflectionExecutionContext, failure: P
 }
 
 function finishReflectionExecution(context: ReflectionExecutionContext): void {
-  reflectionContexts.delete(context.turnId);
+  turnExecution?.finish({ kind: "reflection", context });
   executionScheduler?.release(context.turnId);
   workerSupervisor?.retire(context.threadId);
   queueMicrotask(() => drainExecutionQueue());
@@ -2975,6 +2992,7 @@ function finalizeCapability(
   if (result.activatedCapabilities !== undefined) {
     for (const capabilityId of result.activatedCapabilities) {
       if (!context.activeCapabilities.includes(capabilityId)) context.activeCapabilities.push(capabilityId);
+      if (!context.executableCapabilityIds.includes(capabilityId)) context.executableCapabilityIds.push(capabilityId);
     }
   }
   if (result.artifact !== undefined) {
@@ -3080,7 +3098,7 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
       accessMode: stateStore!.getAccessMode(),
       scope: "project",
       stateVersion: thread.stateVersion,
-      activeCapabilityIds: context.activeCapabilities,
+      activeCapabilityIds: context.executableCapabilityIds,
       outputIntent: context.outputIntent,
       outputLocation: join(project.path, "outputs")
     };
@@ -3089,7 +3107,7 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
     accessMode: stateStore!.getAccessMode(),
     scope: "unscoped",
     stateVersion: thread.stateVersion,
-    activeCapabilityIds: context.activeCapabilities,
+    activeCapabilityIds: context.executableCapabilityIds,
     outputIntent: context.outputIntent,
     ...(thread.outputLocation === undefined ? {} : { outputLocation: thread.outputLocation })
   };
@@ -3144,7 +3162,7 @@ function interruptTurn(
   reason: "user_stop" | "worker_exit" | "application_restart" | "provider_interrupted",
   workerSequence: number
 ): void {
-  if (!turnContexts.has(context.turnId)) return;
+  if (!turnExecution!.isActive({ kind: "turn", context })) return;
   inflight!.flush(context.turnId);
   const checkpoint = inflight!.get(context.turnId);
   const record: TrajectoryEvent = {
@@ -3180,14 +3198,27 @@ function finishTurn(context: TurnContext): void {
     capabilityRequests.delete(requestId);
   }
   inflight!.complete(context.turnId);
-  turnContexts.delete(context.turnId);
-  activeTurnByThread.delete(context.threadId);
+  turnExecution?.finish({ kind: "turn", context });
   executionScheduler?.release(context.turnId);
   queueMicrotask(() => drainExecutionQueue());
 }
 
 function toTrajectoryProfile(profile: ModelProfile): TrajectoryProfile {
   return { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel };
+}
+
+function toWorkerModelProfile(
+  profile: ModelProfile,
+  apiKey: string
+): Extract<WorkerCommand, { command: "turn.execute" }>["profile"] {
+  return {
+    provider: profile.provider,
+    model: profile.model,
+    apiKey,
+    thinkingLevel: profile.thinkingLevel,
+    ...(profile.contextWindow === undefined ? {} : { contextWindow: profile.contextWindow }),
+    ...(profile.maxOutputTokens === undefined ? {} : { maxOutputTokens: profile.maxOutputTokens })
+  };
 }
 
 function emit(event: HostEvent): void {
@@ -3335,6 +3366,7 @@ app.whenReady().then(() => {
   skillProjector = new SkillResourceProjector({ manager: skillsDirectory });
   executionScheduler = new BoundedExecutionScheduler({ capacity: EXECUTION_CAPACITY, store: stateStore });
   workerSupervisor = new AgentWorkerSupervisor(runtimePaths.agentWorkerEntry, handleWorkerEvent);
+  turnExecution = new HostTurnExecutionModule((command) => workerSupervisor!.execute(command));
   extensionAuditWorker = new ExtensionAuditWorkerExecutor({
     supervisor: workerSupervisor,
     root: join(app.getPath("userData"), "integrations", "extensions", "audit-sessions")
@@ -3366,7 +3398,7 @@ app.whenReady().then(() => {
   subAgentRuntime = new SubAgentRuntime({
     path: join(app.getPath("userData"), "delegation", "runs.json"),
     resolver: { resolve: resolveSubAgentProfile },
-    adapter: process.env.VC_AGENT_TEST_SUB_AGENT_FIXTURE === "1" ? new FixtureSubAgentAdapter({ delayMs: 5 }) : new ProviderSubAgentAdapter(subAgentProviderExecutor, { contextCompiler: subAgentContextCompiler }),
+    adapter: new ProviderSubAgentAdapter(subAgentProviderExecutor, { contextCompiler: subAgentContextCompiler }),
     scheduler: executionScheduler,
     capacity: Math.max(1, Math.min(EXECUTION_CAPACITY, Number.parseInt(process.env.VC_AGENT_SUB_AGENT_CAPACITY ?? String(EXECUTION_CAPACITY), 10) || EXECUTION_CAPACITY)),
     readOnly: stateStore.isReadOnlyRecovery,
@@ -3440,9 +3472,64 @@ app.whenReady().then(() => {
   capabilityRegistry = new CapabilityRegistry();
   capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
   capabilityRegistry.register(createCapabilityBroker((input, context) => {
-    const requested = input.capabilityId === undefined ? undefined : capabilityRegistry?.get(input.capabilityId)?.metadata;
-    if (requested === undefined || requested.activationClass !== "ordinary_task" || !requested.allowedScopes.includes(context.request.scope.kind)) return [];
-    return [requested.id];
+    const turn = turnExecution!.getTurn(context.request.turnId);
+    if (turn === undefined) return [];
+    const catalog = turn.capabilitySurface.requestableCatalog.filter((entry) => !turn.activeCapabilities.includes(entry.id));
+    if ("mode" in input && input.mode === "catalog") {
+      return {
+        kind: "catalog" as const,
+        catalogRevision: turn.capabilitySurface.revision,
+        entries: catalog.map((entry) => ({
+          id: entry.id,
+          label: entry.label,
+          useWhen: entry.useWhen,
+          tier: entry.tier,
+          sideEffectClass: entry.sideEffectClass,
+          requiresUserIntent: entry.requiresUserIntent
+        }))
+      };
+    }
+    const requestedIds = "mode" in input && input.mode === "activate"
+      ? input.capabilityIds
+      : input.capabilityId === undefined ? [] : [input.capabilityId];
+    const catalogRevision = "mode" in input && input.mode === "activate" ? input.catalogRevision : turn.capabilitySurface.revision;
+    if (catalogRevision !== turn.capabilitySurface.revision) {
+      return {
+        kind: "activation" as const,
+        catalogRevision: turn.capabilitySurface.revision,
+        activatedCapabilities: [],
+        alreadyVisible: [],
+        rejected: requestedIds.map((id) => ({ id, code: "STALE_CATALOG" as const, reason: "Capability catalog changed before activation." }))
+      };
+    }
+    const catalogIds = new Set(catalog.map((entry) => entry.id));
+    const alreadyVisible = requestedIds.filter((id) => turn.activeCapabilities.includes(id));
+    const candidates = requestedIds.filter((id) => !alreadyVisible.includes(id));
+    const activatedCapabilities: string[] = [];
+    const rejected: Array<{ id: string; code: "CAPABILITY_UNAVAILABLE" | "USER_INTENT_REQUIRED"; reason: string }> = [];
+    for (const id of candidates) {
+      if (!catalogIds.has(id)) {
+        rejected.push({ id, code: "CAPABILITY_UNAVAILABLE", reason: "Capability is not requestable for this Turn." });
+        continue;
+      }
+      if (id === "memory_recall" && turn.memoryRecallMode === "none") {
+        rejected.push({ id, code: "USER_INTENT_REQUIRED", reason: "Memory recall requires judgment-heavy work or an explicit User request." });
+        continue;
+      }
+      if (turn.capabilityActivationCount + activatedCapabilities.length >= 16) {
+        rejected.push({ id, code: "CAPABILITY_UNAVAILABLE", reason: "The per-Turn dynamic capability limit has been reached." });
+        continue;
+      }
+      activatedCapabilities.push(id);
+    }
+    turn.capabilityActivationCount += activatedCapabilities.length;
+    return {
+      kind: "activation" as const,
+      catalogRevision: turn.capabilitySurface.revision,
+      activatedCapabilities,
+      alreadyVisible,
+      ...(rejected.length === 0 ? {} : { rejected })
+    };
   }));
   capabilityRegistry.register(createMaterialRecallCapability(async (input, context) => {
     const scope = context.request.scope;
@@ -3459,17 +3546,21 @@ app.whenReady().then(() => {
     const source = new MaterialRecallSource({
       listMaterials: () => scope.kind === "project" ? stateStore!.listMaterials(scope.projectId) : [],
       loadParse: async (materialId) => {
-        if (scope.kind !== "project") return undefined;
+        if (scope.kind !== "project") return { status: "unavailable" as const, code: "MATERIAL_SCOPE_UNAVAILABLE", message: "Project Materials are unavailable in this Thread scope." };
         let parsed = stateStore!.getCurrentParsedMaterial(materialId);
         if (parsed === undefined) {
           const parsedEvent = await parseMaterial(context.request.correlationId, materialId);
-          if (parsedEvent.event !== "material.parse.completed") return undefined;
+          if (parsedEvent.event !== "material.parse.completed") {
+            return parsedEvent.event === "material.parse.failed"
+              ? { status: "unavailable" as const, code: parsedEvent.payload.code, message: parsedEvent.payload.message }
+              : { status: "unavailable" as const, code: "PARSE_FAILED", message: "Material parsing did not produce a completed parse." };
+          }
           parsed = stateStore!.getCurrentParsedMaterial(materialId);
         }
         const project = stateStore!.getProject(scope.projectId);
-        if (parsed === undefined || project === undefined) return undefined;
+        if (parsed === undefined || project === undefined) return { status: "unavailable" as const, code: "PARSE_RECORD_UNAVAILABLE", message: "The parse completed but its committed artifact could not be located." };
         try { return canonicalParseSchema.parse(JSON.parse(readFileSync(join(project.path, parsed.artifact_path), "utf8"))); }
-        catch { return undefined; }
+        catch { return { status: "unavailable" as const, code: "PARSE_ARTIFACT_INVALID", message: "The committed Canonical Parse artifact is missing or invalid." }; }
       }
     });
     const query = {
@@ -3479,11 +3570,10 @@ app.whenReady().then(() => {
       ...(input.query === undefined ? {} : { query: input.query })
     };
     const envelope = await source.recall(query, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityRegistry.register(createReflectionEvidenceDrilldownCapability(async (input, context) => {
-    const turn = turnContexts.get(context.request.turnId);
+    const turn = turnExecution!.getTurn(context.request.turnId);
     const run = turn?.reflectionRunId === undefined ? undefined : stateStore!.getReflectionRun(turn.reflectionRunId);
     if (run?.scope !== "project" || !["memory_aware_running", "dialogue_active"].includes(run.status) || run.assessment === undefined) {
       throw new Error("Evidence Drilldown requires an active Project Reflection with a completed Independent Assessment.");
@@ -3509,8 +3599,7 @@ app.whenReady().then(() => {
       { referenceId: input.referenceId, claim: assessmentReference.claim },
       { turnId: context.request.turnId, maxItems: 1, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
     );
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityRegistry.register(createProjectStateRecallCapability(async (input, context) => {
     const scope = context.request.scope;
@@ -3522,12 +3611,11 @@ app.whenReady().then(() => {
       { ...(input.sectionIds === undefined ? {} : { sectionIds: input.sectionIds }), ...(input.query === undefined ? {} : { query: input.query }) },
       { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
     );
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityRegistry.register(createMemoryRecallCapability(async (input, context) => {
     const scope = context.request.scope;
-    const turn = turnContexts.get(context.request.turnId);
+    const turn = turnExecution!.getTurn(context.request.turnId);
     if (turn === undefined || turn.memoryRecallMode === "none") throw new Error("Memory recall requires judgment-heavy work or an explicit User request.");
     let envelope;
     if (input.source === "project_memory") {
@@ -3548,11 +3636,10 @@ app.whenReady().then(() => {
       envelope = await source.recall({ mode: turn.memoryRecallMode, disclosureLevel: input.disclosureLevel, ...(input.entryIds ? { entryIds: input.entryIds } : {}), ...(input.query ? { query: input.query } : {}) }, { turnId: context.request.turnId, maxItems: input.maxItems, maxChars: input.maxChars, retrievedAt: new Date().toISOString() });
       if (input.disclosureLevel === "cards") for (const item of envelope.items) turn.longTermMemoryCardIds.add(item.id);
     }
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityRegistry.register(createReflectionOutcomeProposalCapability(async (input, context) => {
-    const turn = turnContexts.get(context.request.turnId);
+    const turn = turnExecution!.getTurn(context.request.turnId);
     if (turn?.reflectionRunId === undefined || !turn.reflectionOutcomeIntent || reflectionOutcomes === null) {
       throw new Error("Reflection outcomes require an explicit User request in an active Reflection dialogue.");
     }
@@ -3573,16 +3660,14 @@ app.whenReady().then(() => {
       { kind: "search", query: input.query },
       { turnId: context.request.turnId, maxItems: input.maxResults, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
     );
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityRegistry.register(createWebFetchCapability(async (input, context) => {
     const envelope = await publicWeb.recall(
       { kind: "fetch", url: input.url },
       { turnId: context.request.turnId, maxItems: 1, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
     );
-    const body = JSON.stringify(envelope);
-    return { body, retrieval: retrievalMetadata(envelope, body) };
+    return serializeBoundedRetrieval(envelope);
   }));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   if (!readOnlyRecovery) {
@@ -3610,21 +3695,22 @@ app.on("before-quit", (event) => {
 async function shutdownApplication(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const context of [...turnContexts.values()]) interruptTurn(context, "application_restart", 0);
-  for (const context of [...reflectionContexts.values()]) {
-    const run = stateStore?.getReflectionRun(context.runId);
-    if (run?.status === "independent_running") stateStore?.interruptIndependentAssessment(context.runId);
-    reflectionContexts.delete(context.turnId);
-  }
-  for (const context of [...dreamContexts.values()]) {
-    try { dreamReviews?.failScope(context.batchId, context.scope.id, { kind: "worker", code: "APPLICATION_RESTART", message: "Dream scope extraction was interrupted by application restart and remains Pending for explicit retry.", provider: context.profile.provider, model: context.profile.model }); }
-    catch { /* Preserve already completed scope state. */ }
-    dreamContexts.delete(context.turnId);
-  }
-  for (const context of [...dreamSynthesisContexts.values()]) {
-    try { dreamReviews?.failSynthesis(context.batchId, { kind: "worker", code: "APPLICATION_RESTART", message: "Global Dream Synthesis was interrupted by application restart and requires explicit retry.", provider: context.profile.provider, model: context.profile.model }); }
-    catch { /* Preserve already completed synthesis state. */ }
-    dreamSynthesisContexts.delete(context.turnId);
+  for (const execution of turnExecution?.activeExecutions() ?? []) {
+    if (execution.kind === "turn") {
+      interruptTurn(execution.context, "application_restart", 0);
+    } else if (execution.kind === "reflection") {
+      const run = stateStore?.getReflectionRun(execution.context.runId);
+      if (run?.status === "independent_running") stateStore?.interruptIndependentAssessment(execution.context.runId);
+      turnExecution?.finish(execution);
+    } else if (execution.kind === "dream") {
+      try { dreamReviews?.failScope(execution.context.batchId, execution.context.scope.id, { kind: "worker", code: "APPLICATION_RESTART", message: "Dream scope extraction was interrupted by application restart and remains Pending for explicit retry.", provider: execution.context.profile.provider, model: execution.context.profile.model }); }
+      catch { /* Preserve already completed scope state. */ }
+      turnExecution?.finish(execution);
+    } else {
+      try { dreamReviews?.failSynthesis(execution.context.batchId, { kind: "worker", code: "APPLICATION_RESTART", message: "Global Dream Synthesis was interrupted by application restart and requires explicit retry.", provider: execution.context.profile.provider, model: execution.context.profile.model }); }
+      catch { /* Preserve already completed synthesis state. */ }
+      turnExecution?.finish(execution);
+    }
   }
   ipcMain.removeHandler(COMMAND_CHANNEL);
   const subAgentShutdown = subAgentRuntime?.shutdown() ?? Promise.resolve();
@@ -3660,6 +3746,7 @@ async function shutdownApplication(): Promise<void> {
   if (longTermMemoryWatchTimer !== undefined) clearTimeout(longTermMemoryWatchTimer);
   longTermMemoryWatchTimer = undefined;
   workerSupervisor = null;
+  turnExecution = null;
   extensionAuditWorker = null;
   stateStore?.close();
   stateStore = null;

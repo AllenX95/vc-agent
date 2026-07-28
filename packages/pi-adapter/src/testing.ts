@@ -9,6 +9,7 @@ import {
 
 export async function createFauxPiSession(input: {
   readonly config: Omit<PiSessionConfig, "profile">;
+  readonly profileOverrides?: Pick<PiSessionConfig["profile"], "contextWindow" | "maxOutputTokens">;
   readonly responses: readonly AssistantMessage[];
   readonly onEvent: (event: PiSessionEvent) => void;
 }): Promise<PiSessionHandle> {
@@ -38,11 +39,11 @@ export async function createFauxPiSession(input: {
   return createPiSessionUsingRuntime(
     {
       ...input.config,
-      profile: { provider: faux.provider.id, model: faux.models[0].id, apiKey: "faux-runtime-key" }
+      profile: { provider: faux.provider.id, model: faux.models[0].id, apiKey: "faux-runtime-key", ...input.profileOverrides }
     },
     input.onEvent,
     runtime
   );
 }
 
-export { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+export { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";

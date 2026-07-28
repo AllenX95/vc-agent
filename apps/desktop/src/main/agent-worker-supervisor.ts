@@ -1,5 +1,5 @@
 import { utilityProcess, type UtilityProcess } from "electron";
-import { workerEventSchema, type WorkerCommand, type WorkerEvent } from "@vc-agent/contracts";
+import { normalizeCapabilityExecutionResult, workerEventSchema, type WorkerCommand, type WorkerEvent } from "@vc-agent/contracts";
 import { terminateProcessTree, waitForProcessExit } from "./process-tree.js";
 
 type ExecuteCommand = Extract<WorkerCommand, { command: "turn.execute" }>;
@@ -107,7 +107,13 @@ export class AgentWorkerSupervisor {
   resolveCapability(command: Extract<WorkerCommand, { command: "capability.execution.resolve" }>): void {
     const found = this.#findSession(command.threadId, command.turnId);
     if (found !== undefined && found.record.bootState === "ready") {
-      found.record.process.postMessage({ ...command, ownerKey: found.record.ownerKey, workerRevision: found.record.workerRevision, sessionKey: found.session.sessionKey });
+      found.record.process.postMessage({
+        ...command,
+        ownerKey: found.record.ownerKey,
+        workerRevision: found.record.workerRevision,
+        sessionKey: found.session.sessionKey,
+        result: normalizeCapabilityExecutionResult(command.result)
+      });
     }
   }
 
@@ -117,6 +123,19 @@ export class AgentWorkerSupervisor {
     if (record === undefined || [...record.sessions.values()].some((session) => session.activeCommand !== undefined)) return;
     this.#workers.delete(ownerKey);
     record.process.kill();
+  }
+
+  discardThread(threadId: string): void {
+    for (const [ownerKey, record] of this.#workers) {
+      const session = record.sessions.get(threadId);
+      if (session === undefined || session.activeCommand !== undefined) continue;
+      record.sessions.delete(threadId);
+      if (ownerKey === `unscoped:${threadId}` && record.sessions.size === 0) {
+        this.#workers.delete(ownerKey);
+        record.process.kill();
+      }
+      return;
+    }
   }
 
   closeAll(): void {

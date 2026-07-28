@@ -2,7 +2,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FixtureSubAgentAdapter, SubAgentRuntime, createSubAgentProfileResolver } from "@vc-agent/host-services";
+import { SubAgentRuntime, createSubAgentProfileResolver } from "@vc-agent/host-services";
+import { FixtureSubAgentAdapter } from "@vc-agent/host-services/testing";
 
 const profile = { profileId: "profile-fixture", name: "Fixture", provider: "fixture", model: "fixture-v1", thinkingLevel: "minimal" as const };
 const intent = { source: "user" as const, text: "Please explicitly delegate the research and critique tasks for this turn.", confirmed: true as const, taskLifetime: "current_task" as const };

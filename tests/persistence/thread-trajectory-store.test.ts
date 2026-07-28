@@ -75,12 +75,19 @@ describe("ThreadTrajectoryStore", () => {
       payload: {
         message: "The company has an attractive wedge.",
         profile,
-        usage: { input: 10, output: 8, cacheRead: 0, cacheWrite: 0, totalTokens: 18 }
+        usage: { input: 10, output: 8, cacheRead: 0, cacheWrite: 0, reasoning: 3, totalTokens: 18 },
+        contextUsage: { tokens: 12_500, contextWindow: 128_000, percent: 9.765625 }
       }
     });
 
     expect(store.projectTurns("thread-1")).toMatchObject([
-      { text: "Assess this company", assistantText: "The company has an attractive wedge.", status: "completed" }
+      {
+        text: "Assess this company",
+        assistantText: "The company has an attractive wedge.",
+        status: "completed",
+        usage: { input: 10, reasoning: 3, output: 8 },
+        contextUsage: { tokens: 12_500, contextWindow: 128_000 }
+      }
     ]);
     expect(store.contextHistory("thread-1")).toMatchObject([
       { user: "Assess this company", assistant: "The company has an attractive wedge.", status: "completed" }

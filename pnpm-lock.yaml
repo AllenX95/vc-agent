@@ -44,12 +44,6 @@ importers:
 
   apps/agent-worker:
     dependencies:
-      '@earendil-works/pi-ai':
-        specifier: 0.80.8
-        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
-      '@earendil-works/pi-coding-agent':
-        specifier: 0.80.8
-        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -78,9 +72,6 @@ importers:
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@vc-agent/core':
-        specifier: workspace:*
-        version: link:../../packages/core
       '@vc-agent/host-services':
         specifier: workspace:*
         version: link:../../packages/host-services
@@ -170,12 +161,6 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  packages/core:
-    devDependencies:
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
   packages/host-services:
     dependencies:
       '@vc-agent/capabilities':
@@ -206,9 +191,6 @@ importers:
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@vc-agent/core':
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       '@types/node':
         specifier: 26.1.1

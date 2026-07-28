@@ -607,10 +607,6 @@ export class GlobalExtensionRevisionManager {
   }
 }
 
-export function hashExtensionDirectory(directory: string): string {
-  return hashInventory(inventoryDirectory(resolve(directory)));
-}
-
 function buildInspection(staged: StagedExtension, now: string): DeterministicInspectionReport {
   const files = inventoryDirectory(staged.stagedPath);
   const packageJson = readPackageJson(staged.stagedPath);

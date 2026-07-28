@@ -14,6 +14,13 @@ describe("Minimal VC System Prompt", () => {
       "Action boundary"
     ]);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).not.toMatch(/project name|project path|provider configuration|document template/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/decision-relevant view/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/investment thesis.*strongest counter-case.*falsifiers/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/company or management claims/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/never invent facts, citations, or false precision/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/never claim unread or omitted content was reviewed/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/Do not take durable or external action beyond explicit User intent/i);
     expect(estimateTokens(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT)).toBeGreaterThan(0);
+    expect(estimateTokens(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT)).toBeLessThan(1_000);
   });
 });

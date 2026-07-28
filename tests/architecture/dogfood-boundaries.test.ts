@@ -61,6 +61,22 @@ describe("Dogfood adapter boundaries", () => {
     expect(dogfoodSources).not.toMatch(/from ["'][^"']*(dream|reflection|long-term-memory|sub-agent|office|ocr|mcp|extension-audit)/iu);
   });
 
+  it("keeps fixture adapters behind test-only entry points", () => {
+    const productionWorker = [
+      readFileSync(join(root, "apps/agent-worker/src/index.ts"), "utf8"),
+      readFileSync(join(root, "apps/agent-worker/src/worker-runtime.ts"), "utf8")
+    ].join("\n");
+    const testWorker = readFileSync(join(root, "apps/agent-worker/src/test-index.ts"), "utf8");
+    const desktopMain = readFileSync(join(root, "apps/desktop/src/main/main.ts"), "utf8");
+    const packaging = readFileSync(join(root, "electron-builder.yml"), "utf8");
+
+    expect(productionWorker).not.toMatch(/pi-adapter\/testing|fixture-responses|VC_AGENT_TEST_/u);
+    expect(testWorker).toMatch(/pi-adapter\/testing|fixture-responses/u);
+    expect(desktopMain).not.toMatch(/FixtureSubAgentAdapter|VC_AGENT_TEST_SUB_AGENT_FIXTURE/u);
+    expect(packaging).toContain("from: apps/agent-worker/dist");
+    expect(packaging).not.toContain("apps/agent-worker/dist-test");
+  });
+
   it("keeps state migration deterministic and independent from model execution", () => {
     const migration = readFileSync(join(root, "packages/persistence/src/state-migration.ts"), "utf8");
     expect(migration).toContain("export function prepareStateStorage");

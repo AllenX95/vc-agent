@@ -20,6 +20,13 @@ function projectDirectory(): string {
 }
 
 describe("Project Context", () => {
+  it("keeps Project Memory off the Project Context tool contract", () => {
+    const capability = createProjectStateRecallCapability(async () => { throw new Error("not executed"); });
+    expect(capability.inputSchema.safeParse({ source: "project_memory", query: "risk" }).success).toBe(false);
+    expect(capability.inputSchema.parse({ query: "company" })).toMatchObject({ source: "project_context" });
+    expect(capability.metadata.description).toContain("memory_recall");
+  });
+
   it("creates the transparent Markdown and mirror only on first explicit load", () => {
     const directory = projectDirectory();
     const store = new ProjectContextStore();

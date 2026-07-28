@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   actorRefSchema,
+  contextUsageSchema,
+  capabilitySurfaceTelemetrySchema,
   IPC_SCHEMA_VERSION,
   modelProfileSchema,
   promptContributionSchema,
@@ -45,7 +47,7 @@ const turnSubmitted = trajectoryEventBase.extend({
     retryOfTurnId: z.string().min(1).optional(),
     dreamEligibility: reflectionDreamEligibilitySchema.optional(),
     profile: trajectoryProfileSchema.optional(),
-    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
+    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema, capabilitySurface: capabilitySurfaceTelemetrySchema.optional() }).optional()
   })
 });
 const systemPromptUpdated = trajectoryEventBase.extend({
@@ -62,6 +64,7 @@ const turnCompleted = trajectoryEventBase.extend({
     message: z.string(),
     profile: trajectoryProfileSchema,
     usage: usageSchema,
+    contextUsage: contextUsageSchema.optional(),
     latencyMs: z.number().int().nonnegative().optional(),
     recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
     responseId: z.string().optional(),
@@ -165,13 +168,14 @@ export const trajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: trajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  contextUsage: contextUsageSchema.optional(),
   latencyMs: z.number().int().nonnegative().optional(),
   recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),
   lastSequence: z.number().int().positive(),
-  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
+  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema, capabilitySurface: capabilitySurfaceTelemetrySchema.optional() }).optional()
 });
 export type TrajectoryTurn = z.infer<typeof trajectoryTurnSchema>;
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CAPABILITY_RESULT_CONTENT_MAX_CHARS,
   IPC_SCHEMA_VERSION,
+  normalizeCapabilityExecutionResult,
   createBootstrapCommand,
   hostCommandSchema,
   hostEventSchema,
@@ -8,6 +10,67 @@ import {
 } from "@vc-agent/contracts";
 
 describe("versioned IPC contracts", () => {
+  it("accepts transient thinking deltas and optional reasoning token usage", () => {
+    const now = new Date().toISOString();
+    const eventMetadata = {
+      schemaVersion: 1,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 1,
+      actor: { actorType: "agent", actorId: "primary-agent" },
+      provenance: { producerType: "agent", producerId: "primary-agent" },
+      occurredAt: now
+    };
+    expect(hostEventSchema.safeParse({
+      ...eventMetadata,
+      event: "thinking.delta",
+      payload: { threadId: "thread-1", turnId: "turn-1", delta: "Reasoning summary" }
+    }).success).toBe(true);
+    expect(hostEventSchema.safeParse({
+      ...eventMetadata,
+      event: "session.context.updated",
+      payload: { threadId: "thread-1", contextUsage: { tokens: 12_500, contextWindow: 128_000, percent: 9.765625 } }
+    }).success).toBe(true);
+    expect(hostEventSchema.safeParse({
+      ...eventMetadata,
+      event: "turn.completed",
+      payload: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        message: "Answer",
+        profile: {
+          id: "profile-1",
+          name: "Profile",
+          provider: "fixture",
+          model: "fixture",
+          credentialRef: "credential-1",
+          thinkingLevel: "medium",
+          createdAt: now,
+          updatedAt: now
+        },
+        usage: { input: 10, output: 7, cacheRead: 0, cacheWrite: 0, reasoning: 3, totalTokens: 17 },
+        contextUsage: { tokens: 12_500, contextWindow: 128_000, percent: 9.765625 },
+        latencyMs: 5,
+        recalledStateEstimatedTokens: 0
+      }
+    }).success).toBe(true);
+  });
+
+  it("turns an oversized capability response into an explicit bounded failure", () => {
+    const result = normalizeCapabilityExecutionResult({
+      schemaVersion: 1,
+      requestId: "request-1",
+      status: "completed",
+      content: "x".repeat(CAPABILITY_RESULT_CONTENT_MAX_CHARS + 1)
+    });
+    expect(result).toMatchObject({
+      requestId: "request-1",
+      status: "failed",
+      code: "CAPABILITY_RESPONSE_INVALID"
+    });
+    expect(result.content.length).toBeLessThanOrEqual(CAPABILITY_RESULT_CONTENT_MAX_CHARS);
+  });
+
   it("creates a versioned command with explicit actor identity", () => {
     const command = createBootstrapCommand();
     expect(command.schemaVersion).toBe(IPC_SCHEMA_VERSION);
@@ -61,6 +124,35 @@ describe("versioned IPC contracts", () => {
     };
     expect(hostCommandSchema.safeParse(base).success).toBe(false);
     expect(hostCommandSchema.safeParse({ ...base, payload: { ...base.payload, confirmed: true } }).success).toBe(true);
+  });
+
+  it("supports editing a saved Model Profile without requiring credential replacement", () => {
+    const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
+    const command = {
+      ...metadata,
+      command: "profile.update",
+      payload: { profileId: crypto.randomUUID(), name: "Updated", provider: "openai", model: "gpt-5", thinkingLevel: "medium", contextWindow: 200_000, maxOutputTokens: 32_000 }
+    };
+    expect(hostCommandSchema.safeParse(command).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...command, payload: { ...command.payload, maxOutputTokens: 200_000 } }).success).toBe(false);
+  });
+
+  it("requires explicit confirmation to delete an entire Thread", () => {
+    const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
+    const command = { ...metadata, command: "thread.delete", payload: { threadId: "thread-1", confirmed: true } };
+    expect(hostCommandSchema.safeParse(command).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...command, payload: { ...command.payload, confirmed: false } }).success).toBe(false);
+    expect(hostEventSchema.safeParse({
+      schemaVersion: 1,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 0,
+      actor: { actorType: "host", actorId: "desktop-host" },
+      provenance: { producerType: "host", producerId: "desktop-host" },
+      occurredAt: new Date().toISOString(),
+      event: "thread.deleted",
+      payload: { threadId: "thread-1", removedCandidateIds: [], affectedBatchIds: [] }
+    }).success).toBe(true);
   });
 
   it("requires explicit versioned commands to start and stop Independent Evidence", () => {

@@ -50,6 +50,20 @@ describe("Project Memory", () => {
     expect(full.items[0]?.body).toContain("Retention matters");
   });
 
+  it("returns an empty bounded result when Project Memory does not exist", async () => {
+    const source = new ProjectMemoryRecallSource(() => undefined);
+    const result = await source.recall(
+      { disclosureLevel: "cards", query: "risk" },
+      { turnId: "turn-1", maxItems: 4, maxChars: 2_000, retrievedAt: "2026-07-17T00:00:00.000Z" }
+    );
+    expect(result).toMatchObject({
+      items: [],
+      complete: true,
+      warnings: ["Project Memory is unavailable."],
+      contextReference: { status: "source_unavailable" }
+    });
+  });
+
   it("captures deterministic user signals into a separate review queue without writing Memory", () => {
     const { project, store } = fixture();
     const initial = store.load(projectId, project, true)!;

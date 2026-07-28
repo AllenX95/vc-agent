@@ -34,6 +34,15 @@ export function sanitizeProviderFailure(
   const message = field(nested, ["message", "error_description"]) ?? rawMessage;
   const code = field(nested, ["code", "type", "error"]) ?? field(error, ["code", "type"]) ?? "PROVIDER_FAILURE";
   const requestId = field(nested, ["request_id", "requestId"]) ?? field(error, ["request_id", "requestId"]);
+  if (code === "AGENT_TURN_IDLE_TIMEOUT") {
+    return {
+      kind: "worker",
+      code,
+      message: redact(message, profile.apiKey),
+      provider: profile.provider,
+      model: profile.model
+    };
+  }
   return {
     kind: "provider",
     code: redact(code, profile.apiKey),

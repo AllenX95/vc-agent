@@ -10,8 +10,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@vc-agent/contracts": "workspace:*",
-    "@vc-agent/core": "workspace:*"
+    "@vc-agent/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

@@ -32,6 +32,8 @@ export const subAgentProfileSnapshotSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]),
+  contextWindow: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   resolutionSource: z.enum(["explicit_override", "role_assignment", "default_sub_agent", "primary_active"]).optional()
 });
 export type SubAgentProfileSnapshot = z.infer<typeof subAgentProfileSnapshotSchema>;

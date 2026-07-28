@@ -45,7 +45,7 @@ async function main(): Promise<void> {
     schemaVersion: 1,
     sanitized: true,
     kind: "h1-packaged-compatibility",
-    buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
+    buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 },
     runner: { mode: "playwright-electron", status: "ready" },
     workflows: ["process-tree", "external-edit", "backup-restore", "single-instance"],
     results,

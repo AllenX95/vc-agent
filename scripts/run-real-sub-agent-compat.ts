@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const userData = process.env.VC_AGENT_REAL_SUB_AGENT_USER_DATA_DIR?.trim();
   const outputRoot = join(tmpdir(), `vc-agent-real-sub-agent-${Date.now()}`);
   mkdirSync(outputRoot, { recursive: true });
-  const environment: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "test", VC_AGENT_TEST_SUB_AGENT_FIXTURE: undefined, VC_AGENT_REAL_SUB_AGENT: "1", ...(userData === undefined ? {} : { VC_AGENT_USER_DATA_DIR: userData }) };
+  const environment: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "test", VC_AGENT_TEST_AGENT_WORKER_ADAPTER: undefined, VC_AGENT_REAL_SUB_AGENT: "1", ...(userData === undefined ? {} : { VC_AGENT_USER_DATA_DIR: userData }) };
   const application = await electron.launch({ args: [join(root, "apps/desktop/dist/main/main.js")], cwd: root, env: environment });
   try {
     const window = await application.firstWindow();

@@ -108,7 +108,9 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
         provider: commandProfile.provider,
         model: commandProfile.model,
         apiKey: credential,
-        thinkingLevel: commandProfile.thinkingLevel
+        thinkingLevel: commandProfile.thinkingLevel,
+        ...(commandProfile.contextWindow === undefined ? {} : { contextWindow: commandProfile.contextWindow }),
+        ...(commandProfile.maxOutputTokens === undefined ? {} : { maxOutputTokens: commandProfile.maxOutputTokens })
       },
       resources,
       extensions: this.#extensions()

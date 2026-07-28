@@ -75,10 +75,10 @@ async function main(): Promise<void> {
       backup: { status: "ready", message: "No cognition backup was created by the gate." }
     });
     const report = writeIntegrationGateReport(outputRoot, {
-      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
+      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 },
       environmentDoctor: doctor,
       scenarios,
-      migrationVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      migrationVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
       unavailableDependencies: blocked,
       deferredScope: ["D1 Explicit Sub-Agent", "H1 Personal Build hardening"],
       evidenceRoot: outputRoot,
@@ -158,9 +158,9 @@ async function runRecoveryDormancy(root: string): Promise<void> {
 async function runEvidenceScan(root: string): Promise<void> {
   const evidenceRoot = join(root, "evidence-scan");
   const artifacts = writeIntegrationGateReport(evidenceRoot, {
-    buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
+    buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 },
     environmentDoctor: inspectEnvironmentDoctor({ mcp: { status: "ready", message: "Credential references only; no secret value exported." } }),
-    scenarios: [], migrationVersions: [1, 14], evidenceRoot,
+    scenarios: [], migrationVersions: [1, 16], evidenceRoot,
     secretScanInputs: ["credentialRef: local-reference-only", "no OCR text or MCP response body exported"]
   });
   const content = readFileSync(artifacts.jsonPath, "utf8");

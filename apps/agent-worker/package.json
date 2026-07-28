@@ -10,9 +10,7 @@
   },
   "dependencies": {
     "@vc-agent/contracts": "workspace:*",
-    "@vc-agent/pi-adapter": "workspace:*",
-    "@earendil-works/pi-ai": "0.80.8",
-    "@earendil-works/pi-coding-agent": "0.80.8"
+    "@vc-agent/pi-adapter": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -29,17 +29,7 @@ describe("workspace dependency direction", () => {
     const forbidden = imports.filter(({ specifier }) =>
       specifier === "electron" ||
       specifier.startsWith("node:") ||
-      /^@vc-agent\/(core|persistence|host-services|capabilities|pi-adapter)/.test(specifier)
-    );
-    expect(forbidden).toEqual([]);
-  });
-
-  it("keeps core free of runtime and framework dependencies", () => {
-    const imports = importsIn(join(root, "packages/core"));
-    const forbidden = imports.filter(({ specifier }) =>
-      specifier === "electron" ||
-      specifier.startsWith("node:") ||
-      /sqlite|python|pi-coding-agent|pi-ai/.test(specifier)
+      /^@vc-agent\/(persistence|host-services|capabilities|pi-adapter)/.test(specifier)
     );
     expect(forbidden).toEqual([]);
   });
@@ -61,16 +51,14 @@ describe("workspace dependency direction", () => {
 
   it("keeps workspace manifests within the accepted dependency graph", () => {
     const allowed: Record<string, Set<string>> = {
-      "@vc-agent/core": new Set(),
       "@vc-agent/contracts": new Set(),
-      "@vc-agent/persistence": new Set(["@vc-agent/core", "@vc-agent/contracts"]),
-      "@vc-agent/host-services": new Set(["@vc-agent/core", "@vc-agent/contracts", "@vc-agent/capabilities"]),
-      "@vc-agent/capabilities": new Set(["@vc-agent/core", "@vc-agent/contracts"]),
+      "@vc-agent/persistence": new Set(["@vc-agent/contracts"]),
+      "@vc-agent/host-services": new Set(["@vc-agent/contracts", "@vc-agent/capabilities"]),
+      "@vc-agent/capabilities": new Set(["@vc-agent/contracts"]),
       "@vc-agent/pi-adapter": new Set(["@vc-agent/contracts"]),
       "@vc-agent/agent-worker": new Set(["@vc-agent/contracts", "@vc-agent/pi-adapter"]),
       "@vc-agent/utility-worker": new Set(["@vc-agent/contracts", "@vc-agent/capabilities"]),
       "@vc-agent/desktop": new Set([
-        "@vc-agent/core",
         "@vc-agent/contracts",
         "@vc-agent/host-services",
         "@vc-agent/pi-adapter",
@@ -80,7 +68,9 @@ describe("workspace dependency direction", () => {
     };
 
     const manifests = ["packages", "apps"].flatMap((kind) =>
-      readdirSync(join(root, kind)).map((name) => join(root, kind, name, "package.json"))
+      readdirSync(join(root, kind))
+        .map((name) => join(root, kind, name, "package.json"))
+        .filter(existsSync)
     );
 
     for (const manifestPath of manifests) {

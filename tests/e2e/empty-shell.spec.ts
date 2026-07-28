@@ -102,7 +102,7 @@ test("opens newer local state in visible read-only recovery without changing it"
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 14, rollbackAvailable: false },
+        migration: { status: "newer_state", storedVersion: 99, supportedVersion: 16, rollbackAvailable: false },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -385,7 +385,7 @@ test("keeps old state active when staged migration fails", async () => {
   await initializeState(root, userDataDirectory);
   const databasePath = join(userDataDirectory, "state.db");
   const database = new DatabaseSync(databasePath);
-  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14)").run();
+  database.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14, 15, 16)").run();
   database.close();
   const before = sqliteBundle(databasePath);
   const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE: "1" });
@@ -400,7 +400,7 @@ test("keeps old state active when staged migration fails", async () => {
     expect(bootstrap).toMatchObject({
       payload: {
         storageMode: "read_only_recovery",
-        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 14, rollbackAvailable: true },
+        migration: { status: "migration_failed", storedVersion: 9, supportedVersion: 16, rollbackAvailable: true },
         runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 }
       }
     });
@@ -563,7 +563,7 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
     await window.getByLabel("Message").fill("Summarize the supplied text neutrally.");
     await window.getByRole("button", { name: "Send" }).click();
     await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(window.locator(".tool-activity.failed").filter({ hasText: "requires judgment-heavy work or an explicit User request" })).toHaveCount(2);
+    await expect(window.locator(".tool-activity")).toHaveCount(0);
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -1111,6 +1111,7 @@ test("freezes a System Prompt revision until the next Prompt Load Boundary", asy
     expect(submitted).toHaveLength(2);
     expect(submitted[0].payload.prompt.revisionId).toBe(submitted[1].payload.prompt.revisionId);
     expect(submitted[0].payload.prompt.contributions.toolSchemaEstimatedTokens).toBeGreaterThan(0);
+    expect(submitted[0].payload.prompt.capabilitySurface.visibleCapabilityIds).toEqual(expect.arrayContaining(["capability_request", "web_search", "web_fetch"]));
     expect(submitted[0].payload.prompt.contributions).toMatchObject({ contextEstimatedTokens: 0, materialEstimatedTokens: 0 });
 
     await application.close();
@@ -1716,10 +1717,11 @@ test("creates and restores a frozen Dream batch without hidden model work", asyn
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
 
     await window.getByRole("button", { name: "Dream source", exact: true }).click();
-    await window.getByRole("button", { name: "Delete thread history" }).click();
-    const deletion = window.getByRole("dialog", { name: "Delete thread history" });
-    await deletion.getByRole("button", { name: "Delete history" }).click();
-    await expect(window.getByText("Ready for a new conversation", { exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Delete thread" }).click();
+    const deletion = window.getByRole("dialog", { name: "Delete thread" });
+    await deletion.getByRole("button", { name: "Delete thread", exact: true }).click();
+    await expect(window.getByText("No active thread", { exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Dream source", exact: true })).toHaveCount(0);
     expect(existsSync(join(threadDirectory, "trajectory.jsonl"))).toBe(false);
     expect(readFileSync(statePath, "utf8")).not.toContain("My diligence view");
     expect(JSON.parse(readFileSync(statePath, "utf8")).batches[0].extractionScopes[0]).toMatchObject({ status: "stale", sourceReferences: [] });
@@ -1905,8 +1907,8 @@ Treat unusually polished references as a prompt for deeper triangulation, not as
 async function createProfile(window: import("@playwright/test").Page, input: { name: string; provider: string; model: string; apiKey: string }) {
   await window.getByRole("button", { name: "New profile" }).click();
   await window.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
-  await window.getByLabel("Provider").fill(input.provider);
-  await window.getByLabel("Model").fill(input.model);
+  await window.getByRole("textbox", { name: "Provider", exact: true }).fill(input.provider);
+  await window.getByRole("textbox", { name: "Model", exact: true }).fill(input.model);
   await window.getByLabel("API key").fill(input.apiKey);
   await window.getByRole("button", { name: "Save profile" }).click();
   await expect(window.getByText(input.name, { exact: true })).toBeVisible();

@@ -401,11 +401,11 @@ This borrows only Claude Code's reload timing. Claude Code injects `CLAUDE.md` a
 
 Investment Reflection and Dream use a stricter lifecycle because they are resumable multi-stage workflows. At run creation, the Host records a Workflow Prompt Snapshot that references the then-active System Prompt Revision. Every stage, selective stale-result rerun, and explicit post-restart resume of that run uses the snapshot rather than the newly active revision. Changing the active prompt does not by itself make workflow results stale. The latest active revision applies when the User launches a new Reflection or Dream run. The run UI and result provenance show the frozen revision id and hash. MVP does not add a dedicated restart-with-latest-prompt or stage-migration operation; the User ends or discards the current run and launches a new one when needed.
 
-The active tool surface follows a small-core plus Task-activated Capability model:
+The active tool surface follows a zero-default plus Task-activated Capability model:
 
-- Keep only high-frequency, low-ambiguity core capabilities active by default.
+- Keep ordinary conversation tool-free when no current task need is detected.
 - The Host deterministically preactivates specialized capabilities when explicit UI state, attachment type, invoked Skill, visible command or workflow, or unambiguous User intent already identifies the need.
-- Keep one compact capability broker in the core surface. During its existing Turn, the primary Agent may issue a Capability Activation Request describing a missing need; the Host resolves it against the capability registry and, when allowed, exposes the selected tool schemas for the next model step without a separate model request.
+- Keep the compact capability broker registered for explicit workflows that provide an exact capability id; do not expose it on every ordinary Turn.
 - Activate Web, OCR, Office editing, MCP, Dream support, Investment Reflection support, Skill Creator, and other specialized capabilities only through deterministic preactivation or a Capability Activation Request.
 - Load Skill instructions and referenced resources only after the Skill is invoked or explicitly activated.
 - Do not make a separate model call to classify capability activation.
@@ -415,16 +415,16 @@ The active tool surface follows a small-core plus Task-activated Capability mode
 - A Capability Activation Request cannot supply the explicit User intent required for Dream, Investment Reflection, Thread Scope Elevation, or a Sub-Agent Run; it may expose support tools only after the corresponding workflow or delegation scope already exists.
 - Return unavailable, incompatible, or unauthorized capabilities as a visible bounded result. Do not activate an alternative capability, Model Profile, Provider, or permission automatically.
 
-The permanent Project Thread core tool surface is exactly:
+Project Thread capabilities are independently activated:
 
-| Core tool | Bounded responsibility |
+| Task-activated tool | Bounded responsibility |
 | --- | --- |
-| `capability_request` | Describe a missing task need and request matching registered model-callable capabilities; it neither executes the capability nor grants authorization. |
+| `capability_request` | Request one exact registered model-callable capability in an explicit workflow; it neither executes the capability nor grants authorization. |
 | `material_recall` | Inspect authorized Material inventory, cards, outlines, and targeted excerpts through Progressive Material Disclosure; invoke deterministic On-demand Parsing when required and surface Parse Refresh Choice for stale Material. |
-| `project_state_recall` | Retrieve bounded, separately labelled sections from Project Context or Project Memory without reading Material bodies, Long-term Memory, or another Project. |
-| `memory_recall` | Retrieve bounded active Long-term Memory under automatic, explicit-only, specificity, conflict, de-identification, and context-budget rules. |
+| `project_state_recall` | Retrieve bounded, separately labelled sections from Project Context without reading Memory, Material bodies, or another Project. |
+| `memory_recall` | Retrieve bounded Project or Long-term Memory under automatic, explicit-only, specificity, conflict, de-identification, and context-budget rules. |
 
-An Unscoped Thread keeps `capability_request`, `material_recall`, and `memory_recall`, omits `project_state_recall`, and limits `material_recall` to direct Thread attachments. Core availability does not preload any data or authorize recall automatically: the primary Agent must call the relevant tool during its existing Turn, and the Host applies the source-specific recall policy.
+An Unscoped Thread can activate `material_recall` and `memory_recall`, never activates `project_state_recall`, and limits `material_recall` to direct Thread attachments. Activation does not preload any data or authorize recall automatically: the primary Agent must call the relevant tool during its existing Turn, and the Host applies the source-specific recall policy.
 
 All other capabilities fall into one of four activation classes:
 

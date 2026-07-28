@@ -10,7 +10,7 @@ import {
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { CapabilityExecutionResult, PhysicalContextHistoryItem } from "@vc-agent/contracts";
+import { CAPABILITY_INPUT_LIMITS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
 import {
   SnapshotResourceLoader,
   type ExtensionInventorySnapshot,
@@ -22,6 +22,22 @@ export interface PiSessionProfile {
   readonly model: string;
   readonly apiKey: string;
   readonly thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  readonly contextWindow?: number | undefined;
+  readonly maxOutputTokens?: number | undefined;
+}
+
+export interface PiContextUsage {
+  readonly tokens: number | null;
+  readonly contextWindow: number;
+  readonly percent: number | null;
+}
+
+export class AgentTurnIdleTimeoutError extends Error {
+  readonly code = "AGENT_TURN_IDLE_TIMEOUT";
+  constructor(timeoutMs: number) {
+    super(`Agent turn produced no model or capability progress for ${timeoutMs} ms`);
+    this.name = "AgentTurnIdleTimeoutError";
+  }
 }
 
 export interface PiSessionConfig {
@@ -33,6 +49,7 @@ export interface PiSessionConfig {
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
   readonly extensions: ExtensionInventorySnapshot;
+  readonly turnIdleTimeoutMs?: number;
   readonly capabilityProxy?: (
     toolCallId: string,
     capabilityId: string,
@@ -43,7 +60,8 @@ export interface PiSessionConfig {
 
 export type PiSessionEvent =
   | { readonly type: "text_delta"; readonly delta: string }
-  | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly responseId?: string; readonly piEntryId?: string }
+  | { readonly type: "thinking_delta"; readonly delta: string }
+  | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly contextUsage?: PiContextUsage; readonly responseId?: string; readonly piEntryId?: string }
   | { readonly type: "compaction_started"; readonly reason: "manual" | "threshold" | "overflow" }
   | { readonly type: "compaction_completed"; readonly reason: "manual" | "threshold" | "overflow"; readonly tokensBefore: number; readonly estimatedTokensAfter?: number }
   | { readonly type: "compaction_failed"; readonly reason: "manual" | "threshold" | "overflow"; readonly message: string }
@@ -58,7 +76,8 @@ export interface PiSessionHandle {
   readonly retainedTurnCount: number;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
-  submit(prompt: string, options?: { readonly activeCapabilities?: readonly string[] }): Promise<void>;
+  getContextUsage(): PiContextUsage | undefined;
+  submit(prompt: string, options?: { readonly activeCapabilities?: readonly string[]; readonly capabilitySurface?: CapabilitySurfaceSnapshot }): Promise<void>;
   compact(reason?: "manual" | "threshold"): Promise<void>;
   abort(): Promise<void>;
   acknowledge(eventId: string, sequence: number): string;
@@ -126,9 +145,17 @@ export async function createPiSessionUsingRuntime(
   const runtimeProfile = resolvePiModelProfile(config.profile);
   await modelRuntime.setRuntimeApiKey(runtimeProfile.provider, config.profile.apiKey);
 
-  const model = modelRuntime.getModel(runtimeProfile.provider, runtimeProfile.model);
-  if (model === undefined) {
+  const catalogModel = modelRuntime.getModel(runtimeProfile.provider, runtimeProfile.model);
+  if (catalogModel === undefined) {
     throw new Error(`Model not found: ${runtimeProfile.provider}/${runtimeProfile.model}`);
+  }
+  const model = {
+    ...catalogModel,
+    contextWindow: config.profile.contextWindow ?? catalogModel.contextWindow,
+    maxTokens: config.profile.maxOutputTokens ?? catalogModel.maxTokens
+  };
+  if (model.maxTokens >= model.contextWindow) {
+    throw new Error(`Invalid model limits: max output tokens (${model.maxTokens}) must be smaller than context window (${model.contextWindow})`);
   }
 
   const resourceLoader = new SnapshotResourceLoader({
@@ -148,7 +175,18 @@ export async function createPiSessionUsingRuntime(
   );
   const physicalContext = reconcilePhysicalContext(config, model);
   let sessionRef: AgentSession | undefined;
-  const customTools = config.capabilityProxy === undefined ? [] : createCapabilityProxies(config.capabilityProxy, () => sessionRef);
+  let refreshTurnIdleTimeout = (): void => {};
+  const capabilityProxy = config.capabilityProxy === undefined
+    ? undefined
+    : async (...args: Parameters<NonNullable<PiSessionConfig["capabilityProxy"]>>) => {
+        refreshTurnIdleTimeout();
+        try {
+          return await config.capabilityProxy!(...args);
+        } finally {
+          refreshTurnIdleTimeout();
+        }
+      };
+  const customTools = capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef);
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
@@ -164,15 +202,20 @@ export async function createPiSessionUsingRuntime(
   session.setAutoCompactionEnabled(true);
 
   let failureEmitted = false;
+  let activeTimeoutError: Error | undefined;
   let compactionReasonOverride: "manual" | "threshold" | undefined;
-  subscribeToSession(session, (event) => {
-    if (event.type === "failed") failureEmitted = true;
+  const resetTurnUsage = subscribeToSession(session, (event) => {
+    refreshTurnIdleTimeout();
+    const effectiveEvent = event.type === "failed" && activeTimeoutError !== undefined
+      ? { type: "failed" as const, error: activeTimeoutError }
+      : event;
+    if (effectiveEvent.type === "failed") failureEmitted = true;
     if (
       compactionReasonOverride !== undefined &&
-      (event.type === "compaction_started" || event.type === "compaction_completed" || event.type === "compaction_failed")
+      (effectiveEvent.type === "compaction_started" || effectiveEvent.type === "compaction_completed" || effectiveEvent.type === "compaction_failed")
     ) {
-      onEvent({ ...event, reason: compactionReasonOverride });
-    } else onEvent(event);
+      onEvent({ ...effectiveEvent, reason: compactionReasonOverride });
+    } else onEvent(effectiveEvent);
   });
   return {
     provider: model.provider,
@@ -183,23 +226,34 @@ export async function createPiSessionUsingRuntime(
     retainedTurnCount: config.contextHistory.length,
     contextWindow: model.contextWindow,
     maxOutputTokens: model.maxTokens,
+    getContextUsage: () => session.getContextUsage(),
     submit: async (prompt, options) => {
-      const activeCapabilities = options?.activeCapabilities ?? [];
+      const activeCapabilities = options?.capabilitySurface?.visibleCapabilityIds ?? options?.activeCapabilities ?? [];
       session.setActiveToolsByName([...activeCapabilities]);
+      resetTurnUsage();
       failureEmitted = false;
-      let timedOut = false;
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        void session.abort();
-      }, 15_000);
+      activeTimeoutError = undefined;
+      const idleTimeoutMs = Math.max(1, config.turnIdleTimeoutMs ?? 120_000);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const armIdleTimeout = (): void => {
+        if (timeout !== undefined) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          activeTimeoutError = new AgentTurnIdleTimeoutError(idleTimeoutMs);
+          void session.abort();
+        }, idleTimeoutMs);
+      };
+      refreshTurnIdleTimeout = armIdleTimeout;
+      armIdleTimeout();
       try {
         await session.prompt(prompt, { expandPromptTemplates: false });
-        if (timedOut) throw new Error("Provider request timed out after 15 seconds");
+        if (activeTimeoutError !== undefined) throw activeTimeoutError;
       } catch (error) {
         if (!failureEmitted) onEvent({ type: "failed", error });
         throw error;
       } finally {
-        clearTimeout(timeout);
+        refreshTurnIdleTimeout = (): void => {};
+        if (timeout !== undefined) clearTimeout(timeout);
+        activeTimeoutError = undefined;
       }
     },
     compact: async (reason = "manual") => {
@@ -221,7 +275,13 @@ function createCapabilityProxies(
     name: "capability_request",
     label: "Request capability",
     description: "Request an allowed capability for this Turn. This neither executes it nor grants permission.",
-    parameters: Type.Object({ need: Type.String(), capabilityId: Type.Optional(Type.String()) }),
+    parameters: Type.Object({
+      mode: Type.Optional(Type.Union([Type.Literal("catalog"), Type.Literal("activate")])),
+      need: Type.String(),
+      capabilityIds: Type.Optional(Type.Array(Type.String(), { maxItems: 8 })),
+      catalogRevision: Type.Optional(Type.String()),
+      capabilityId: Type.Optional(Type.String())
+    }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {
       const result = await proxy(toolCallId, "capability_request", params, signal);
@@ -241,8 +301,8 @@ function createCapabilityProxies(
       materialId: Type.Optional(Type.String()),
       blockIds: Type.Optional(Type.Array(Type.String(), { maxItems: 12 })),
       query: Type.Optional(Type.String()),
-      maxItems: Type.Optional(Type.Number()),
-      maxChars: Type.Optional(Type.Number())
+      maxItems: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.materialRecall.maxItems })),
+      maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.materialRecall.maxChars }))
     }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "material_recall", params, signal))
@@ -251,20 +311,20 @@ function createCapabilityProxies(
     name: "reflection_evidence_drilldown",
     label: "Verify Reflection evidence",
     description: "Resolve one exact evidence reference from the Independent Assessment. This cannot browse Materials or select another source range.",
-    parameters: Type.Object({ referenceId: Type.String(), maxChars: Type.Optional(Type.Number()) }),
+    parameters: Type.Object({ referenceId: Type.String(), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.reflectionEvidenceDrilldown.maxChars })) }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "reflection_evidence_drilldown", params, signal))
   });
   const projectStateRecall = defineTool({
     name: "project_state_recall",
     label: "Recall project state",
-    description: "Recall bounded Project Context or Project Memory sections without reading other source classes.",
+    description: "Recall bounded Project Context sections. Use memory_recall for Project Memory.",
     parameters: Type.Object({
-      source: Type.Optional(Type.Union([Type.Literal("project_context"), Type.Literal("project_memory")])),
+      source: Type.Optional(Type.Literal("project_context")),
       sectionIds: Type.Optional(Type.Array(Type.String(), { maxItems: 6 })),
       query: Type.Optional(Type.String()),
-      maxItems: Type.Optional(Type.Number()),
-      maxChars: Type.Optional(Type.Number())
+      maxItems: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.projectStateRecall.maxItems })),
+      maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.projectStateRecall.maxChars }))
     }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "project_state_recall", params, signal))
@@ -273,7 +333,7 @@ function createCapabilityProxies(
     name: "memory_recall",
     label: "Recall memory",
     description: "Recall user-confirmed judgment as bounded cards, then selectively expand it. Do not treat Memory as source evidence.",
-    parameters: Type.Object({ source: Type.Union([Type.Literal("project_memory"), Type.Literal("long_term_memory")]), disclosureLevel: Type.Optional(Type.Union([Type.Literal("cards"), Type.Literal("full")])), entryIds: Type.Optional(Type.Array(Type.String(), { maxItems: 8 })), query: Type.Optional(Type.String()), maxItems: Type.Optional(Type.Number()), maxChars: Type.Optional(Type.Number()) }),
+    parameters: Type.Object({ source: Type.Union([Type.Literal("project_memory"), Type.Literal("long_term_memory")]), disclosureLevel: Type.Optional(Type.Union([Type.Literal("cards"), Type.Literal("full")])), entryIds: Type.Optional(Type.Array(Type.String(), { maxItems: CAPABILITY_INPUT_LIMITS.memoryRecall.maxItems })), query: Type.Optional(Type.String()), maxItems: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.memoryRecall.maxItems })), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.memoryRecall.maxChars })) }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "memory_recall", params, signal))
   });
@@ -316,7 +376,7 @@ function createCapabilityProxies(
     name: "web_search",
     label: "Search public web",
     description: "Search the current public web. Results are bounded, source-referenced, and transient.",
-    parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number()), maxChars: Type.Optional(Type.Number()) }),
+    parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxItems })), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_search", params, signal))
   });
@@ -324,7 +384,7 @@ function createCapabilityProxies(
     name: "web_fetch",
     label: "Fetch public URL",
     description: "Fetch and extract a bounded public page or PDF without login, writes, or browser state.",
-    parameters: Type.Object({ url: Type.String(), maxChars: Type.Optional(Type.Number()) }),
+    parameters: Type.Object({ url: Type.String(), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
@@ -462,7 +522,8 @@ function emptyUsage(): Usage {
   };
 }
 
-function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEvent) => void): void {
+function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEvent) => void): () => void {
+  let turnUsage = emptyUsage();
   session.subscribe((event) => {
     if (event.type === "compaction_start") {
       onEvent({ type: "compaction_started", reason: event.reason });
@@ -485,19 +546,53 @@ function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEve
       onEvent({ type: "text_delta", delta: event.assistantMessageEvent.delta });
       return;
     }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+      onEvent({ type: "thinking_delta", delta: event.assistantMessageEvent.delta });
+      return;
+    }
     if (event.type === "message_end" && event.message.role === "assistant") {
+      turnUsage = aggregateUsage(turnUsage, event.message.usage);
       if (event.message.stopReason === "toolUse") return;
       if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
         onEvent({ type: "failed", error: new Error(event.message.errorMessage ?? `Provider stopped: ${event.message.stopReason}`) });
         return;
       }
+      const contextUsage = session.getContextUsage();
       const completed: PiSessionEvent = {
         type: "completed",
         message: assistantText(event.message),
-        usage: event.message.usage,
+        usage: turnUsage,
+        ...(contextUsage === undefined ? {} : { contextUsage }),
         ...(event.message.responseId === undefined ? {} : { responseId: event.message.responseId })
       };
       onEvent(completed);
     }
   });
+  return () => { turnUsage = emptyUsage(); };
+}
+
+export function aggregateUsage(left: Usage, right: Usage): Usage {
+  const reasoning = left.reasoning === undefined && right.reasoning === undefined
+    ? undefined
+    : (left.reasoning ?? 0) + (right.reasoning ?? 0);
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    ...(
+      left.cacheWrite1h === undefined && right.cacheWrite1h === undefined
+        ? {}
+        : { cacheWrite1h: (left.cacheWrite1h ?? 0) + (right.cacheWrite1h ?? 0) }
+    ),
+    ...(reasoning === undefined ? {} : { reasoning }),
+    totalTokens: left.totalTokens + right.totalTokens,
+    cost: {
+      input: left.cost.input + right.cost.input,
+      output: left.cost.output + right.cost.output,
+      cacheRead: left.cost.cacheRead + right.cost.cacheRead,
+      cacheWrite: left.cost.cacheWrite + right.cost.cacheWrite,
+      total: left.cost.total + right.cost.total
+    }
+  };
 }

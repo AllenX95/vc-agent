@@ -29,6 +29,8 @@ export const modelProfileSchema = z.object({
   model: z.string().min(1),
   credentialRef: z.string().min(1),
   thinkingLevel: thinkingLevelSchema,
+  contextWindow: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -276,6 +278,15 @@ export const promptContributionSchema = z.object({
 });
 export type PromptContribution = z.infer<typeof promptContributionSchema>;
 
+export const capabilitySurfaceTelemetrySchema = z.object({
+  revision: z.string().regex(/^[a-f0-9]{64}$/),
+  visibleCapabilityIds: z.array(z.string().min(1)),
+  requestableCapabilityCount: z.number().int().nonnegative(),
+  initialToolSchemaEstimatedTokens: z.number().int().nonnegative(),
+  preloadHintCount: z.number().int().nonnegative()
+});
+export type CapabilitySurfaceTelemetry = z.infer<typeof capabilitySurfaceTelemetrySchema>;
+
 export const materialInventoryItemSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -397,9 +408,17 @@ export const usageSchema = z.object({
   output: z.number().nonnegative(),
   cacheRead: z.number().nonnegative(),
   cacheWrite: z.number().nonnegative(),
+  reasoning: z.number().nonnegative().optional(),
   totalTokens: z.number().nonnegative()
 });
 export type TokenUsage = z.infer<typeof usageSchema>;
+
+export const contextUsageSchema = z.object({
+  tokens: z.number().nonnegative().nullable(),
+  contextWindow: z.number().int().positive(),
+  percent: z.number().nonnegative().nullable()
+});
+export type ContextUsage = z.infer<typeof contextUsageSchema>;
 
 export const providerFailureSchema = z.object({
   kind: z.enum(["configuration", "provider", "worker"]),
@@ -473,13 +492,14 @@ const ipcTrajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: ipcTrajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  contextUsage: contextUsageSchema.optional(),
   latencyMs: z.number().int().nonnegative().optional(),
   recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
   failure: providerFailureSchema.optional(),
   interruptionReason: z.string().optional(),
   submittedSequence: z.number().int().positive(),
   lastSequence: z.number().int().positive(),
-  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema }).optional()
+  prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema, capabilitySurface: capabilitySurfaceTelemetrySchema.optional() }).optional()
 });
 const ipcTrajectoryActivitySchema = z.object({
   id: z.string().min(1),
@@ -576,6 +596,13 @@ const setAccessModeCommandSchema = commandMetadataSchema.extend({
   command: z.literal("access.mode.set"),
   payload: z.object({ mode: z.enum(["standard", "full"]) })
 });
+const profileLimitOverridesSchema = z.object({
+  contextWindow: z.number().int().min(1_024).max(100_000_000).optional(),
+  maxOutputTokens: z.number().int().min(1).max(10_000_000).optional()
+}).refine(
+  (value) => value.contextWindow === undefined || value.maxOutputTokens === undefined || value.maxOutputTokens < value.contextWindow,
+  { message: "Max output tokens must be smaller than the context window.", path: ["maxOutputTokens"] }
+);
 const createProfileCommandSchema = commandMetadataSchema.extend({
   command: z.literal("profile.create"),
   payload: z.object({
@@ -584,7 +611,18 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
     model: z.string().trim().min(1).max(160),
     apiKey: z.string().min(1).max(8192),
     thinkingLevel: thinkingLevelSchema
-  })
+  }).and(profileLimitOverridesSchema)
+});
+const updateProfileCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("profile.update"),
+  payload: z.object({
+    profileId: z.string().min(1),
+    name: z.string().trim().min(1).max(80),
+    provider: z.string().trim().min(1).max(100),
+    model: z.string().trim().min(1).max(160),
+    apiKey: z.string().min(1).max(8192).optional(),
+    thinkingLevel: thinkingLevelSchema
+  }).and(profileLimitOverridesSchema)
 });
 const setProfileCredentialCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.credential.set"), payload: z.object({ profileId: z.string().min(1), apiKey: z.string().min(1).max(8192) }) });
 const listPromptRevisionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("prompt.revision.list") });
@@ -683,6 +721,7 @@ const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
 });
 const deleteThreadTrajectoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.trajectory.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
 const setThreadArchivedCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.archive.set"), payload: z.object({ threadId: z.string().min(1), archived: z.boolean() }) });
+const deleteThreadCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
 const createThreadCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.create.unscoped"),
   payload: z.object({ title: z.string().trim().min(1).max(120) })
@@ -805,6 +844,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   activateExtensionRevisionCommandSchema,
   rollbackExtensionCommandSchema,
   createProfileCommandSchema,
+  updateProfileCommandSchema,
   setProfileCredentialCommandSchema,
   listPromptRevisionsCommandSchema,
   createPromptRevisionCommandSchema,
@@ -870,6 +910,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   loadThreadTrajectoryCommandSchema,
   deleteThreadTrajectoryCommandSchema,
   setThreadArchivedCommandSchema,
+  deleteThreadCommandSchema,
   createThreadCommandSchema,
   createProjectThreadCommandSchema,
   selectThreadProfileCommandSchema,
@@ -986,6 +1027,10 @@ const profilesListedEventSchema = eventMetadataSchema.extend({
 });
 const profileCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("profile.created"),
+  payload: z.object({ profile: modelProfileSchema })
+});
+const profileUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("profile.updated"),
   payload: z.object({ profile: modelProfileSchema })
 });
 const skillsUpdatedEventSchema = eventMetadataSchema.extend({
@@ -1135,7 +1180,7 @@ const turnAcceptedEventSchema = eventMetadataSchema.extend({
     text: z.string(),
     retryOfTurnId: z.string().min(1).optional(),
     profile: modelProfileSchema,
-    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema })
+    prompt: z.object({ revisionId: z.string().uuid(), hash: z.string(), contributions: promptContributionSchema, capabilitySurface: capabilitySurfaceTelemetrySchema.optional() })
   })
 });
 const turnQueuedEventSchema = eventMetadataSchema.extend({
@@ -1153,6 +1198,14 @@ const messageDeltaEventSchema = eventMetadataSchema.extend({
   event: z.literal("message.delta"),
   payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), delta: z.string() })
 });
+const thinkingDeltaEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thinking.delta"),
+  payload: z.object({ threadId: z.string().min(1), turnId: z.string().min(1), delta: z.string() })
+});
+const sessionContextUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("session.context.updated"),
+  payload: z.object({ threadId: z.string().min(1), contextUsage: contextUsageSchema })
+});
 const turnCompletedEventSchema = eventMetadataSchema.extend({
   event: z.literal("turn.completed"),
   payload: z.object({
@@ -1161,6 +1214,7 @@ const turnCompletedEventSchema = eventMetadataSchema.extend({
     message: z.string(),
     profile: modelProfileSchema,
     usage: usageSchema,
+    contextUsage: contextUsageSchema.optional(),
     latencyMs: z.number().int().nonnegative(),
     recalledStateEstimatedTokens: z.number().int().nonnegative(),
     responseId: z.string().optional()
@@ -1234,6 +1288,10 @@ const threadTrajectoryDeletedEventSchema = eventMetadataSchema.extend({
   payload: z.object({ threadId: z.string().min(1), removedCandidateIds: z.array(z.string().uuid()), affectedBatchIds: z.array(z.string().uuid()) })
 });
 const threadArchivedEventSchema = eventMetadataSchema.extend({ event: z.literal("thread.archived"), payload: z.object({ thread: threadSchema }) });
+const threadDeletedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.deleted"),
+  payload: z.object({ threadId: z.string().min(1), removedCandidateIds: z.array(z.string().uuid()), affectedBatchIds: z.array(z.string().uuid()) })
+});
 const projectOutputsEventSchema = eventMetadataSchema.extend({
   event: z.enum(["project.outputs.listed", "project.outputs.updated"]), payload: z.object({ projectId: z.string().uuid(), outputs: z.array(projectOutputArtifactSchema) })
 });
@@ -1316,6 +1374,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   diagnosticRaisedEventSchema,
   profilesListedEventSchema,
   profileCreatedEventSchema,
+  profileUpdatedEventSchema,
   skillsUpdatedEventSchema,
   integrationStateUpdatedEventSchema,
   integrationJobUpdatedEventSchema,
@@ -1355,6 +1414,8 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   executionQueueUpdatedEventSchema,
   turnStartedEventSchema,
   messageDeltaEventSchema,
+  thinkingDeltaEventSchema,
+  sessionContextUpdatedEventSchema,
   turnCompletedEventSchema,
   turnFailedEventSchema,
   turnInterruptedEventSchema,
@@ -1373,6 +1434,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   dreamStateUpdatedEventSchema,
   threadTrajectoryDeletedEventSchema,
   threadArchivedEventSchema,
+  threadDeletedEventSchema,
   projectOutputsEventSchema,
   projectOutputOpenedEventSchema,
   threadCompactionEventSchema,

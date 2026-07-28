@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 14,
+      stateSchemaVersion: 16,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -41,20 +41,23 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version = 14").run();
-    old.exec("DROP TABLE execution_leases; CREATE TABLE execution_leases (id TEXT PRIMARY KEY, scope_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis')), acquired_at TEXT NOT NULL) STRICT;");
+    old.prepare("DELETE FROM schema_migrations WHERE version = 16").run();
+    old.exec("ALTER TABLE model_profiles DROP COLUMN max_output_tokens");
+    old.exec("ALTER TABLE model_profiles DROP COLUMN context_window");
+    old.prepare("DELETE FROM schema_migrations WHERE version = 15").run();
+    old.exec("ALTER TABLE threads DROP COLUMN deleted_at");
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 14, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(14);
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 16, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(16);
     expect(migrated.acquireExecutionLease({ id: "extension-audit", scopeKey: "global", kind: "extension_audit" }).kind).toBe("extension_audit");
     migrated.releaseExecutionLease("extension-audit");
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 14 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 16 });
     verified.close();
   });
 
@@ -62,7 +65,7 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14)").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14, 15, 16)").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
@@ -86,13 +89,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 14 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 16 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 14 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 16 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');
@@ -133,6 +136,42 @@ describe("HostStateStore", () => {
     expect(store.listArtifacts(thread.id)).toMatchObject([{ id: "artifact-1", mediaType: "text/plain; charset=utf-8", source: { turnId: "turn-1" } }]);
     expect(store.getPhysicalContext(thread.id)).toMatchObject({ highWaterEventId: "event-7", highWaterSequence: 7 });
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ threads: 1, modelProfiles: 1 });
+    store.close();
+  });
+
+  it("updates a saved Model Profile while preserving its protected credential", () => {
+    const { store } = createStore();
+    const encryptedCredential = Uint8Array.from([4, 2, 4, 2]);
+    const original = store.createModelProfile({
+      name: "Original",
+      provider: "provider-before",
+      model: "model-before",
+      thinkingLevel: "off",
+      encryptedCredential
+    });
+
+    const updated = store.updateModelProfile(original.id, {
+      name: "Updated",
+      provider: "provider-after",
+      model: "model-after",
+      thinkingLevel: "high",
+      contextWindow: 200_000,
+      maxOutputTokens: 32_000
+    });
+
+    expect(updated).toMatchObject({
+      id: original.id,
+      name: "Updated",
+      provider: "provider-after",
+      model: "model-after",
+      thinkingLevel: "high",
+      contextWindow: 200_000,
+      maxOutputTokens: 32_000,
+      credentialRef: original.credentialRef,
+      createdAt: original.createdAt
+    });
+    expect(updated.updatedAt >= original.updatedAt).toBe(true);
+    expect(store.getEncryptedCredential(original.credentialRef)).toEqual(encryptedCredential);
     store.close();
   });
 
@@ -206,6 +245,16 @@ describe("HostStateStore", () => {
     store.authorizeProjectProfile(project.id, profile.id, profile.provider);
     store.setPhysicalContextSession(first.id, "C:\\sessions\\first.jsonl");
     store.setPhysicalContextSession(second.id, "C:\\sessions\\second.jsonl");
+    store.enqueueOrdinaryTurn({ threadId: first.id, text: "Queued work", reason: "capacity" });
+    store.recordArtifact({
+      schemaVersion: 1,
+      id: "project-thread-artifact",
+      mediaType: "text/markdown",
+      producer: { type: "agent", id: "primary-agent" },
+      destination: "C:\\deals\\project\\outputs\\memo.md",
+      source: { threadId: first.id, turnId: "turn-1", capabilityRequestId: "project-thread-request" },
+      createdAt: new Date().toISOString()
+    });
 
     expect(store.listProjects()).toEqual([project]);
     expect(store.listProjectThreads(project.id)).toMatchObject([
@@ -217,7 +266,14 @@ describe("HostStateStore", () => {
     expect(store.setThreadArchived(first.id, true)).toMatchObject({ id: first.id, archivedAt: expect.any(String) });
     expect(store.listThreads().find((thread) => thread.id === first.id)?.archivedAt).toEqual(expect.any(String));
     expect(store.setThreadArchived(first.id, false)).not.toHaveProperty("archivedAt");
-    expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ projects: 1, threads: 2 });
+    expect(store.deleteThread(first.id)).toBe(true);
+    expect(store.getThread(first.id)).toBeUndefined();
+    expect(store.listProjectThreads(project.id).map((thread) => thread.id)).toEqual([second.id]);
+    expect(store.getPhysicalContext(first.id)).toBeUndefined();
+    expect(store.listExecutionQueue().some((item) => item.threadId === first.id)).toBe(false);
+    expect(store.listArtifacts(first.id)).toMatchObject([{ id: "project-thread-artifact" }]);
+    expect(() => store.setThreadArchived(first.id, true)).toThrow("Thread not found");
+    expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ projects: 1, threads: 1 });
     store.close();
   });
 
@@ -385,6 +441,26 @@ describe("HostStateStore", () => {
     expect(store.getActiveSystemPromptRevision()?.id).toBe(edited.id);
     const restored = store.restoreDefaultSystemPrompt("1. Default responsibility", "Restore");
     expect(store.getActiveSystemPromptRevision()?.id).toBe(restored.id);
+    expect(store.listSystemPromptRevisions()).toHaveLength(3);
+    store.close();
+  });
+
+  it("upgrades an untouched shipped System Prompt without overriding a user revision", () => {
+    const { store } = createStore();
+    const initial = store.ensureDefaultSystemPrompt("1. Original shipped responsibility");
+    const upgraded = store.ensureDefaultSystemPrompt("1. Improved shipped responsibility");
+    expect(upgraded).toMatchObject({
+      source: "shipped_default",
+      sourceRevisionId: initial.id,
+      changeNote: "Updated shipped default"
+    });
+    expect(upgraded.id).not.toBe(initial.id);
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(upgraded.id);
+
+    const userRevision = store.createSystemPromptRevision("1. Personal responsibility", "Keep my preference");
+    store.activateSystemPromptRevision(userRevision.id);
+    expect(store.ensureDefaultSystemPrompt("1. Later shipped responsibility").id).toBe(userRevision.id);
+    expect(store.getActiveSystemPromptRevision()?.id).toBe(userRevision.id);
     expect(store.listSystemPromptRevisions()).toHaveLength(3);
     store.close();
   });

@@ -186,3 +186,20 @@ export function unscopedMemoryAwareReflectionContinuationFixtureResponses() {
     fauxAssistantMessage("I prepared Unscoped Reflection outcome drafts. Neither the Judgment Record nor Long-term Memory has been confirmed yet.")
   ];
 }
+
+export function subAgentFixtureResponses(prompt: string) {
+  const outputTarget = /Authorized output target: ([^;\r\n]+)/u.exec(prompt)?.[1];
+  if (outputTarget !== undefined) {
+    return [
+      fauxAssistantMessage(fauxToolCall("output.write_text", {
+        path: outputTarget,
+        mediaType: "text/markdown",
+        content: "# Fixture Sub-Agent Output\n\nProvider-backed fixture completed the bounded writer objective.\n",
+        sourceReferences: ["evidence:research"],
+        warnings: []
+      }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Provider-backed fixture output is ready for parent review.")
+    ];
+  }
+  return [fauxAssistantMessage("Provider-backed fixture completed the bounded Sub-Agent objective.")];
+}

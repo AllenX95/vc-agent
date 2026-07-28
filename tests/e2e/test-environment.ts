@@ -29,6 +29,7 @@ export function testEnvironment(overrides: Record<string, string | undefined> = 
     if (value !== undefined) environment[key] = value;
   }
   environment.NODE_ENV = "test";
+  environment.VC_AGENT_TEST_AGENT_WORKER_ADAPTER = "1";
   environment.VC_AGENT_PYTHON = resolveParserPython();
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete environment[key];

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CanonicalParse, CapabilityExecutionResult, ContextReference, MaterialInventoryItem } from "@vc-agent/contracts";
+import { CAPABILITY_RESULT_CONTENT_MAX_CHARS } from "@vc-agent/contracts";
 
 export interface BoundedRecallEnvelope<T> {
   readonly schemaVersion: 1;
@@ -40,7 +41,17 @@ export interface MaterialRecallItem {
 
 export interface MaterialRecallAccess {
   listMaterials(): readonly MaterialInventoryItem[];
-  loadParse(materialId: string): Promise<CanonicalParse | undefined>;
+  loadParse(materialId: string): Promise<CanonicalParse | MaterialParseUnavailable | undefined>;
+}
+
+export interface MaterialParseUnavailable {
+  readonly status: "unavailable";
+  readonly code: string;
+  readonly message: string;
+}
+
+function isMaterialParseUnavailable(value: CanonicalParse | MaterialParseUnavailable): value is MaterialParseUnavailable {
+  return "status" in value && value.status === "unavailable";
 }
 
 export class MaterialRecallSource implements RecallSource<MaterialRecallQuery, MaterialRecallItem> {
@@ -63,8 +74,12 @@ export class MaterialRecallSource implements RecallSource<MaterialRecallQuery, M
     const material = materials.find((item) => item.id === query.materialId);
     if (material === undefined) return envelope(query, context, [], 0, true, undefined, ["Material is unavailable or outside the active scope."]);
     if (material.parseStatus === "stale") return envelope(query, context, [], 0, false, material, ["PARSE_REFRESH_CHOICE_REQUIRED"]);
-    const parse = await this.#access.loadParse(material.id);
-    if (parse === undefined) return envelope(query, context, [], 0, false, material, ["Canonical Parse is unavailable; parse the Material before expanding it."]);
+    const loaded = await this.#access.loadParse(material.id);
+    if (loaded === undefined) return envelope(query, context, [], 0, false, material, ["PARSE_UNAVAILABLE: Canonical Parse is unavailable; parse the Material before expanding it."]);
+    if (isMaterialParseUnavailable(loaded)) {
+      return envelope(query, context, [], 0, false, material, [`${loaded.code}: ${loaded.message}`]);
+    }
+    const parse = loaded;
 
     if (query.disclosureLevel === "outline") {
       const outline: MaterialRecallItem[] = [];
@@ -158,6 +173,45 @@ function envelope(
 
 export function retrievalMetadata(envelope: BoundedRecallEnvelope<unknown>, body: string) {
   return { payloadId: randomUUID(), retention: "turn_scoped" as const, bodyBytes: Buffer.byteLength(body, "utf8"), contextReference: envelope.contextReference };
+}
+
+export function serializeBoundedRetrieval(
+  envelope: BoundedRecallEnvelope<unknown>,
+  maxChars = CAPABILITY_RESULT_CONTENT_MAX_CHARS
+): { readonly body: string; readonly retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> } {
+  let items = [...envelope.items];
+  let transportOmitted = 0;
+  let fitted: BoundedRecallEnvelope<unknown> = envelope;
+  let body = JSON.stringify(fitted);
+  while (body.length > maxChars && items.length > 0) {
+    items = items.slice(0, -1);
+    transportOmitted += 1;
+    fitted = {
+      ...envelope,
+      items,
+      complete: false,
+      omittedItems: envelope.omittedItems + transportOmitted,
+      warnings: [
+        ...envelope.warnings,
+        `${transportOmitted} item(s) omitted to satisfy the bounded Worker IPC envelope.`
+      ]
+    };
+    body = JSON.stringify(fitted);
+  }
+  if (body.length > maxChars) {
+    fitted = {
+      ...envelope,
+      items: [],
+      complete: false,
+      omittedItems: envelope.omittedItems + envelope.items.length,
+      warnings: ["Retrieval metadata exceeded the bounded Worker IPC envelope; request a narrower source range."]
+    };
+    body = JSON.stringify(fitted);
+  }
+  if (body.length > maxChars) {
+    throw new Error("BOUNDED_RETRIEVAL_METADATA_EXCEEDS_IPC_LIMIT");
+  }
+  return { body, retrieval: retrievalMetadata(fitted, body) };
 }
 
 export function retrievalTrajectorySummary(result: CapabilityExecutionResult): string {

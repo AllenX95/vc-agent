@@ -14,11 +14,24 @@ import { z } from "zod";
 import type {
   AccessMode,
   ArtifactRecord,
+  CapabilityActivationRejection,
+  CapabilityCatalogEntry,
   CapabilityExecutionRequest,
   CapabilityMetadata,
   CapabilityExecutionResult
 } from "@vc-agent/contracts";
+export {
+  createTurnCapabilitySurface,
+  type CapabilityCatalogEntry,
+  type CapabilityTier,
+  type TurnCapabilityAvailability,
+  type TurnCapabilityScope,
+  type TurnCapabilitySurfaceInput,
+  type TurnCapabilitySurfaceSnapshot,
+  type TurnKind
+} from "./turn-capability-surface.js";
 import {
+  CAPABILITY_INPUT_LIMITS,
   reflectionOutcomeProposalInputSchema,
   type ReflectionOutcomeProposalInput
 } from "@vc-agent/contracts";
@@ -61,10 +74,23 @@ export class CapabilityRegistry {
   }
 }
 
-export function coreCapabilitiesForScope(scope: "unscoped" | "project"): readonly string[] {
-  return scope === "project"
-    ? ["capability_request", "material_recall", "project_state_recall", "memory_recall"]
-    : ["capability_request", "material_recall", "memory_recall"];
+export interface TurnCapabilityIntent {
+  readonly scope: "unscoped" | "project";
+  readonly materialRecall: boolean;
+  readonly projectStateRecall: boolean;
+  readonly memoryRecall: boolean;
+  readonly webResearch: boolean;
+  readonly outputWrite: boolean;
+}
+
+export function capabilitiesForTurn(intent: TurnCapabilityIntent): readonly string[] {
+  return [
+    ...(intent.materialRecall ? ["material_recall"] : []),
+    ...(intent.scope === "project" && intent.projectStateRecall ? ["project_state_recall"] : []),
+    ...(intent.memoryRecall ? ["memory_recall"] : []),
+    ...(intent.webResearch ? ["web_search", "web_fetch"] : []),
+    ...(intent.outputWrite ? ["output.write_text"] : [])
+  ];
 }
 
 export class UnknownOutcomeError extends Error {
@@ -161,6 +187,8 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
       version: "1.0.0",
       label: "Write text output",
       description: "Create a requested UTF-8 text or Markdown deliverable. Distinguish sourced facts, inference, uncertainty, and material disagreement where relevant, and supply stable Material references or public URLs used.",
+      useWhen: "Use only when the User asks for a durable text or Markdown deliverable.",
+      tier: "preconditioned",
       activationClass: "preconditioned_execution",
       sideEffectClass: "local_write",
       allowedScopes: ["unscoped", "project"],
@@ -230,34 +258,102 @@ function assertUserOutputPath(path: string, context: CapabilityExecutionContext)
   if (topLevel === "system" || topLevel === "parsed") throw new Error(`outputs/${topLevel} is reserved for system-managed artifacts.`);
 }
 
-const capabilityRequestInputSchema = z.object({
-  need: z.string().trim().min(1).max(1_000),
-  capabilityId: z.string().trim().min(1).max(200).optional()
-});
+const capabilityRequestInputSchema = z.union([
+  z.object({
+    mode: z.literal("catalog"),
+    need: z.string().trim().min(1).max(1_000)
+  }),
+  z.object({
+    mode: z.literal("activate"),
+    need: z.string().trim().min(1).max(1_000),
+    capabilityIds: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+    catalogRevision: z.string().regex(/^[a-f0-9]{64}$/)
+  }),
+  // Kept for one migration window so old persisted/faux Pi turns resolve
+  // safely while the Provider learns the catalog/activate form.
+  z.object({
+    need: z.string().trim().min(1).max(1_000),
+    capabilityId: z.string().trim().min(1).max(200).optional()
+  })
+]);
+
+export type CapabilityBrokerResolution =
+  | readonly string[]
+  | { readonly kind: "catalog"; readonly catalogRevision: string; readonly entries: readonly CapabilityCatalogEntry[] }
+  | {
+      readonly kind: "activation";
+      readonly catalogRevision: string;
+      readonly activatedCapabilities: readonly string[];
+      readonly alreadyVisible?: readonly string[];
+      readonly rejected?: readonly CapabilityActivationRejection[];
+    };
+
+type StructuredCapabilityBrokerResolution = Exclude<CapabilityBrokerResolution, readonly string[]>;
+
+function isStructuredCapabilityBrokerResolution(value: CapabilityBrokerResolution): value is StructuredCapabilityBrokerResolution {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "kind" in value;
+}
 
 export function createCapabilityBroker(
-  resolve: (input: z.infer<typeof capabilityRequestInputSchema>, context: CapabilityExecutionContext) => readonly string[]
+  resolve: (input: z.infer<typeof capabilityRequestInputSchema>, context: CapabilityExecutionContext) => CapabilityBrokerResolution
 ): CapabilityDefinition<z.infer<typeof capabilityRequestInputSchema>> {
   return {
     metadata: {
       id: "capability_request", version: "1.0.0", label: "Request capability",
       description: "Request an allowed task capability for the current Turn. This does not execute it or grant permission.",
+      useWhen: "Use when a needed capability is not visible; catalog first, then activate approved IDs.",
+      tier: "bootstrap",
       activationClass: "ordinary_task", sideEffectClass: "none", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { need: { type: "string" }, capabilityId: { type: "string" } }, required: ["need"] },
-      outputSchema: { type: "object", properties: { activatedCapabilities: { type: "array", items: { type: "string" } } }, required: ["activatedCapabilities"] }
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { enum: ["catalog", "activate"] },
+          need: { type: "string", maxLength: 1_000 },
+          capabilityIds: { type: "array", items: { type: "string" }, maxItems: 8 },
+          catalogRevision: { type: "string" },
+          capabilityId: { type: "string" }
+        },
+        required: ["need"]
+      },
+      outputSchema: { type: "object", properties: { catalogRevision: { type: "string" }, entries: { type: "array" }, activatedCapabilities: { type: "array", items: { type: "string" } }, alreadyVisible: { type: "array", items: { type: "string" } }, rejected: { type: "array" } } }
     },
     inputSchema: capabilityRequestInputSchema,
     inspect: () => undefined,
     async execute(input, context) {
-      const activatedCapabilities = [...resolve(input, context)];
+      const resolution = resolve(input, context);
+      if (!isStructuredCapabilityBrokerResolution(resolution)) {
+        const activatedCapabilities = [...resolution];
+        return {
+          schemaVersion: 1, requestId: context.request.requestId,
+          status: activatedCapabilities.length === 0 ? "failed" : "completed",
+          ...(activatedCapabilities.length === 0 ? { code: "CAPABILITY_UNAVAILABLE" } : {}),
+          content: activatedCapabilities.length === 0
+            ? "No allowed capability matches this request. No alternative capability, Provider, or permission was selected."
+            : `Activated for this Turn: ${activatedCapabilities.join(", ")}`,
+          activatedCapabilities
+        };
+      }
+      if (resolution.kind === "catalog") {
+        return {
+          schemaVersion: 1,
+          requestId: context.request.requestId,
+          status: "completed",
+          content: JSON.stringify({ catalogRevision: resolution.catalogRevision, entries: resolution.entries }),
+          activatedCapabilities: []
+        };
+      }
+      const activatedCapabilities = [...resolution.activatedCapabilities];
+      const alreadyVisible = [...(resolution.alreadyVisible ?? [])];
+      const rejected = [...(resolution.rejected ?? [])];
+      const hasSuccessfulResult = activatedCapabilities.length > 0 || alreadyVisible.length > 0;
       return {
-        schemaVersion: 1, requestId: context.request.requestId,
-        status: activatedCapabilities.length === 0 ? "failed" : "completed",
-        ...(activatedCapabilities.length === 0 ? { code: "CAPABILITY_UNAVAILABLE" } : {}),
-        content: activatedCapabilities.length === 0
-          ? "No allowed capability matches this request. No alternative capability, Provider, or permission was selected."
-          : `Activated for this Turn: ${activatedCapabilities.join(", ")}`,
-        activatedCapabilities
+        schemaVersion: 1,
+        requestId: context.request.requestId,
+        status: hasSuccessfulResult ? "completed" : "failed",
+        ...(hasSuccessfulResult ? {} : { code: rejected[0]?.code ?? "CAPABILITY_UNAVAILABLE" }),
+        content: JSON.stringify({ catalogRevision: resolution.catalogRevision, activatedCapabilities, alreadyVisible, rejected }),
+        activatedCapabilities,
+        activation: { catalogRevision: resolution.catalogRevision, activatedCapabilities, alreadyVisible, rejected }
       };
     }
   };
@@ -268,8 +364,8 @@ const materialRecallInputSchema = z.object({
   materialId: z.string().uuid().optional(),
   blockIds: z.array(z.string().min(1)).max(24).optional(),
   query: z.string().max(500).optional(),
-  maxItems: z.number().int().min(1).max(12).default(8),
-  maxChars: z.number().int().min(500).max(12_000).default(8_000)
+  maxItems: z.number().int().min(1).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.materialRecall.maxItems)).default(8),
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.materialRecall.maxChars)).default(8_000)
 });
 
 export function createMaterialRecallCapability(
@@ -278,9 +374,11 @@ export function createMaterialRecallCapability(
   return {
     metadata: {
       id: "material_recall", version: "1.0.0", label: "Recall material",
-      description: "Inspect scoped Material cards, outlines, or bounded source-referenced blocks. Expand progressively and respect omitted-content warnings.",
+      description: "Inspect scoped Material cards, outlines, or bounded source-referenced blocks from project files, attachments, BP, technical-result, or financial materials. Expand progressively and respect omitted-content warnings.",
+      useWhen: "Use when a factual claim depends on a project file, attachment, BP, technical result, or financial material.",
+      tier: "common_read",
       activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { disclosureLevel: { enum: ["cards", "outline", "excerpt", "full"] }, materialId: { type: "string" }, blockIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } }, required: ["disclosureLevel"] },
+      inputSchema: { type: "object", properties: { disclosureLevel: { enum: ["cards", "outline", "excerpt", "full"] }, materialId: { type: "string" }, blockIds: { type: "array", items: { type: "string" }, maxItems: 24 }, query: { type: "string", maxLength: 500 }, maxItems: { type: "integer", minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.materialRecall.maxItems }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.materialRecall.maxChars } }, required: ["disclosureLevel"] },
       outputSchema: { type: "object", properties: { sourceClass: { const: "material" }, disclosureLevel: { type: "string" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "disclosureLevel", "items", "complete", "omittedItems", "warnings", "contextReference"] }
     },
     inputSchema: materialRecallInputSchema,
@@ -294,7 +392,7 @@ export function createMaterialRecallCapability(
 
 const reflectionEvidenceDrilldownInputSchema = z.object({
   referenceId: z.string().min(1).max(500),
-  maxChars: z.number().int().min(500).max(6_000).default(4_000)
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.reflectionEvidenceDrilldown.maxChars)).default(4_000)
 });
 
 export function createReflectionEvidenceDrilldownCapability(
@@ -304,8 +402,10 @@ export function createReflectionEvidenceDrilldownCapability(
     metadata: {
       id: "reflection_evidence_drilldown", version: "1.0.0", label: "Verify Reflection evidence",
       description: "Resolve one exact stable evidence reference from the Independent Assessment under a bounded excerpt budget. This cannot browse Materials or choose a different source range.",
+      useWhen: "Use only inside an active Reflection dialogue when verifying a frozen assessment reference.",
+      tier: "protected_workflow",
       activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { referenceId: { type: "string" }, maxChars: { type: "integer", minimum: 500, maximum: 6_000 } }, required: ["referenceId"] },
+      inputSchema: { type: "object", properties: { referenceId: { type: "string" }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.reflectionEvidenceDrilldown.maxChars } }, required: ["referenceId"] },
       outputSchema: { type: "object", properties: { sourceClass: { const: "material" }, disclosureLevel: { const: "evidence_drilldown" }, items: { type: "array", maxItems: 1 }, complete: { type: "boolean" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "disclosureLevel", "items", "complete", "warnings", "contextReference"] }
     },
     inputSchema: reflectionEvidenceDrilldownInputSchema,
@@ -318,11 +418,11 @@ export function createReflectionEvidenceDrilldownCapability(
 }
 
 const projectStateRecallInputSchema = z.object({
-  source: z.enum(["project_context", "project_memory"]).default("project_context"),
+  source: z.literal("project_context").default("project_context"),
   sectionIds: z.array(z.string().trim().min(1).max(100)).max(6).optional(),
   query: z.string().trim().max(500).optional(),
-  maxItems: z.number().int().min(1).max(6).default(6),
-  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+  maxItems: z.number().int().min(1).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.projectStateRecall.maxItems)).default(6),
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.projectStateRecall.maxChars)).default(6_000)
 });
 
 export function createProjectStateRecallCapability(
@@ -331,17 +431,16 @@ export function createProjectStateRecallCapability(
   return {
     metadata: {
       id: "project_state_recall", version: "1.0.0", label: "Recall project state",
-      description: "Recall bounded, separately labelled sections from Project Context or Project Memory without loading Materials or other source classes.",
+      description: "Recall bounded, separately labelled sections from Project Context without loading Materials, Project Memory, or other source classes. Use memory_recall for Project Memory.",
+      useWhen: "Use when the task depends on Project Context such as thesis, risks, stage, or operating assumptions.",
+      tier: "common_read",
       activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { source: { enum: ["project_context", "project_memory"] }, sectionIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } } },
+      inputSchema: { type: "object", properties: { source: { const: "project_context" }, sectionIds: { type: "array", items: { type: "string" }, maxItems: CAPABILITY_INPUT_LIMITS.projectStateRecall.maxItems }, query: { type: "string", maxLength: 500 }, maxItems: { type: "integer", minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.projectStateRecall.maxItems }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.projectStateRecall.maxChars } } },
       outputSchema: { type: "object", properties: { sourceClass: { const: "project_state" }, disclosureLevel: { const: "sections" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "items", "warnings", "contextReference"] }
     },
     inputSchema: projectStateRecallInputSchema,
     inspect: () => undefined,
     async execute(input, context) {
-      if (input.source === "project_memory") {
-        return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: "Project Memory is not implemented yet; no data was loaded." };
-      }
       const recalled = await recall(input, context);
       return { schemaVersion: 1, requestId: context.request.requestId, status: "completed", content: recalled.body, retrieval: recalled.retrieval };
     }
@@ -353,8 +452,8 @@ const memoryRecallInputSchema = z.object({
   disclosureLevel: z.enum(["cards", "full"]).default("cards"),
   entryIds: z.array(z.string().min(1).max(100)).max(8).optional(),
   query: z.string().trim().max(500).optional(),
-  maxItems: z.number().int().min(1).max(8).default(6),
-  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+  maxItems: z.number().int().min(1).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.memoryRecall.maxItems)).default(6),
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.memoryRecall.maxChars)).default(6_000)
 });
 
 export function createMemoryRecallCapability(
@@ -364,8 +463,10 @@ export function createMemoryRecallCapability(
     metadata: {
       id: "memory_recall", version: "1.0.0", label: "Recall memory",
       description: "Recall bounded user-confirmed judgment cards and selectively expand relevant entries. Memory is not source evidence.",
+      useWhen: "Use for prior user-confirmed judgment when the task is judgment-heavy or the User explicitly asks for Memory.",
+      tier: "on_demand",
       activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { source: { enum: ["project_memory", "long_term_memory"] }, disclosureLevel: { enum: ["cards", "full"] }, entryIds: { type: "array", items: { type: "string" } }, query: { type: "string" }, maxItems: { type: "integer" }, maxChars: { type: "integer" } }, required: ["source"] },
+      inputSchema: { type: "object", properties: { source: { enum: ["project_memory", "long_term_memory"] }, disclosureLevel: { enum: ["cards", "full"] }, entryIds: { type: "array", items: { type: "string" }, maxItems: CAPABILITY_INPUT_LIMITS.memoryRecall.maxItems }, query: { type: "string", maxLength: 500 }, maxItems: { type: "integer", minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.memoryRecall.maxItems }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.memoryRecall.maxChars } }, required: ["source"] },
       outputSchema: { type: "object", properties: { sourceClass: { const: "memory" }, items: { type: "array" }, warnings: { type: "array" }, contextReference: { type: "object" } }, required: ["sourceClass", "items", "warnings", "contextReference"] }
     },
     inputSchema: memoryRecallInputSchema,
@@ -408,27 +509,10 @@ export function createReflectionOutcomeProposalCapability(
   };
 }
 
-export function createUnavailableCoreRecallCapability(id: "project_state_recall" | "memory_recall", allowedScopes: Array<"unscoped" | "project">): CapabilityDefinition {
-  return {
-    metadata: {
-      id, version: "1.0.0", label: id === "memory_recall" ? "Recall memory" : "Recall project state",
-      description: `${id} is a fixed core surface whose source implementation is not available in this slice.`,
-      activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes, executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { query: { type: "string" } } },
-      outputSchema: { type: "object", properties: { status: { const: "unavailable" } }, required: ["status"] }
-    },
-    inputSchema: z.object({ query: z.string().max(500).optional() }),
-    inspect: () => undefined,
-    async execute(_input, context) {
-      return { schemaVersion: 1, requestId: context.request.requestId, status: "failed", code: "RECALL_SOURCE_UNAVAILABLE", content: `${id} is not implemented yet; no data was loaded.` };
-    }
-  };
-}
-
 const webSearchInputSchema = z.object({
   query: z.string().trim().min(1).max(500),
-  maxResults: z.number().int().min(1).max(6).default(6),
-  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+  maxResults: z.number().int().min(1).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.webRecall.maxItems)).default(6),
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.webRecall.maxChars)).default(6_000)
 });
 const webFetchInputSchema = z.object({
   url: z.string().url().max(2_000).refine((value) => {
@@ -437,7 +521,7 @@ const webFetchInputSchema = z.object({
       return (url.protocol === "http:" || url.protocol === "https:") && url.username === "" && url.password === "";
     } catch { return false; }
   }, "Only unauthenticated public HTTP(S) URLs are allowed."),
-  maxChars: z.number().int().min(500).max(8_000).default(6_000)
+  maxChars: z.number().int().min(500).transform((value) => Math.min(value, CAPABILITY_INPUT_LIMITS.webRecall.maxChars)).default(6_000)
 });
 
 type WebCapabilityResult = Promise<{ body: string; retrieval: NonNullable<CapabilityExecutionResult["retrieval"]> }>;
@@ -449,8 +533,10 @@ export function createWebSearchCapability(
     metadata: {
       id: "web_search", version: "1.0.0", label: "Search public web",
       description: "Search the current public web without login, browser state, writes, or durable snapshots.",
+      useWhen: "Use when current external facts or public-source verification materially affect the answer.",
+      tier: "common_read",
       activationClass: "ordinary_task", sideEffectClass: "network_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { query: { type: "string" }, maxResults: { type: "integer" }, maxChars: { type: "integer" } }, required: ["query"] },
+      inputSchema: { type: "object", properties: { query: { type: "string", maxLength: 500 }, maxResults: { type: "integer", minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxItems }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars } }, required: ["query"] },
       outputSchema: webOutputSchema()
     },
     inputSchema: webSearchInputSchema,
@@ -469,8 +555,10 @@ export function createWebFetchCapability(
     metadata: {
       id: "web_fetch", version: "1.0.0", label: "Fetch public URL",
       description: "Fetch and extract a bounded public page or PDF without login, browser state, writes, or durable snapshots.",
+      useWhen: "Use after search, or when the User supplies a public URL that must be verified.",
+      tier: "common_read",
       activationClass: "ordinary_task", sideEffectClass: "network_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,
-      inputSchema: { type: "object", properties: { url: { type: "string" }, maxChars: { type: "integer" } }, required: ["url"] },
+      inputSchema: { type: "object", properties: { url: { type: "string", maxLength: 2_000 }, maxChars: { type: "integer", minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars } }, required: ["url"] },
       outputSchema: webOutputSchema()
     },
     inputSchema: webFetchInputSchema,

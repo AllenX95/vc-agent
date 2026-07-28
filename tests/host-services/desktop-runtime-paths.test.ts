@@ -16,6 +16,19 @@ describe("desktop packaged runtime paths", () => {
     });
   });
 
+  it("uses the isolated test adapter only for an explicit non-packaged test run", () => {
+    const mainDirectory = resolve("apps/desktop/dist/main");
+    expect(resolveDesktopRuntimePaths({
+      isPackaged: false,
+      resourcesPath: resolve("unused"),
+      mainDirectory,
+      environment: {
+        NODE_ENV: "test",
+        VC_AGENT_TEST_AGENT_WORKER_ADAPTER: "1"
+      }
+    }).agentWorkerEntry).toBe(resolve("apps/agent-worker/dist-test/index.js"));
+  });
+
   it("uses ordinary resource files in a packaged application", () => {
     const resourcesPath = resolve("release/resources");
     const paths = resolveDesktopRuntimePaths({

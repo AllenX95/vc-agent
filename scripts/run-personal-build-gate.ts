@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  FixtureSubAgentAdapter,
   SubAgentRuntime,
   createSubAgentProfileResolver,
   writePersonalBuildGateReport,
@@ -16,6 +15,7 @@ import {
   type PersonalBuildScenarioResult,
   type SubAgentProjection
 } from "../packages/host-services/src/index.ts";
+import { FixtureSubAgentAdapter } from "../packages/host-services/src/testing.ts";
 
 interface Scenario extends PersonalBuildScenarioResult {}
 
@@ -75,8 +75,8 @@ async function main(): Promise<void> {
       crash_cancellation: modeStatus("crash_cancellation", ["H1-S-007"])
     } satisfies Record<PersonalBuildExecutionMode, { status: PersonalBuildGateStatus; scenarioIds: readonly string[]; note?: string }>;
     const report = writePersonalBuildGateReport(outputRoot, {
-      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 14 },
-      migrationVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      buildIdentity: { applicationVersion: "0.1.0", stateSchemaVersion: 16 },
+      migrationVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
       dependencyInventory: [
         { name: "Office Skill adapter", status: officeReady ? "ready" : "attention", evidence: officeReady ? "external redacted evidence supplied" : "fixture-only; real evidence missing" },
         { name: "PaddleOCR/OvisOCR2", status: ocrReady ? "ready" : "unavailable", evidence: ocrReady ? "external redacted evidence supplied" : "local runtime or evidence missing" },
@@ -125,7 +125,7 @@ async function scenario(target: Scenario[], testId: string, suite: string, mode:
 }
 
 async function runClean(): Promise<void> {
-  if (process.env.VC_AGENT_TEST_SUB_AGENT_FIXTURE === "1") throw new Error("BLOCKED: clean gate must run with no fixture activation flag.");
+  if (process.env.VC_AGENT_TEST_AGENT_WORKER_ADAPTER === "1") throw new Error("BLOCKED: clean gate must run with no fixture Agent Worker adapter.");
 }
 
 async function runDailyFixture(root: string): Promise<void> {

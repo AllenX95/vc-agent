@@ -7,12 +7,12 @@ import { testEnvironment } from "./test-environment";
 test("creates only an explicit flat bounded Sub-Agent run and restores its task tree", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-sub-agent-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
-  const application = await electron.launch({ args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`], cwd: root, env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory, VC_AGENT_TEST_SUB_AGENT_FIXTURE: "1" }) });
+  const application = await electron.launch({ args: [join(root, "apps/desktop/dist/main/main.js"), `--user-data-dir=${userDataDirectory}`], cwd: root, env: testEnvironment({ VC_AGENT_USER_DATA_DIR: userDataDirectory }) });
   try {
     const window = await application.firstWindow();
     await expect(window.getByTestId("empty-workspace")).toBeVisible();
     expect(existsSync(join(userDataDirectory, "delegation", "runs.json"))).toBe(false);
-    const profile = await invoke(window, "profile.create", { name: "Fixture", provider: "fixture", model: "fixture-v1", thinkingLevel: "minimal", apiKey: "fixture-secret" });
+    const profile = await invoke(window, "profile.create", { name: "Fixture", provider: "vc-agent-sub-agent-faux", model: "fixture-v1", thinkingLevel: "minimal", apiKey: "fixture-secret" });
     expect(profile.event).toBe("profile.created");
     const thread = await invoke(window, "thread.create.unscoped", { title: "Delegation Parent" });
     const parentThreadId = (thread.payload as { thread: { id: string } }).thread.id;

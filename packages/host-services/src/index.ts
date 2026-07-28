@@ -4,6 +4,7 @@ import type {
   CapabilityExecutionRequest,
   CapabilityExecutionResult
 } from "@vc-agent/contracts";
+import { normalizeCapabilityExecutionResult } from "@vc-agent/contracts";
 import {
   CapabilityRegistry,
   UnknownOutcomeError,
@@ -14,10 +15,11 @@ export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-iden
 export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
 export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMaterialFingerprint } from "./material-inventory.js";
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
-export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, type BoundedRecallEnvelope, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
+export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, serializeBoundedRetrieval, type BoundedRecallEnvelope, type MaterialParseUnavailable, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
 export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
+export { detectMaterialRecallIntent, detectProjectStateRecallIntent } from "./task-intent.js";
 export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextStore, parseProjectContext, type ProjectContextDocument, type ProjectContextRecallAccess, type ProjectContextRecallItem, type ProjectContextRecallQuery, type ProjectContextSection, type ProjectContextWarning } from "./project-context.js";
-export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, memoryCandidateId, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
+export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 export { COGNITIVE_EVOLUTION_HISTORY_HEADER, LONG_TERM_MEMORY_ARCHIVE_HEADER, LONG_TERM_MEMORY_HEADER, LongTermMemoryRecallSource, LongTermMemoryStore, createLongTermMemoryIndexContent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, parseLongTermMemory, type LongTermMemoryDocument, type LongTermMemoryEntry, type LongTermMemoryFileSummary, type LongTermMemoryMaturity, type LongTermMemoryRecallItem, type LongTermMemoryRecallPolicy, type LongTermMemoryRecallQuery, type LongTermMemoryStatus, type LongTermMemoryWarning } from "./long-term-memory.js";
 export { MemoryEvolutionStore, type AtomicMemoryFileAddition, type CondensationArchiveItem, type CondensationRetention, type LocalMemoryProvenanceInspection, type LocalMemoryProvenanceRecord, type MemoryEvolutionAction, type MemoryEvolutionStoreOptions, type MemoryLearningDraft, type MemoryMaintenanceState, type MemoryPatchFileDiff, type MemoryPatchRequest, type PreparedMemoryPatch } from "./memory-evolution.js";
 export { DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, parseIndependentAssessment, reflectionFraming, type BuildReflectionProjectBriefInput } from "./investment-reflection.js";
@@ -32,7 +34,7 @@ export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutc
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";
-export { FixtureSubAgentAdapter, SubAgentRuntime, UnavailableSubAgentAdapter, createSubAgentProfileResolver, zeroSubAgentUsage, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
+export { SubAgentRuntime, createSubAgentProfileResolver, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
 export { ProviderSubAgentAdapter, type SubAgentProviderExecutor } from "./sub-agent-provider-adapter.js";
 export { SubAgentContextCompiler, type SubAgentContextBundle, type SubAgentContextEntry, type SubAgentContextResolution, type SubAgentContextResolver } from "./sub-agent-context.js";
 export { writePersonalBuildGateReport, type PersonalBuildAcceptanceCriterion, type PersonalBuildDependency, type PersonalBuildExecutionMode, type PersonalBuildGateArtifacts, type PersonalBuildGateInput, type PersonalBuildGateReport, type PersonalBuildGateStatus, type PersonalBuildScenarioResult } from "./personal-build-gate.js";
@@ -45,8 +47,6 @@ export {
   AgentRuntimeSupervisor,
   LocalJobSupervisor,
   RuntimeSupervisorError,
-  createIsolatedExecutionRequest,
-  projectWorkerOwner,
   workerOwnerKey,
   type AgentExecutionRequest,
   type AgentRuntimeEvent,
@@ -140,7 +140,6 @@ export {
   ExtensionAdmissionError,
   ExtensionAdmissionManager,
   GlobalExtensionRevisionManager,
-  hashExtensionDirectory,
   type ApprovedExtensionRevision,
   type DeterministicInspectionReport,
   type ExtensionAdmissionErrorCode,
@@ -282,7 +281,7 @@ export class CapabilityGateway {
     context: CapabilityExecutionContext
   ): Promise<CapabilityExecutionResult> {
     try {
-      return await definition.execute(input, context);
+      return normalizeCapabilityExecutionResult(await definition.execute(input, context));
     } catch (error) {
       if (error instanceof UnknownOutcomeError) return failure(context.request.requestId, "UNKNOWN_TOOL_OUTCOME", error.message, "unknown_outcome");
       return failure(context.request.requestId, "CAPABILITY_EXECUTION_FAILED", error instanceof Error ? error.message : "Capability execution failed.");

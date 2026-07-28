@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { relative, resolve, sep } from "node:path";
 
 export type WorkerOwner =
@@ -10,12 +9,6 @@ export function workerOwnerKey(owner: WorkerOwner): string {
   if (owner.kind === "project") return `project:${owner.projectId}`;
   if (owner.kind === "unscoped") return `unscoped:${owner.threadId}`;
   return `isolated:${owner.executionId}`;
-}
-
-export function projectWorkerOwner(projectId: string, projectPath: string, identityStatus: "stable" | "collision" = "stable"): WorkerOwner {
-  if (identityStatus !== "stable") throw new Error("PROJECT_IDENTITY_COLLISION");
-  if (projectId.trim() === "" || projectPath.trim() === "") throw new Error("WORKER_OWNER_UNRESOLVED");
-  return { kind: "project", projectId, projectPath };
 }
 
 export interface AgentExecutionRequest {
@@ -491,8 +484,4 @@ async function settleWithin(task: Promise<unknown>, timeoutMs: number): Promise<
   const result = await Promise.race([completed, timeout]);
   if (timer !== undefined) clearTimeout(timer);
   return result;
-}
-
-export function createIsolatedExecutionRequest(owner: WorkerOwner, threadId: string, turnId: string, correlationId: string, command?: unknown): AgentExecutionRequest {
-  return { owner, threadId, turnId, correlationId, ...(command === undefined ? {} : { command }), workerRevision: `runtime-${randomUUID()}` };
 }

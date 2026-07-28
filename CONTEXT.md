@@ -81,8 +81,8 @@ A VC Desktop-owned tool, command, provider wrapper, or policy surface registered
 _Avoid_: Pi built-in tool, arbitrary extension behavior
 
 **Minimal Default Harness**:
-The ordinary-turn agent configuration that keeps the stable VC instructions, active capabilities, recalled state, loaded Skills, and disclosed materials limited to what the current task needs.
-_Avoid_: Pi as automatic token discount, full capability preload, eager Project context, coding-agent prompt inheritance
+The ordinary-turn agent configuration that keeps the stable VC instructions, scope-compatible common reads, bootstrap capability broker, recalled state, loaded Skills, and disclosed materials limited to what the current task needs.
+_Avoid_: Pi as automatic token discount, full capability preload, eager Project context, regex intent as a correctness gate, coding-agent prompt inheritance
 
 **Lazy Agent Activation**:
 The rule that application launch, Project opening, Thread creation, and Thread inspection remain local Host actions, while a Pi worker and model session start only when the User submits model-backed work.
@@ -113,11 +113,11 @@ The System Prompt Revision fixed when an Investment Reflection or Dream run begi
 _Avoid_: Prompt copy, latest revision on resume, mixed-revision workflow, ordinary Thread prompt state
 
 **Task-activated Capability**:
-A Host-registered Capability added to the active model tool surface only when the current user intent, attachment, or explicit workflow requires it within existing authorization.
-_Avoid_: All-tools-by-default, separate classifier call, permission expansion, permanently active workflow tool
+A Host-registered Capability initially exposed by scope or a preload hint, or added through a revision-checked broker activation when the current user intent, attachment, or explicit workflow requires it within existing authorization.
+_Avoid_: All-tools-by-default, separate classifier call, regex intent as a correctness gate, permission expansion, permanently active workflow tool
 
 **Capability Activation Request**:
-A bounded request from the primary Agent during its existing Turn to expose an additional Task-activated Capability needed for the current task, subject to Host availability, scope, and authorization checks.
+A bounded catalog-discovery or activation request from the primary Agent during its existing Turn to expose an additional Task-activated Capability needed for the current task, subject to catalog revision, Host availability, scope, and authorization checks.
 _Avoid_: Auxiliary classifier call, capability execution, Access Mode change, standing Thread permission, Sub-Agent authorization
 
 **Model Profile**:

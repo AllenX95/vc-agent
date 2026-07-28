@@ -1,8 +1,17 @@
 import { _electron as electron, expect, test, type Page } from "@playwright/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { testEnvironment } from "./test-environment";
+
+test("keeps fixture implementations out of the production Agent Worker bundle", () => {
+  const root = resolve(import.meta.dirname, "../..");
+  const production = readJavaScriptBundle(join(root, "apps/agent-worker/dist"));
+  const testing = readJavaScriptBundle(join(root, "apps/agent-worker/dist-test"));
+  const fixtureMarkers = /Dogfood Investment Note|Fixture Sub-Agent Output|vc-agent-sub-agent-faux|VC_AGENT_TEST_WORKER_CRASH_ON_COMPACTION/u;
+  expect(production).not.toMatch(fixtureMarkers);
+  expect(testing).toMatch(fixtureMarkers);
+});
 
 test("boots the built Agent Worker and completes a Project Turn", async () => {
   const fixture = await launchWorkerFixture();
@@ -90,4 +99,15 @@ async function invoke(window: Page, command: string, payload: Record<string, unk
       payload: commandPayload
     });
   }, { command, payload });
+}
+
+function readJavaScriptBundle(directory: string): string {
+  return readdirSync(directory).flatMap((entry) => {
+    const path = join(directory, entry);
+    return statSync(path).isDirectory()
+      ? [readJavaScriptBundle(path)]
+      : entry.endsWith(".js")
+        ? [readFileSync(path, "utf8")]
+        : [];
+  }).join("\n");
 }

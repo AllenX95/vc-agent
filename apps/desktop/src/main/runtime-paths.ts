@@ -25,8 +25,12 @@ export interface DesktopRuntimePaths {
 export function resolveDesktopRuntimePaths(input: DesktopRuntimePathInput): DesktopRuntimePaths {
   const environment = input.environment ?? process.env;
   if (!input.isPackaged) {
+    const useTestAgentWorker = environment.NODE_ENV === "test"
+      && environment.VC_AGENT_TEST_AGENT_WORKER_ADAPTER === "1";
     return {
-      agentWorkerEntry: resolve(input.mainDirectory, "../../../agent-worker/dist/index.js"),
+      agentWorkerEntry: resolve(input.mainDirectory, useTestAgentWorker
+        ? "../../../agent-worker/dist-test/index.js"
+        : "../../../agent-worker/dist/index.js"),
       utilityWorkerEntry: resolve(input.mainDirectory, "../../../utility-worker/dist/index.js"),
       ...(nonEmpty(environment.VC_AGENT_PYTHON) === undefined ? {} : { parserPython: resolve(environment.VC_AGENT_PYTHON!) })
     };

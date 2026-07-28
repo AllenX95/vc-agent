@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, normalize, resolve, sep } from "node:path";
 import {
@@ -558,38 +558,6 @@ export class SubAgentRuntime {
   #timestamp(): string { return new Date(this.#now()).toISOString(); }
 }
 
-export class UnavailableSubAgentAdapter implements SubAgentAdapter {
-  readonly kind = "unavailable" as const;
-  async execute(): Promise<SubAgentExecutionResult> {
-    throw new Error("SUB_AGENT_PROVIDER_UNAVAILABLE");
-  }
-}
-
-/** Deterministic adapter used by local acceptance tests; it never calls a provider. */
-export class FixtureSubAgentAdapter implements SubAgentAdapter {
-  readonly kind = "fixture" as const;
-  readonly #delayMs: number;
-  constructor(input: { delayMs?: number } = {}) { this.#delayMs = input.delayMs ?? 0; }
-  async execute(input: SubAgentExecutionInput): Promise<SubAgentExecutionResult> {
-    if (this.#delayMs > 0) await new Promise<void>((resolvePromise, reject) => { const timer = setTimeout(resolvePromise, this.#delayMs); input.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("SUB_AGENT_STOPPED")); }, { once: true }); });
-    if (input.signal.aborted) throw new Error("SUB_AGENT_STOPPED");
-    const digest = createHash("sha256").update(`${input.task.role}:${input.task.objective}`).digest("hex").slice(0, 12);
-    const outputPath = input.task.outputTarget;
-    if (outputPath !== undefined) {
-      mkdirSync(dirname(outputPath), { recursive: true });
-      const partial = `${outputPath}.partial`;
-      writeFileSync(partial, `# Fixture Sub-Agent Output\n\n${sanitizeText(input.task.objective, 2_000)}\n`, "utf8");
-      renameSync(partial, outputPath);
-    }
-    return {
-      assistantMessage: `Fixture ${input.task.role} result ${digest}: ${input.task.objective.slice(0, 500)}`,
-      usage: { inputTokens: Math.max(1, Math.ceil(input.task.objective.length / 4)), outputTokens: 48, totalTokens: Math.max(1, Math.ceil(input.task.objective.length / 4)) + 48 },
-      ...(outputPath === undefined ? {} : { handoff: { summary: `Fixture output for ${input.task.role}.`, provenance: [{ referenceId: `sub-agent:${input.attempt.id}`, source: "fixture" }], outputPath, adoptedByParent: false, reviewStatus: "pending_parent_review" as const } }),
-      toolEvents: input.task.capabilitySet.map((capability) => ({ capability, status: "completed" as const, summary: "Fixture capability completed without external I/O." }))
-    };
-  }
-}
-
 export function createSubAgentProfileResolver(input: {
   readonly profiles: readonly SubAgentProfileSnapshot[];
   readonly roleProfiles?: Readonly<Partial<Record<SubAgentRole, string>>>;
@@ -612,12 +580,10 @@ export function createSubAgentProfileResolver(input: {
   };
 }
 
-export function zeroSubAgentUsage(): SubAgentUsage { return zeroUsage(); }
-
 function zeroUsage(): SubAgentUsage { return { inputTokens: 0, outputTokens: 0, totalTokens: 0 }; }
+function sanitizeText(value: string, max: number): string { return value.replace(/Bearer\s+[A-Za-z0-9._-]+/giu, "Bearer [redacted]").replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/giu, "$1=[redacted]").replace(/(?:[A-Za-z]:\\|\\\\|\/Users\/|\/home\/)[^\s"']+/gu, "[path redacted]").slice(0, max); }
 function normalizeUsage(usage: SubAgentUsage): SubAgentUsage { const inputTokens = Math.max(0, Math.floor(usage.inputTokens)); const outputTokens = Math.max(0, Math.floor(usage.outputTokens)); return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }; }
 function addUsage(left: SubAgentUsage, right: SubAgentUsage): SubAgentUsage { const next = normalizeUsage({ inputTokens: left.inputTokens + right.inputTokens, outputTokens: left.outputTokens + right.outputTokens, totalTokens: 0 }); return next; }
-function sanitizeText(value: string, max: number): string { return value.replace(/Bearer\s+[A-Za-z0-9._-]+/giu, "Bearer [redacted]").replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/giu, "$1=[redacted]").replace(/(?:[A-Za-z]:\\|\\\\|\/Users\/|\/home\/)[^\s"']+/gu, "[path redacted]").slice(0, max); }
 function sanitizeHandoff(handoff: SubAgentHandoff): SubAgentHandoff { return { ...handoff, summary: sanitizeText(handoff.summary, 20_000), provenance: handoff.provenance.map((item) => ({ referenceId: sanitizeText(item.referenceId, 200), source: sanitizeText(item.source, 200) })), ...(handoff.outputPath === undefined ? {} : { outputPath: normalizeTarget(handoff.outputPath) }) }; }
 function normalizeTarget(value: string): string { return normalize(resolve(value)); }
 function validateCapabilities(capabilities: readonly SubAgentCapability[]): void {

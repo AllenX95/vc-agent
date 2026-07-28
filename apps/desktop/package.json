@@ -10,7 +10,6 @@
   "dependencies": {
     "@vc-agent/capabilities": "workspace:*",
     "@vc-agent/contracts": "workspace:*",
-    "@vc-agent/core": "workspace:*",
     "@vc-agent/host-services": "workspace:*",
     "@vc-agent/pi-adapter": "workspace:*",
     "@vc-agent/persistence": "workspace:*",

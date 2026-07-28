@@ -3,14 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AgentTurnIdleTimeoutError,
   SnapshotResourceLoader,
+  aggregateUsage,
   createPiSession,
   listKnownPiModels,
   sanitizeProviderFailure,
   type ExtensionInventorySnapshot,
+  type PiSessionEvent,
   type RuntimeResourceSnapshot
 } from "@vc-agent/pi-adapter";
-import { createFauxPiSession, fauxAssistantMessage, fauxToolCall } from "@vc-agent/pi-adapter/testing";
+import { createFauxPiSession, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@vc-agent/pi-adapter/testing";
 
 const temporaryDirectories: string[] = [];
 const resources: RuntimeResourceSnapshot = {
@@ -32,6 +35,102 @@ afterEach(() => {
 });
 
 describe("real Pi SDK tracer", () => {
+  it("uses explicit context and output limits instead of catalog defaults", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-model-limits-"));
+    temporaryDirectories.push(cwd);
+    const handle = await createFauxPiSession({
+      config: { cwd, threadDirectory: cwd, contextHistory: [], resources, extensions },
+      profileOverrides: { contextWindow: 64_000, maxOutputTokens: 8_000 },
+      responses: [fauxAssistantMessage("Done.")],
+      onEvent: () => {}
+    });
+
+    expect(handle.contextWindow).toBe(64_000);
+    expect(handle.maxOutputTokens).toBe(8_000);
+    handle.dispose();
+  });
+
+  it("forwards thinking deltas separately from visible assistant text", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-thinking-stream-"));
+    temporaryDirectories.push(cwd);
+    const thinking: string[] = [];
+    const text: string[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions
+      },
+      responses: [
+        fauxAssistantMessage([fauxThinking("Inspect the evidence first."), { type: "text", text: "Visible answer." }])
+      ],
+      onEvent: (event) => {
+        if (event.type === "thinking_delta") thinking.push(event.delta);
+        if (event.type === "text_delta") text.push(event.delta);
+      }
+    });
+
+    await handle.submit("Review this.");
+    expect(thinking.join("")).toBe("Inspect the evidence first.");
+    expect(text.join("")).toBe("Visible answer.");
+    handle.dispose();
+  });
+
+  it("aggregates every model call in a tool-using turn and reports session context usage", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-turn-usage-"));
+    temporaryDirectories.push(cwd);
+    const toolResponse = fauxAssistantMessage(
+      fauxToolCall("material_recall", { disclosureLevel: "cards" }),
+      { stopReason: "toolUse" }
+    );
+    const finalResponse = fauxAssistantMessage("Visible answer.");
+    let completed: Extract<PiSessionEvent, { type: "completed" }> | undefined;
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        capabilityProxy: async () => ({ schemaVersion: 1, requestId: "recall-1", status: "completed", content: "Evidence card" })
+      },
+      responses: [toolResponse, finalResponse],
+      onEvent: (event) => {
+        if (event.type === "completed") completed = event;
+      }
+    });
+
+    await handle.submit("Review the material.", { activeCapabilities: ["material_recall"] });
+    const assistantUsages = readFileSync(handle.sessionFile, "utf8")
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; usage?: typeof toolResponse.usage } })
+      .flatMap((entry) => entry.type === "message" && entry.message?.role === "assistant" && entry.message.usage !== undefined ? [entry.message.usage] : []);
+    expect(completed?.usage).toMatchObject({
+      input: assistantUsages.reduce((sum, usage) => sum + usage.input, 0),
+      output: assistantUsages.reduce((sum, usage) => sum + usage.output, 0),
+      totalTokens: assistantUsages.reduce((sum, usage) => sum + usage.totalTokens, 0)
+    });
+    expect(completed?.contextUsage).toMatchObject({
+      contextWindow: handle.contextWindow,
+      tokens: expect.any(Number),
+      percent: expect.any(Number)
+    });
+    const usage = (reasoning: number) => ({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning,
+      totalTokens: 3,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+    });
+    expect(aggregateUsage(usage(2), usage(3)).reasoning).toBe(5);
+    handle.dispose();
+  });
+
   it("creates a real session without default resources, tools, persistence, or network discovery", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "vc-agent-pi-tracer-"));
     temporaryDirectories.push(cwd);
@@ -268,6 +367,87 @@ describe("real Pi SDK tracer", () => {
 
     await handle.submit("Inspect the project materials.", { activeCapabilities: ["capability_request"] });
     expect(requested).toEqual(["capability_request", "material_recall"]);
+    handle.dispose();
+  });
+
+  it("classifies the local idle watchdog as a Worker failure rather than a Provider failure", () => {
+    const failure = sanitizeProviderFailure(
+      new AgentTurnIdleTimeoutError(120_000),
+      { provider: "xiaomi", model: "mimo-v2.5", apiKey: "secret" }
+    );
+    expect(failure).toMatchObject({
+      kind: "worker",
+      code: "AGENT_TURN_IDLE_TIMEOUT",
+      provider: "xiaomi",
+      model: "mimo-v2.5"
+    });
+  });
+
+  it("uses an idle timeout so a progressing multi-tool turn may exceed one timeout window", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-progressing-turn-"));
+    temporaryDirectories.push(cwd);
+    const events: string[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        turnIdleTimeoutMs: 300,
+        capabilityProxy: async (_toolCallId, capabilityId) => {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          return {
+            schemaVersion: 1,
+            requestId: `request-${capabilityId}`,
+            status: "completed",
+            content: `completed ${capabilityId}`
+          };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("project_state_recall", { source: "project_context", query: "materials" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("material_recall", { disclosureLevel: "cards" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("The progressing turn completed.")
+      ],
+      onEvent: (event) => events.push(event.type)
+    });
+
+    await handle.submit("Inspect the project.");
+    expect(events.at(-1)).toBe("completed");
+    handle.dispose();
+  });
+
+  it("honors the configured idle timeout for a stalled tool stage", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-stalled-turn-"));
+    temporaryDirectories.push(cwd);
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        turnIdleTimeoutMs: 40,
+        capabilityProxy: async (_toolCallId, capabilityId) => {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return {
+            schemaVersion: 1,
+            requestId: `request-${capabilityId}`,
+            status: "completed",
+            content: `completed ${capabilityId}`
+          };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("material_recall", { disclosureLevel: "cards" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("This response must not be reached.")
+      ],
+      onEvent: () => {}
+    });
+
+    await expect(handle.submit("Inspect the project.", { activeCapabilities: ["material_recall"] }))
+      .rejects.toThrow("no model or capability progress for 40 ms");
     handle.dispose();
   });
 

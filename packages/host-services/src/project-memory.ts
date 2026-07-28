@@ -177,7 +177,6 @@ export class ProjectMemoryRecallSource implements RecallSource<ProjectMemoryReca
   }
 }
 
-export function memoryCandidateId(): string { return randomUUID(); }
 export interface MemoryCandidate {
   readonly id: string;
   readonly scope: "project" | "unscoped";
