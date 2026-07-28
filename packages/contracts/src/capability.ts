@@ -7,7 +7,8 @@ export const CAPABILITY_INPUT_LIMITS = {
   projectStateRecall: { maxItems: 6, maxChars: 8_000 },
   memoryRecall: { maxItems: 8, maxChars: 8_000 },
   reflectionEvidenceDrilldown: { maxChars: 6_000 },
-  webRecall: { maxItems: 6, maxChars: 8_000 }
+  webRecall: { maxItems: 6, maxChars: 8_000 },
+  academicResearch: { maxItems: 25, maxChars: 15_000 }
 } as const;
 
 export const accessModeSchema = z.enum(["standard", "full"]);
@@ -122,7 +123,7 @@ export type ArtifactRecord = z.infer<typeof artifactRecordSchema>;
 
 export const contextReferenceSchema = z.object({
   schemaVersion: z.literal(1),
-  sourceClass: z.enum(["material", "project_state", "memory", "web", "mcp"]),
+  sourceClass: z.enum(["material", "project_state", "memory", "web", "mcp", "academic"]),
   sourceId: z.string().min(1),
   label: z.string().min(1),
   sourceRange: z.string().min(1),
@@ -177,6 +178,7 @@ export const actionProposalSchema = z.object({
   action: z.string().min(1),
   target: z.string().min(1),
   reason: z.string().min(1),
-  expectedEffect: z.string().min(1)
+  expectedEffect: z.string().min(1),
+  preview: z.string().max(20_000).optional()
 });
 export type ActionProposal = z.infer<typeof actionProposalSchema>;

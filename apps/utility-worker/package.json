@@ -9,6 +9,6 @@
     "build": "tsup && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json"
   },
-  "dependencies": { "@vc-agent/contracts": "workspace:*" },
+  "dependencies": { "@vc-agent/contracts": "workspace:*", "pdfjs-dist": "6.1.200" },
   "devDependencies": { "@types/node": "26.1.1", "electron": "43.1.1", "tsup": "8.5.1", "typescript": "7.0.2" }
 }

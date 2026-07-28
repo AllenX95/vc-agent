@@ -151,6 +151,19 @@ const interrupted = workerEventBase.extend({
 });
 const acknowledged = workerEventBase.extend({ event: z.literal("trajectory.acknowledged"), eventId: z.string().min(1), sequence: z.number().int().positive() });
 const capabilityRequested = workerEventBase.extend({ event: z.literal("capability.execution.requested"), request: capabilityExecutionRequestSchema });
+const nativeToolStarted = workerEventBase.extend({
+  event: z.literal("native_tool.started"),
+  toolCallId: z.string().min(1),
+  toolName: z.enum(["read", "ls", "find", "grep"]),
+  arguments: z.record(z.string(), z.unknown())
+});
+const nativeToolCompleted = workerEventBase.extend({
+  event: z.literal("native_tool.completed"),
+  toolCallId: z.string().min(1),
+  toolName: z.enum(["read", "ls", "find", "grep"]),
+  content: z.string().max(20_000),
+  isError: z.boolean()
+});
 const compactionStarted = workerEventBase.extend({
   event: z.literal("thread.compaction.started"),
   reason: z.enum(["manual", "threshold", "overflow"])
@@ -167,5 +180,5 @@ const compactionFailed = workerEventBase.extend({
   failure: providerFailureSchema
 });
 
-export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, thinkingDelta, completed, failed, interrupted, acknowledged, capabilityRequested, compactionStarted, compactionCompleted, compactionFailed]);
+export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, thinkingDelta, completed, failed, interrupted, acknowledged, capabilityRequested, nativeToolStarted, nativeToolCompleted, compactionStarted, compactionCompleted, compactionFailed]);
 export type WorkerEvent = z.infer<typeof workerEventSchema>;

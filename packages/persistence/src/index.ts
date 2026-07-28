@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import { independentAssessmentSchema, providerFailureSchema, reflectionBriefSchema, reflectionRunSchema, type AccessMode, type ArtifactRecord, type BootstrapState, type ExecutionQueueItem, type IndependentAssessment, type MaterialInventoryItem, type ModelExecutionKind, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
+import { independentAssessmentSchema, providerFailureSchema, reflectionBriefSchema, reflectionRunSchema, type AccessMode, type AcademicCredentialSource, type AcademicCredentialStatus, type ArtifactRecord, type BootstrapState, type ExecutionQueueItem, type IndependentAssessment, type MaterialInventoryItem, type ModelExecutionKind, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
 import { immutableDatabaseUrl, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
 export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
@@ -11,6 +11,12 @@ export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRo
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
 const { DatabaseSync } = nodeRequire(sqliteModuleName) as typeof import("node:sqlite");
+
+const ACADEMIC_CREDENTIAL_SOURCES = ["openalex", "github", "huggingface"] as const satisfies readonly AcademicCredentialSource[];
+
+function academicCredentialRef(source: AcademicCredentialSource): string {
+  return `academic-source:${source}`;
+}
 
 interface ProfileRow {
   id: string;
@@ -1159,6 +1165,32 @@ export class HostStateStore {
       ? "SELECT * FROM threads WHERE deleted_at IS NULL ORDER BY created_at ASC"
       : "SELECT * FROM threads ORDER BY created_at ASC";
     return (this.#database.prepare(query).all() as unknown as ThreadRow[]).map(mapThread);
+  }
+
+  listAcademicCredentialStatuses(): AcademicCredentialStatus[] {
+    return ACADEMIC_CREDENTIAL_SOURCES.map((source) => ({
+      source,
+      configured: this.getAcademicCredential(source) !== undefined
+    }));
+  }
+
+  getAcademicCredential(source: AcademicCredentialSource): Uint8Array | undefined {
+    return this.getEncryptedCredential(academicCredentialRef(source));
+  }
+
+  setAcademicCredential(source: AcademicCredentialSource, encryptedCredential: Uint8Array): AcademicCredentialStatus[] {
+    const now = new Date().toISOString();
+    this.#database.prepare(`
+      INSERT INTO protected_credentials(id, provider, encrypted_value, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET encrypted_value = excluded.encrypted_value, provider = excluded.provider
+    `).run(academicCredentialRef(source), `academic:${source}`, encryptedCredential, now);
+    return this.listAcademicCredentialStatuses();
+  }
+
+  clearAcademicCredential(source: AcademicCredentialSource): AcademicCredentialStatus[] {
+    this.#database.prepare("DELETE FROM protected_credentials WHERE id = ?").run(academicCredentialRef(source));
+    return this.listAcademicCredentialStatuses();
   }
 
   listProjectThreads(projectId: string): ProjectThread[] {

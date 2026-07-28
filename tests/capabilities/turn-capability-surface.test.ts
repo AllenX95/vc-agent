@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { capabilitySurfaceSnapshotSchema, type CapabilityMetadata } from "@vc-agent/contracts";
 import { createCapabilityBroker, createTurnCapabilitySurface } from "@vc-agent/capabilities";
+import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter";
 
 function metadata(
   id: string,
@@ -31,6 +32,7 @@ const inventory = [
   metadata("web_fetch", ["unscoped", "project"], "ordinary_task", "network_read"),
   metadata("memory_recall", ["unscoped", "project"]),
   metadata("output.write_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("output.edit_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("reflection_evidence_drilldown", ["project"])
 ];
 
@@ -90,6 +92,32 @@ describe("TurnCapabilitySurface", () => {
     expect(surface.requestableCatalog).toEqual([]);
   });
 
+  it("preloads native read-only tools only for an ordinary Project surface", () => {
+    const withProjectTools = [...inventory, ...PROJECT_READ_TOOL_METADATA];
+    const ordinary = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory: withProjectTools,
+      preloadHints: PROJECT_READ_TOOL_NAMES
+    });
+    const unscoped = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "unscoped",
+      inventory: withProjectTools,
+      preloadHints: PROJECT_READ_TOOL_NAMES
+    });
+    const reflection = createTurnCapabilitySurface({
+      kind: "reflection_dialogue",
+      scope: "project",
+      inventory: withProjectTools,
+      fixedCapabilityIds: ["memory_recall"]
+    });
+
+    expect(ordinary.visibleCapabilityIds).toEqual(expect.arrayContaining(PROJECT_READ_TOOL_NAMES));
+    expect(unscoped.visibleCapabilityIds).not.toEqual(expect.arrayContaining(PROJECT_READ_TOOL_NAMES));
+    expect(reflection.visibleCapabilityIds).toEqual(["memory_recall"]);
+  });
+
   it("allows explicit output preload without making it ordinary common-read", () => {
     const surface = createTurnCapabilitySurface({
       kind: "ordinary",
@@ -100,6 +128,20 @@ describe("TurnCapabilitySurface", () => {
 
     expect(surface.visibleCapabilityIds).toContain("output.write_text");
     expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "output.write_text" }));
+  });
+
+  it("exposes the diff edit capability without also exposing whole-file replacement for edit-only intent", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      outputRequested: true,
+      outputCreateRequested: false,
+      preloadHints: ["output.edit_text"]
+    });
+
+    expect(surface.visibleCapabilityIds).toContain("output.edit_text");
+    expect(surface.visibleCapabilityIds).not.toContain("output.write_text");
   });
 
   it("supports catalog discovery and multi-capability activation through the broker", async () => {

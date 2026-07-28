@@ -117,7 +117,45 @@ const officeSkillJobCommandSchema = utilityJobBaseSchema.extend({
   maxOutputBytes: z.number().int().min(1_024).max(100_000_000)
 });
 
-export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema, officeSkillJobCommandSchema]);
+export const projectCommandInvocationSchema = z.discriminatedUnion("program", [
+  z.object({
+    program: z.literal("rg"),
+    query: z.string().min(1).max(1_000),
+    path: z.string().min(1).max(500).default("."),
+    glob: z.string().min(1).max(200).optional(),
+    ignoreCase: z.boolean().default(false)
+  }),
+  z.object({
+    program: z.literal("git"),
+    operation: z.enum(["status", "diff", "log"]),
+    path: z.string().min(1).max(500).optional(),
+    maxCount: z.number().int().min(1).max(100).default(20)
+  }),
+  z.object({
+    program: z.literal("pdfinfo"),
+    path: z.string().min(1).max(500)
+  })
+]);
+export type ProjectCommandInvocation = z.infer<typeof projectCommandInvocationSchema>;
+
+const projectCommandJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("project.command"),
+  projectRoot: z.string().min(1),
+  invocation: projectCommandInvocationSchema,
+  timeoutMs: z.number().int().min(1_000).max(30_000),
+  maxOutputBytes: z.number().int().min(1_024).max(20_000)
+});
+
+const academicPdfExtractJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("academic.pdf.extract"),
+  absolutePath: z.string().min(1),
+  expectedHash: z.string().regex(/^[a-f0-9]{64}$/),
+  maxChars: z.number().int().min(500).max(100_000),
+  timeoutMs: z.number().int().min(1_000).max(300_000),
+  maxOutputBytes: z.number().int().min(1_024).max(5_000_000)
+});
+
+export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema, officeSkillJobCommandSchema, projectCommandJobCommandSchema, academicPdfExtractJobCommandSchema]);
 export type UtilityJobCommand = z.infer<typeof utilityJobCommandSchema>;
 export type OfficeSkillJobCommand = z.infer<typeof officeSkillJobCommandSchema>;
 
@@ -138,6 +176,21 @@ export const utilityJobEventSchema = z.discriminatedUnion("event", [
   }),
   utilityJobBaseSchema.extend({ event: z.literal("page_recovery.ocr.failed"), stage: z.enum(["paddle", "ovis"]), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
   utilityJobBaseSchema.extend({ event: z.literal("office.skill.completed"), outputPath: z.string().min(1), outputBytes: z.number().int().nonnegative(), previewPath: z.string().min(1).optional(), warnings: z.array(z.string().min(1)).default([]) }),
-  utilityJobBaseSchema.extend({ event: z.literal("office.skill.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
+  utilityJobBaseSchema.extend({ event: z.literal("office.skill.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({ event: z.literal("project.command.completed"), exitCode: z.number().int(), stdout: z.string().max(20_000), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({ event: z.literal("project.command.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({
+    event: z.literal("academic.pdf.extract.completed"),
+    contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+    pageCount: z.number().int().positive(),
+    sections: z.array(z.object({
+      name: z.string().min(1),
+      pageFrom: z.number().int().positive(),
+      pageTo: z.number().int().positive(),
+      text: z.string()
+    })).max(50),
+    warnings: z.array(z.string().min(1)).max(50)
+  }),
+  utilityJobBaseSchema.extend({ event: z.literal("academic.pdf.extract.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) })
 ]);
 export type UtilityJobEvent = z.infer<typeof utilityJobEventSchema>;

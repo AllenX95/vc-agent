@@ -11,9 +11,13 @@ interface PendingJob {
 type MaterialParseCommand = Extract<UtilityJobCommand, { command: "material.parse" }>;
 type OcrCommand = Extract<UtilityJobCommand, { command: "page_recovery.ocr" }>;
 type OfficeCommand = Extract<UtilityJobCommand, { command: "office.skill" }>;
+type ProjectCommand = Extract<UtilityJobCommand, { command: "project.command" }>;
+type AcademicPdfCommand = Extract<UtilityJobCommand, { command: "academic.pdf.extract" }>;
 type MaterialParseEvent = Extract<UtilityJobEvent, { event: "material.parse.completed" | "material.parse.failed" }>;
 type OcrEvent = Extract<UtilityJobEvent, { event: "page_recovery.ocr.completed" | "page_recovery.ocr.failed" }>;
 type OfficeEvent = Extract<UtilityJobEvent, { event: "office.skill.completed" | "office.skill.failed" }>;
+type ProjectCommandEvent = Extract<UtilityJobEvent, { event: "project.command.completed" | "project.command.failed" }>;
+type AcademicPdfEvent = Extract<UtilityJobEvent, { event: "academic.pdf.extract.completed" | "academic.pdf.extract.failed" }>;
 
 export class UtilityJobRunner {
   readonly #entryPath: string;
@@ -31,6 +35,8 @@ export class UtilityJobRunner {
   run(command: MaterialParseCommand): Promise<MaterialParseEvent>;
   run(command: OcrCommand): Promise<OcrEvent>;
   run(command: OfficeCommand): Promise<OfficeEvent>;
+  run(command: ProjectCommand): Promise<ProjectCommandEvent>;
+  run(command: AcademicPdfCommand): Promise<AcademicPdfEvent>;
   run(command: UtilityJobCommand): Promise<UtilityJobEvent> {
     if (this.#closed) return Promise.resolve(failure(command, "UTILITY_WORKER_CLOSED", "Utility Worker is closed."));
     const result = this.#tail.then(() => this.#execute(command));
@@ -168,5 +174,7 @@ function utilityEnvironment(): NodeJS.ProcessEnv {
 function failure(command: UtilityJobCommand, code: string, message: string): UtilityJobEvent {
   if (command.command === "material.parse") return { schemaVersion: 1, jobId: command.jobId, event: "material.parse.failed", code, message, stderr: "" };
   if (command.command === "page_recovery.ocr") return { schemaVersion: 1, jobId: command.jobId, event: "page_recovery.ocr.failed", stage: command.stage, code, message, stderr: "" };
-  return { schemaVersion: 1, jobId: command.jobId, event: "office.skill.failed", code, message, stderr: "" };
+  if (command.command === "office.skill") return { schemaVersion: 1, jobId: command.jobId, event: "office.skill.failed", code, message, stderr: "" };
+  if (command.command === "project.command") return { schemaVersion: 1, jobId: command.jobId, event: "project.command.failed", code, message, stderr: "" };
+  return { schemaVersion: 1, jobId: command.jobId, event: "academic.pdf.extract.failed", code, message, stderr: "" };
 }

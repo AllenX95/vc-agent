@@ -540,6 +540,22 @@ _Avoid_: Canonical golden output, generic chat response, document type fixed by 
 A best-effort quality rule that makes verifiable facts traceable and keeps them distinguishable from user judgment, model inference, hypotheses, and intuition without requiring subjective investment views to be empirically proven.
 _Avoid_: Evidence gate, citation for every sentence, suppressing judgment, unsupported fact presented as certain
 
+**Academic Research**:
+A task-activated, Host-registered read capability that searches and resolves papers, authors, citation relationships, repositories, models, datasets, and demos through OpenAlex, arXiv, GitHub, and Hugging Face while preserving source type, retrieval time, partial failures, and evidence limitations.
+_Avoid_: General web fallback, source-specific model tools, automatic conference-acceptance proof, external code execution
+
+**Academic Evidence**:
+A source-referenced metadata, abstract, bounded paper-text, citation-graph, repository, README, commit-history, or Hub Card record returned by Academic Research. It records what fields it supports without promoting publisher or author claims into independent verification.
+_Avoid_: Memory, unsupported model fact, popularity metric as commercial evidence, full PDF retained in Thread context
+
+**Artifact Link**:
+An evidence-backed, confidence-labeled relationship between a Work and a GitHub or Hugging Face asset. Only explicit paper identifiers or cross-links support a high-confidence official-or-author-linked interpretation; name or keyword similarity remains a lower-confidence candidate.
+_Avoid_: Repository existence as completeness, third-party reproduction as official code, organization similarity as company proof
+
+**Academic Workflow Prototype**:
+A versioned Prompt-first instruction layer for one repeated academic VC task, activated only by explicit task intent and evaluated through Golden Cases before possible promotion to a First-party VC Skill.
+_Avoid_: Bundled Skill before validation, permanent Thread mode, dedicated form workflow
+
 **Material Judgment Disagreement**:
 An unresolved difference between the User's view and the LLM's independent judgment that could materially change an investment conclusion, risk assessment, core rationale, or recommended action.
 _Avoid_: Wording preference, minor emphasis difference, disagreement invented for balance

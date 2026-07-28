@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, type IpcMainInvokeEvent } from "electron";
@@ -8,6 +8,7 @@ import {
   hostCommandSchema,
   type ArtifactRecord,
   type ActorRef,
+  type AcademicCredentialSource,
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
   type DreamProfileSnapshot,
@@ -39,9 +40,11 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, capabilitiesForTurn, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
-import { BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
@@ -63,10 +66,16 @@ const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
 const configuredExecutionCapacity = Number.parseInt(process.env.VC_AGENT_EXECUTION_CAPACITY ?? "2", 10);
 const EXECUTION_CAPACITY = Number.isInteger(configuredExecutionCapacity) && configuredExecutionCapacity > 0 ? configuredExecutionCapacity : 2;
+const ACADEMIC_CREDENTIAL_ENVIRONMENT: Readonly<Record<AcademicCredentialSource, string>> = {
+  openalex: "OPENALEX_API_KEY",
+  github: "GITHUB_TOKEN",
+  huggingface: "HF_TOKEN"
+};
 const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "app.bootstrap",
   "state.recovery.export",
   "profile.list",
+  "academic.credentials.list",
   "skills.list",
   "skills.inspect",
   "integration.state.load",
@@ -90,6 +99,24 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "sub_agent.run.list",
   "sub_agent.run.inspect"
 ]);
+
+function resolveAcademicCredentials(): Partial<Record<AcademicCredentialSource, string>> {
+  const resolved: Partial<Record<AcademicCredentialSource, string>> = {};
+  for (const source of Object.keys(ACADEMIC_CREDENTIAL_ENVIRONMENT) as AcademicCredentialSource[]) {
+    const encrypted = stateStore?.getAcademicCredential(source);
+    if (encrypted !== undefined) {
+      try {
+        resolved[source] = credentials.decrypt(encrypted);
+      } catch {
+        continue;
+      }
+    } else {
+      const environmentValue = process.env[ACADEMIC_CREDENTIAL_ENVIRONMENT[source]];
+      if (environmentValue !== undefined && environmentValue.length > 0) resolved[source] = environmentValue;
+    }
+  }
+  return resolved;
+}
 
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
@@ -799,6 +826,8 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return { ...eventMetadata(command.correlationId), event: "access.mode.changed", payload: { mode: command.payload.mode } };
       case "profile.list":
         return { ...eventMetadata(command.correlationId), event: "profiles.listed", payload: { profiles: stateStore.listModelProfiles() } };
+      case "academic.credentials.list":
+        return { ...eventMetadata(command.correlationId), event: "academic.credentials.updated", payload: { credentials: stateStore.listAcademicCredentialStatuses(), action: "listed" } };
       case "skills.list":
         return skillsStateEvent(command.correlationId, "listed");
       case "skills.import": {
@@ -1040,6 +1069,16 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Credential setup requires explicit User action.");
         const profile = stateStore.setModelProfileCredential(command.payload.profileId, credentials.encrypt(command.payload.apiKey));
         return { ...eventMetadata(command.correlationId), event: "profile.credential.updated", payload: { profile } };
+      }
+      case "academic.credentials.set": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Academic source credential setup requires explicit User action.");
+        const statuses = stateStore.setAcademicCredential(command.payload.source, credentials.encrypt(command.payload.credential));
+        return { ...eventMetadata(command.correlationId), event: "academic.credentials.updated", payload: { credentials: statuses, action: "set" } };
+      }
+      case "academic.credentials.clear": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Academic source credential removal requires explicit User action.");
+        const statuses = stateStore.clearAcademicCredential(command.payload.source);
+        return { ...eventMetadata(command.correlationId), event: "academic.credentials.updated", payload: { credentials: statuses, action: "cleared" } };
       }
       case "prompt.revision.list": {
         const active = stateStore.getActiveSystemPromptRevision();
@@ -2190,30 +2229,44 @@ function submitTurn(
   const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
   const outputIntent = reflectionRun === undefined && detectOutputIntent(input.text);
+  const textEditIntent = reflectionRun === undefined && detectTextEditIntent(input.text);
   const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
+  const academicWorkflow = reflectionRun === undefined ? academicWorkflowPrototype(input.text) : undefined;
+  const effectiveAppendSystemPrompt = options.appendSystemPrompt
+    ?? (reflectionRun === undefined
+      ? academicWorkflow === undefined ? [] : [academicWorkflow.instructions]
+      : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS]);
   const preloadHints = reflectionRun === undefined
-    ? capabilitiesForTurn({
+    ? [
+        ...capabilitiesForTurn({
         scope: thread.scope,
         materialRecall: detectMaterialRecallIntent(input.text),
         projectStateRecall: detectProjectStateRecallIntent(input.text),
         memoryRecall: memoryRecallMode !== "none",
         webResearch: detectWebResearchIntent(input.text),
-        outputWrite: outputIntent
-      })
+        outputWrite: outputIntent && !textEditIntent
+      }),
+        ...(textEditIntent ? ["output.edit_text"] : []),
+        ...(detectAcademicResearchIntent(input.text) ? ["academic_research"] : []),
+        ...(thread.scope === "project" && detectProjectCommandIntent(input.text) ? ["project.command"] : []),
+        ...(thread.scope === "project" ? PROJECT_READ_TOOL_NAMES : [])
+      ]
     : [];
   const fixedCapabilityIds = reflectionRun === undefined
     ? []
     : [...(thread.scope === "project" ? ["memory_recall", "reflection_evidence_drilldown", "project_state_recall"] : ["memory_recall"]), ...(reflectionOutcomeIntent ? ["reflection_outcome_propose"] : [])];
+  const capabilityInventory = [...capabilityRegistry!.inventory(), ...PROJECT_READ_TOOL_METADATA];
   const capabilitySurface = createTurnCapabilitySurface({
     kind: reflectionRun === undefined ? "ordinary" : "reflection_dialogue",
     scope: thread.scope,
-    inventory: capabilityRegistry!.inventory(),
+    inventory: capabilityInventory,
     preloadHints,
     fixedCapabilityIds,
     outputRequested: outputIntent,
+    outputCreateRequested: outputIntent && !textEditIntent,
     explicitMemoryRecall: memoryRecallMode === "explicit",
     availability: {
       materials: thread.scope === "project" && stateStore!.listMaterials(thread.projectId).length > 0,
@@ -2235,8 +2288,8 @@ function submitTurn(
     hash: promptRevision.hash,
     contributions: {
       promptEstimatedTokens: estimateTokens(promptRevision.content),
-      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityRegistry!.inventory().filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
-      taskEstimatedTokens: estimateTokens(workerPrompt) + estimateTokens((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).join("\n")),
+      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
+      taskEstimatedTokens: estimateTokens(workerPrompt) + estimateTokens(effectiveAppendSystemPrompt.join("\n")),
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
@@ -2348,7 +2401,7 @@ function submitTurn(
     recallBodyBytes: 0,
     capabilityActivationCount: 0,
     ...(reflectionRun === undefined ? {} : { reflectionRunId: reflectionRun.id }),
-    ...((options.appendSystemPrompt ?? (reflectionRun === undefined ? [] : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS])).length === 0 ? {} : { appendSystemPrompt: options.appendSystemPrompt ?? [MEMORY_AWARE_REFLECTION_INSTRUCTIONS] }),
+    ...(effectiveAppendSystemPrompt.length === 0 ? {} : { appendSystemPrompt: effectiveAppendSystemPrompt }),
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
   const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
@@ -2579,6 +2632,10 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
 
   if (workerEvent.event === "capability.execution.requested") {
     void processCapabilityRequest(context, workerEvent);
+    return;
+  }
+  if (workerEvent.event === "native_tool.started" || workerEvent.event === "native_tool.completed") {
+    processNativeProjectToolEvent(context, workerEvent);
     return;
   }
 
@@ -2915,6 +2972,71 @@ function acknowledgeTrajectory(context: TurnContext, record: TrajectoryEvent): v
   });
 }
 
+function processNativeProjectToolEvent(
+  context: TurnContext,
+  workerEvent: Extract<WorkerEvent, { event: "native_tool.started" | "native_tool.completed" }>
+): void {
+  const requestId = `native:${workerEvent.toolCallId}`;
+  if (workerEvent.event === "native_tool.started") {
+    const started: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+      event: "tool.started",
+      payload: {
+        toolCallId: workerEvent.toolCallId,
+        capabilityId: workerEvent.toolName,
+        arguments: summarizeCapabilityArguments(workerEvent.arguments),
+        expectedStateVersion: context.expectedStateVersion
+      }
+    };
+    trajectoryStore!.append(started);
+    inflight!.startTool(
+      context.turnId,
+      { toolCallId: workerEvent.toolCallId, capabilityId: workerEvent.toolName },
+      workerEvent.workerSequence,
+      started.sequence
+    );
+    emit({
+      ...ipcMetadata(started),
+      event: "capability.execution.updated",
+      payload: {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        requestId,
+        capabilityId: workerEvent.toolName,
+        status: "started",
+        content: "Project read requested."
+      }
+    });
+    return;
+  }
+
+  const eventName = workerEvent.isError ? "tool.failed" : "tool.completed";
+  const terminal: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+    event: eventName,
+    payload: {
+      toolCallId: workerEvent.toolCallId,
+      capabilityId: workerEvent.toolName,
+      summary: workerEvent.content,
+      artifactIds: []
+    }
+  };
+  trajectoryStore!.append(terminal);
+  inflight!.finishTool(context.turnId, workerEvent.toolCallId, terminal.sequence);
+  emit({
+    ...ipcMetadata(terminal),
+    event: "capability.execution.updated",
+    payload: {
+      threadId: context.threadId,
+      turnId: context.turnId,
+      requestId,
+      capabilityId: workerEvent.toolName,
+      status: workerEvent.isError ? "failed" : "completed",
+      content: workerEvent.content
+    }
+  });
+}
+
 async function processCapabilityRequest(
   context: TurnContext,
   workerEvent: Extract<WorkerEvent, { event: "capability.execution.requested" }>
@@ -3100,7 +3222,8 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
       stateVersion: thread.stateVersion,
       activeCapabilityIds: context.executableCapabilityIds,
       outputIntent: context.outputIntent,
-      outputLocation: join(project.path, "outputs")
+      outputLocation: join(project.path, "outputs"),
+      projectRoot: project.path
     };
   }
   return {
@@ -3114,6 +3237,30 @@ function capabilityAuthorization(context: TurnContext): CapabilityAuthorizationS
 }
 
 function summarizeCapabilityArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(arguments_.operations)) {
+    const operations = arguments_.operations.filter((value): value is Record<string, unknown> => typeof value === "object" && value !== null);
+    return {
+      path: typeof arguments_.path === "string" ? arguments_.path : "",
+      operationCount: operations.length,
+      oldTextBytes: operations.reduce((sum, operation) => sum + (typeof operation.oldText === "string" ? Buffer.byteLength(operation.oldText, "utf8") : 0), 0),
+      newTextBytes: operations.reduce((sum, operation) => sum + (typeof operation.newText === "string" ? Buffer.byteLength(operation.newText, "utf8") : 0), 0)
+    };
+  }
+  if (arguments_.program === "git" || arguments_.program === "pdfinfo") {
+    return {
+      program: arguments_.program,
+      operation: typeof arguments_.operation === "string" ? arguments_.operation : undefined,
+      path: typeof arguments_.path === "string" ? arguments_.path : ""
+    };
+  }
+  if (arguments_.program === "rg") {
+    return {
+      program: "rg",
+      queryChars: typeof arguments_.query === "string" ? arguments_.query.length : 0,
+      path: typeof arguments_.path === "string" ? arguments_.path : ".",
+      glob: typeof arguments_.glob === "string" ? arguments_.glob : undefined
+    };
+  }
   if (typeof arguments_.url === "string") {
     return { url: arguments_.url, maxChars: typeof arguments_.maxChars === "number" ? arguments_.maxChars : undefined };
   }
@@ -3470,7 +3617,72 @@ app.whenReady().then(() => {
     skillsRoot: join(app.getPath("userData"), "skills")
   });
   capabilityRegistry = new CapabilityRegistry();
-  capabilityRegistry.register(createTextOutputCapability(new TextOutputStore()));
+  const textOutputStore = new TextOutputStore();
+  capabilityRegistry.register(createTextOutputCapability(textOutputStore));
+  capabilityRegistry.register(createTextEditCapability(textOutputStore));
+  capabilityRegistry.register(createProjectCommandCapability({
+    run: async ({ projectRoot, invocation }) => {
+      if (utilityJobRunner === null) throw new Error("Utility Worker is unavailable.");
+      const event = await utilityJobRunner.run({
+        schemaVersion: 1,
+        command: "project.command",
+        jobId: randomUUID(),
+        projectRoot,
+        invocation,
+        timeoutMs: 10_000,
+        maxOutputBytes: 20_000
+      });
+      if (event.event === "project.command.failed") {
+        return { exitCode: -1, stdout: "", stderr: `${event.code}: ${event.message}${event.stderr === "" ? "" : `\n${event.stderr}`}` };
+      }
+      return { exitCode: event.exitCode, stdout: event.stdout, stderr: event.stderr };
+    }
+  }));
+  const academicHttp = new DefaultAcademicHttpAccess();
+  const academicStagingRoot = join(app.getPath("userData"), "academic-research", "staging");
+  const configuredArxivIntervalMs = Number.parseInt(process.env.VC_AGENT_ARXIV_INTERVAL_MS ?? "3000", 10);
+  const academicResearch = new AcademicResearchService({
+    http: academicHttp,
+    runStore: new AcademicResearchRunStore(join(app.getPath("userData"), "academic-research", "runs")),
+    extractPdf: async ({ url, arxivId, maxChars, signal }) => {
+      if (utilityJobRunner === null) throw new Error("ACADEMIC_PDF_EXTRACTOR_UNAVAILABLE");
+      const response = await academicHttp.request({ url, signal, maxBytes: 50 * 1024 * 1024, timeoutMs: 30_000 });
+      if (!response.status.toString().startsWith("2")) throw new Error(`ARXIV_PDF_HTTP_${response.status}`);
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (!contentType.includes("pdf") && new TextDecoder().decode(response.body.subarray(0, 5)) !== "%PDF-") throw new Error("ARXIV_PDF_CONTENT_TYPE_INVALID");
+      const hash = createHash("sha256").update(response.body).digest("hex");
+      const jobId = randomUUID();
+      mkdirSync(academicStagingRoot, { recursive: true });
+      const stagedPath = join(academicStagingRoot, `${jobId}-${arxivId.replace(/[^A-Za-z0-9.-]/gu, "_")}.pdf`);
+      writeFileSync(stagedPath, response.body, { flag: "wx" });
+      try {
+        const event = await utilityJobRunner.run({
+          schemaVersion: 1,
+          command: "academic.pdf.extract",
+          jobId,
+          absolutePath: stagedPath,
+          expectedHash: hash,
+          maxChars,
+          timeoutMs: 120_000,
+          maxOutputBytes: 5_000_000
+        });
+        if (event.event === "academic.pdf.extract.failed") throw new Error(`${event.code}:${event.message}`);
+        return {
+          contentHash: event.contentHash,
+          pageCount: event.pageCount,
+          sections: event.sections,
+          warnings: event.warnings
+        };
+      } finally {
+        rmSync(stagedPath, { force: true });
+      }
+    },
+    arxivMinimumIntervalMs: Number.isFinite(configuredArxivIntervalMs) ? Math.max(3_000, configuredArxivIntervalMs) : 3_000
+  });
+  capabilityRegistry.register(createAcademicResearchCapability(async (input, context) => academicResearch.execute(input, {
+    turnId: context.request.turnId,
+    credentials: resolveAcademicCredentials()
+  })));
   capabilityRegistry.register(createCapabilityBroker((input, context) => {
     const turn = turnExecution!.getTurn(context.request.turnId);
     if (turn === undefined) return [];

@@ -50,6 +50,13 @@ const zhCN: Record<string, string> = {
   "Full access": "完全访问",
   "Compact thread": "压缩任务上下文",
   "Queue follow-up": "加入后续消息",
+  "Add to task": "添加到任务",
+  "Conversation Quotes": "对话引用",
+  "Conversation Quote": "对话引用",
+  "Remove conversation quote": "移除对话引用",
+  "Conversation Quote limit reached": "对话引用已达上限",
+  "Add selected text as a Conversation Quote": "将选中文字添加为对话引用",
+  "5 quote limit reached": "已达到 5 条引用上限",
   "Overview": "概览",
   "Outputs": "输出",
   "Context": "上下文",
@@ -126,6 +133,20 @@ const zhCN: Record<string, string> = {
   "Restore backup": "恢复备份",
   "Model Profiles": "模型配置",
   "Credentials are protected by Windows and stored only by reference.": "凭据由 Windows 保护，应用仅保存其引用。",
+  "Academic Research Sources": "学术研究数据源",
+  "Credentials are encrypted by Windows and are never exposed back to the interface. arXiv does not require a credential.": "凭据由 Windows 加密，界面不会回显凭据内容。arXiv 无需凭据。",
+  "OpenAlex API key": "OpenAlex API 密钥",
+  "GitHub token": "GitHub 令牌",
+  "Hugging Face token": "Hugging Face 令牌",
+  "Required for OpenAlex paper, author, institution, and citation queries.": "用于 OpenAlex 的论文、作者、机构和引用查询，必须配置。",
+  "Optional but recommended for higher public repository API limits.": "可选；建议配置，以获得更高的公开仓库 API 限额。",
+  "Optional for public Hub assets; enables authenticated Hub requests when required.": "访问公开 Hub 资产时可选；需要时可用于认证请求。",
+  "Configured": "已配置",
+  "Not configured": "未配置",
+  "Enter credential": "输入凭据",
+  "Enter replacement credential": "输入新凭据",
+  "Replace": "替换",
+  "Remove": "移除",
   "New profile": "新建配置",
   "No model profiles": "暂无模型配置",
   "Name": "名称",
@@ -299,7 +320,7 @@ const translatedAttributes = ["aria-label", "title", "placeholder"] as const;
 
 function shouldSkip(node: Node): boolean {
   const parent = node.parentElement;
-  return parent?.closest(".message-content, .user-message, .system-event, .web-source p, textarea, pre, code") !== null;
+  return parent?.closest(".message-content, .user-message, .system-event, .web-source p, .conversation-quote-text, textarea, pre, code") !== null;
 }
 
 function localizeNode(node: Node, language: UiLanguage): void {

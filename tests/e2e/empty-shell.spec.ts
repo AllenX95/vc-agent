@@ -59,6 +59,14 @@ test("launches the empty shell without activating execution resources", async ()
     }
     await expect(window.getByRole("heading", { name: "Environment Doctor" })).toBeVisible();
     await expect(window.getByRole("heading", { name: "Learning telemetry" })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "Academic Research Sources" })).toBeVisible();
+    const openAlexCredential = window.getByLabel("OpenAlex API key credential");
+    const openAlexRow = openAlexCredential.locator("xpath=ancestor::*[contains(@class,'academic-credential-row')]");
+    await expect(openAlexRow.getByText("Not configured", { exact: true })).toBeVisible();
+    await openAlexCredential.fill("openalex-e2e-secret");
+    await openAlexRow.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(openAlexRow.getByText("Configured", { exact: true })).toBeVisible();
+    await expect(openAlexCredential).toHaveValue("");
     await expect(window.getByText("Remote content telemetry", { exact: true })).toBeVisible();
     for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Migration", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
     for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "MCP", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
@@ -1298,6 +1306,12 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
       await expect(window.locator(".tool-activity").filter({ hasText: capability })).toContainText("completed");
     }
+    const materialActivity = window.locator("details.tool-activity").filter({ hasText: "material_recall" });
+    await expect(materialActivity).not.toHaveAttribute("open", "");
+    await expect(materialActivity.locator(".tool-activity-content")).not.toBeVisible();
+    await materialActivity.locator("summary").click();
+    await expect(materialActivity.locator(".tool-activity-content")).toBeVisible();
+    await expect(materialActivity.locator(".tool-activity-content")).toContainText("memo.md");
     await expect(window.locator(".usage-row")).toContainText("reserve");
     await expect(window.locator(".usage-row")).toContainText("recall");
     await expect(window.locator(".usage-row")).toContainText("ms");

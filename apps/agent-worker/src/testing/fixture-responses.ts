@@ -13,7 +13,7 @@ export function dogfoodFixtureResponses() {
       sourceReferences: ["material-inventory", "project-context:current-working-state", "project-memory:risk", "https://example.com/market"],
       warnings: ["Fixture evidence is intentionally bounded; the investment inference remains uncertain."]
     }), { stopReason: "toolUse" }),
-    fauxAssistantMessage("Completed the bounded project review and created dogfood-investment-note.md.")
+    fauxAssistantMessage("## Markdown Fixture\n\nCompleted the bounded project review and created dogfood-investment-note.md.\n\nRendered with **strong emphasis**.\n\n<span>unsafe fixture markup</span>")
   ];
 }
 

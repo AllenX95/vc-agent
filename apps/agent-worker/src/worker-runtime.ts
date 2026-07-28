@@ -135,6 +135,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
     if (runtime.session === null) {
       const sessionConfig = {
         cwd: command.cwd,
+        ...(command.executionScope.kind === "project" ? { projectReadRoot: command.cwd } : {}),
         threadDirectory: command.threadDirectory,
         ...(command.previousSessionFile === undefined ? {} : { previousSessionFile: command.previousSessionFile }),
         ...(command.hostHighWater === undefined ? {} : { hostHighWater: command.hostHighWater }),
@@ -153,6 +154,23 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
           send(runtime, { ...workerMetadata(activeCommand), event: "message.delta", delta: event.delta });
         } else if (event.type === "thinking_delta") {
           send(runtime, { ...workerMetadata(activeCommand), event: "thinking.delta", delta: event.delta });
+        } else if (event.type === "tool_started") {
+          send(runtime, {
+            ...workerMetadata(activeCommand),
+            event: "native_tool.started",
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            arguments: event.arguments
+          });
+        } else if (event.type === "tool_completed") {
+          send(runtime, {
+            ...workerMetadata(activeCommand),
+            event: "native_tool.completed",
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            content: event.content,
+            isError: event.isError
+          });
         } else if (event.type === "completed") {
           send(runtime, {
             ...workerMetadata(activeCommand), event: "turn.completed", message: event.message, usage: mapUsage(event.usage),

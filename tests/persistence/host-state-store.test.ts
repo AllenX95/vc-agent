@@ -139,6 +139,30 @@ describe("HostStateStore", () => {
     store.close();
   });
 
+  it("stores academic source credentials as protected values and exposes status only", () => {
+    const { store, databasePath } = createStore();
+    expect(store.listAcademicCredentialStatuses()).toEqual([
+      { source: "openalex", configured: false },
+      { source: "github", configured: false },
+      { source: "huggingface", configured: false }
+    ]);
+
+    const first = Uint8Array.from([7, 1, 9, 4]);
+    expect(store.setAcademicCredential("openalex", first)).toContainEqual({ source: "openalex", configured: true });
+    expect(store.getAcademicCredential("openalex")).toEqual(first);
+
+    const replacement = Uint8Array.from([8, 2, 6]);
+    store.setAcademicCredential("openalex", replacement);
+    expect(store.getAcademicCredential("openalex")).toEqual(replacement);
+    expect(store.clearAcademicCredential("openalex")).toContainEqual({ source: "openalex", configured: false });
+    expect(store.getAcademicCredential("openalex")).toBeUndefined();
+    store.close();
+
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    expect(database.prepare("SELECT COUNT(*) AS count FROM protected_credentials WHERE id LIKE 'academic-source:%'").get()).toMatchObject({ count: 0 });
+    database.close();
+  });
+
   it("updates a saved Model Profile while preserving its protected credential", () => {
     const { store } = createStore();
     const encryptedCredential = Uint8Array.from([4, 2, 4, 2]);

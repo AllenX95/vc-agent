@@ -64,6 +64,7 @@ describe("bounded material recall", () => {
 
   it("detects explicit Material and Project Context intent without treating normal chat as retrieval", () => {
     expect(detectMaterialRecallIntent("根据当前项目中的材料和 BP 做全面分析")).toBe(true);
+    expect(detectMaterialRecallIntent("分析一下公司的重点技术成果pdf，评估一下公司的技术能力。")).toBe(true);
     expect(detectMaterialRecallIntent("你好，先讨论一下投资框架")).toBe(false);
     expect(detectProjectStateRecallIntent("读取当前项目背景和项目状态")).toBe(true);
     expect(detectProjectStateRecallIntent("Use project materials, Context and Memory.")).toBe(true);

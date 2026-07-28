@@ -36,6 +36,15 @@ export const modelProfileSchema = z.object({
 });
 export type ModelProfile = z.infer<typeof modelProfileSchema>;
 
+export const academicCredentialSourceSchema = z.enum(["openalex", "github", "huggingface"]);
+export type AcademicCredentialSource = z.infer<typeof academicCredentialSourceSchema>;
+
+export const academicCredentialStatusSchema = z.object({
+  source: academicCredentialSourceSchema,
+  configured: z.boolean()
+});
+export type AcademicCredentialStatus = z.infer<typeof academicCredentialStatusSchema>;
+
 export const skillFindingSchema = z.object({
   code: z.enum(["SKILL_REFERENCE_MISSING", "SKILL_METADATA_INVALID", "SKILL_DIRECTIVE_UNSUPPORTED", "SKILL_DEPENDENCY_UNDECLARED", "SKILL_PATH_ESCAPE", "SKILL_COPY_FAILED", "SKILL_RESOURCE_LIMIT_EXCEEDED", "SKILL_HASH_MISMATCH"]),
   severity: z.enum(["info", "warning", "block"]),
@@ -625,6 +634,15 @@ const updateProfileCommandSchema = commandMetadataSchema.extend({
   }).and(profileLimitOverridesSchema)
 });
 const setProfileCredentialCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.credential.set"), payload: z.object({ profileId: z.string().min(1), apiKey: z.string().min(1).max(8192) }) });
+const listAcademicCredentialsCommandSchema = commandMetadataSchema.extend({ command: z.literal("academic.credentials.list") });
+const setAcademicCredentialCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("academic.credentials.set"),
+  payload: z.object({ source: academicCredentialSourceSchema, credential: z.string().min(1).max(8192) })
+});
+const clearAcademicCredentialCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("academic.credentials.clear"),
+  payload: z.object({ source: academicCredentialSourceSchema })
+});
 const listPromptRevisionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("prompt.revision.list") });
 const createPromptRevisionCommandSchema = commandMetadataSchema.extend({
   command: z.literal("prompt.revision.create"),
@@ -846,6 +864,9 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   createProfileCommandSchema,
   updateProfileCommandSchema,
   setProfileCredentialCommandSchema,
+  listAcademicCredentialsCommandSchema,
+  setAcademicCredentialCommandSchema,
+  clearAcademicCredentialCommandSchema,
   listPromptRevisionsCommandSchema,
   createPromptRevisionCommandSchema,
   activatePromptRevisionCommandSchema,
@@ -1064,6 +1085,13 @@ const officeArtifactOpenedEventSchema = eventMetadataSchema.extend({
   payload: z.object({ resultId: z.string().uuid(), artifact: z.enum(["staged_output", "change_summary", "preview"]) })
 });
 const profileCredentialUpdatedEventSchema = eventMetadataSchema.extend({ event: z.literal("profile.credential.updated"), payload: z.object({ profile: modelProfileSchema }) });
+const academicCredentialsUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("academic.credentials.updated"),
+  payload: z.object({
+    credentials: z.array(academicCredentialStatusSchema).length(3),
+    action: z.enum(["listed", "set", "cleared"])
+  })
+});
 const promptRevisionsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("prompt.revisions.listed"),
   payload: z.object({ activeRevisionId: z.string().uuid(), revisions: z.array(systemPromptRevisionSchema) })
@@ -1317,7 +1345,8 @@ const capabilityConfirmationRequiredEventSchema = eventMetadataSchema.extend({
     action: z.string().min(1),
     target: z.string().min(1),
     reason: z.string().min(1),
-    expectedEffect: z.string().min(1)
+    expectedEffect: z.string().min(1),
+    preview: z.string().max(20_000).optional()
   })
 });
 const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
@@ -1375,6 +1404,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   profilesListedEventSchema,
   profileCreatedEventSchema,
   profileUpdatedEventSchema,
+  academicCredentialsUpdatedEventSchema,
   skillsUpdatedEventSchema,
   integrationStateUpdatedEventSchema,
   integrationJobUpdatedEventSchema,

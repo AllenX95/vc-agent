@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type Page } from "@playwright/test";
+import { _electron as electron, expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,6 +21,36 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
 
     await expect(fixture.window.locator(".assistant-message.completed").last()).toBeVisible({ timeout: 10_000 });
     await expect(fixture.window.locator(".provider-failure")).toHaveCount(0);
+    const response = fixture.window.locator(".assistant-message.completed").last();
+    await expect(response.getByRole("heading", { name: "Markdown Fixture" })).toBeVisible();
+    await expect(response.locator("strong")).toHaveText("strong emphasis");
+    await expect(response.locator("span", { hasText: "unsafe fixture markup" })).toHaveCount(0);
+
+    await selectElementText(response.locator("strong"));
+    await fixture.window.getByRole("button", { name: "Add to task" }).click();
+    const quotes = fixture.window.getByLabel("Conversation Quotes");
+    await expect(quotes).toContainText("strong emphasis");
+    await expect(fixture.window.getByLabel("Message")).toBeFocused();
+
+    await quotes.getByRole("button", { name: "Remove conversation quote" }).click();
+    await expect(quotes).toHaveCount(0);
+
+    await selectElementText(response.locator("strong"));
+    await fixture.window.getByRole("button", { name: "Add to task" }).click();
+    await fixture.window.getByLabel("Message").fill("Focus on this excerpt.");
+    await fixture.window.getByRole("button", { name: "Send" }).click();
+    const submitted = fixture.window.locator(".user-message").last();
+    await expect(submitted.locator(".submitted-conversation-quote")).toContainText("strong emphasis");
+    await expect(submitted.locator(".user-message-text")).toHaveText("Focus on this excerpt.");
+    await expect(submitted).not.toContainText("<conversation_quotes>");
+    await expect.poll(() => latestSubmittedText(fixture.trajectoryPath)).toContain('<conversation_quote source_turn="');
+    await expect(fixture.window.locator(".assistant-message.completed")).toHaveCount(2, { timeout: 10_000 });
+
+    await fixture.window.reload();
+    await fixture.window.getByRole("button", { name: "Worker Bundle Test", exact: true }).click();
+    const restored = fixture.window.locator(".user-message").last();
+    await expect(restored.locator(".submitted-conversation-quote")).toContainText("strong emphasis");
+    await expect(restored.locator(".user-message-text")).toHaveText("Focus on this excerpt.");
   } finally {
     await fixture.close();
   }
@@ -76,12 +106,31 @@ async function launchWorkerFixture(extraEnvironment: Record<string, string> = {}
 
   return {
     window,
+    trajectoryPath: join(userDataDirectory, "threads", threadId, "trajectory.jsonl"),
     close: async () => {
       await application.close();
       rmSync(userDataDirectory, { recursive: true, force: true });
       rmSync(projectDirectory, { recursive: true, force: true });
     }
   };
+}
+
+async function selectElementText(element: Locator) {
+  await element.evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+  });
+}
+
+function latestSubmittedText(trajectoryPath: string): string {
+  return readFileSync(trajectoryPath, "utf8").trim().split("\n").flatMap((line) => {
+    const event = JSON.parse(line) as { event?: unknown; payload?: { text?: unknown } };
+    return event.event === "turn.submitted" && typeof event.payload?.text === "string" ? [event.payload.text] : [];
+  }).at(-1) ?? "";
 }
 
 async function invoke(window: Page, command: string, payload: Record<string, unknown> = {}) {

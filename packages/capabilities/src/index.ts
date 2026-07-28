@@ -40,6 +40,7 @@ export interface CapabilityExecutionContext {
   readonly request: CapabilityExecutionRequest;
   readonly accessMode: AccessMode;
   readonly outputLocation?: string;
+  readonly projectRoot?: string;
   readonly sensitiveActionApproved?: boolean;
 }
 
@@ -48,7 +49,19 @@ export interface SensitiveAction {
   readonly target: string;
   readonly reason: string;
   readonly expectedEffect: string;
+  readonly preview?: string;
 }
+
+export {
+  createProjectCommandCapability,
+  createTextEditCapability,
+  type ProjectCommandExecutor,
+  type ProjectCommandResult
+} from "./controlled-project-tools.js";
+export {
+  createAcademicResearchCapability,
+  type AcademicResearchExecutor
+} from "./academic-research.js";
 
 export interface CapabilityDefinition<TInput extends Record<string, unknown> = Record<string, unknown>> {
   readonly metadata: CapabilityMetadata;
@@ -184,9 +197,9 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
   return {
     metadata: {
       id: "output.write_text",
-      version: "1.0.0",
+      version: "1.1.0",
       label: "Write text output",
-      description: "Create a requested UTF-8 text or Markdown deliverable. Distinguish sourced facts, inference, uncertainty, and material disagreement where relevant, and supply stable Material references or public URLs used.",
+      description: "Create a new requested UTF-8 text or Markdown deliverable. Do not use this to edit an existing Output; use output.edit_text so the User can review a diff. Distinguish sourced facts, inference, uncertainty, and material disagreement, and supply stable Material references or public URLs used.",
       useWhen: "Use only when the User asks for a durable text or Markdown deliverable.",
       tier: "preconditioned",
       activationClass: "preconditioned_execution",
@@ -373,8 +386,8 @@ export function createMaterialRecallCapability(
 ): CapabilityDefinition<z.infer<typeof materialRecallInputSchema>> {
   return {
     metadata: {
-      id: "material_recall", version: "1.0.0", label: "Recall material",
-      description: "Inspect scoped Material cards, outlines, or bounded source-referenced blocks from project files, attachments, BP, technical-result, or financial materials. Expand progressively and respect omitted-content warnings.",
+      id: "material_recall", version: "1.1.0", label: "List and read project materials",
+      description: "List scoped Project files as Material cards, then inspect outlines or bounded source-referenced blocks from attachments, BP, technical-result, or financial materials. Expand progressively and respect omitted-content warnings.",
       useWhen: "Use when a factual claim depends on a project file, attachment, BP, technical result, or financial material.",
       tier: "common_read",
       activationClass: "ordinary_task", sideEffectClass: "local_read", allowedScopes: ["unscoped", "project"], executor: "host", modelCallable: true,

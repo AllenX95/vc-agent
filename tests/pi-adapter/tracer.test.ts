@@ -370,6 +370,35 @@ describe("real Pi SDK tracer", () => {
     handle.dispose();
   });
 
+  it("forwards native Project read tool lifecycle events without duplicating Host capability events", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-native-read-"));
+    temporaryDirectories.push(cwd);
+    writeFileSync(join(cwd, "company.txt"), "Project company context");
+    const events: PiSessionEvent[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        projectReadRoot: cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("read", { path: "company.txt" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("I inspected the Project file.")
+      ],
+      onEvent: (event) => events.push(event)
+    });
+
+    await handle.submit("Inspect company.txt.", { activeCapabilities: ["read"] });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_started", toolName: "read", arguments: { path: "company.txt" } }),
+      expect.objectContaining({ type: "tool_completed", toolName: "read", content: expect.stringContaining("Project company context"), isError: false })
+    ]));
+    handle.dispose();
+  });
+
   it("classifies the local idle watchdog as a Worker failure rather than a Provider failure", () => {
     const failure = sanitizeProviderFailure(
       new AgentTurnIdleTimeoutError(120_000),

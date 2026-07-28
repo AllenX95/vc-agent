@@ -37,6 +37,8 @@ export interface TurnCapabilitySurfaceInput {
   readonly preloadHints?: readonly string[];
   readonly fixedCapabilityIds?: readonly string[];
   readonly outputRequested?: boolean;
+  /** Separates new-Output creation from an edit-only Output intent. Defaults to outputRequested for compatibility. */
+  readonly outputCreateRequested?: boolean;
   readonly explicitMemoryRecall?: boolean;
   readonly availability?: Partial<TurnCapabilityAvailability>;
   readonly schemaTokenBudget?: number;
@@ -121,7 +123,7 @@ function ordinaryVisibleIds(
     if (metadata.activationClass === "protected_workflow" || metadata.activationClass === "host_only") continue;
     if (!ids.includes(hint)) ids.push(hint);
   }
-  if (input.outputRequested === true) addIfAllowed(ids, "output.write_text", input, byId);
+  if ((input.outputCreateRequested ?? input.outputRequested) === true) addIfAllowed(ids, "output.write_text", input, byId);
   if (input.explicitMemoryRecall === true) addIfAllowed(ids, "memory_recall", input, byId);
   return ids;
 }
@@ -165,6 +167,7 @@ function availableForOrdinaryCapability(id: string, input: TurnCapabilitySurface
   if (id === "material_recall") return input.scope === "project" ? availability.materials : availability.directAttachments;
   if (id === "project_state_recall") return input.scope === "project" && availability.projectContext;
   if (id === "web_search" || id === "web_fetch") return availability.publicWeb;
+  if (id === "output.write_text") return (input.outputCreateRequested ?? input.outputRequested) === true;
   return true;
 }
 

@@ -137,6 +137,34 @@ describe("versioned IPC contracts", () => {
     expect(hostCommandSchema.safeParse({ ...command, payload: { ...command.payload, maxOutputTokens: 200_000 } }).success).toBe(false);
   });
 
+  it("supports protected academic source credential configuration without returning secrets", () => {
+    const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "academic.credentials.list" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "academic.credentials.set", payload: { source: "openalex", credential: "secret-value" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "academic.credentials.clear", payload: { source: "github" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "academic.credentials.set", payload: { source: "arxiv", credential: "not-supported" } }).success).toBe(false);
+
+    const event = {
+      schemaVersion: 1,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 0,
+      actor: { actorType: "host", actorId: "desktop-host" },
+      provenance: { producerType: "host", producerId: "desktop-host" },
+      occurredAt: new Date().toISOString(),
+      event: "academic.credentials.updated",
+      payload: {
+        credentials: [
+          { source: "openalex", configured: true },
+          { source: "github", configured: false },
+          { source: "huggingface", configured: false }
+        ],
+        action: "set"
+      }
+    };
+    expect(hostEventSchema.parse(event)).not.toHaveProperty("payload.credential");
+  });
+
   it("requires explicit confirmation to delete an entire Thread", () => {
     const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
     const command = { ...metadata, command: "thread.delete", payload: { threadId: "thread-1", confirmed: true } };

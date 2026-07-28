@@ -10,12 +10,16 @@ import {
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CAPABILITY_INPUT_LIMITS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
+import { CAPABILITY_INPUT_LIMITS, CAPABILITY_RESULT_CONTENT_MAX_CHARS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
 import {
   SnapshotResourceLoader,
   type ExtensionInventorySnapshot,
   type RuntimeResourceSnapshot
 } from "./snapshot-resource-loader.js";
+import {
+  createProjectReadToolDefinitions
+} from "./project-read-tools.js";
+import { isProjectReadToolName, type ProjectReadToolName } from "./project-read-tool-metadata.js";
 
 export interface PiSessionProfile {
   readonly provider: string;
@@ -42,6 +46,7 @@ export class AgentTurnIdleTimeoutError extends Error {
 
 export interface PiSessionConfig {
   readonly cwd: string;
+  readonly projectReadRoot?: string;
   readonly threadDirectory: string;
   readonly previousSessionFile?: string;
   readonly hostHighWater?: { readonly eventId: string; readonly sequence: number };
@@ -61,6 +66,8 @@ export interface PiSessionConfig {
 export type PiSessionEvent =
   | { readonly type: "text_delta"; readonly delta: string }
   | { readonly type: "thinking_delta"; readonly delta: string }
+  | { readonly type: "tool_started"; readonly toolCallId: string; readonly toolName: ProjectReadToolName; readonly arguments: Record<string, unknown> }
+  | { readonly type: "tool_completed"; readonly toolCallId: string; readonly toolName: ProjectReadToolName; readonly content: string; readonly isError: boolean }
   | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly contextUsage?: PiContextUsage; readonly responseId?: string; readonly piEntryId?: string }
   | { readonly type: "compaction_started"; readonly reason: "manual" | "threshold" | "overflow" }
   | { readonly type: "compaction_completed"; readonly reason: "manual" | "threshold" | "overflow"; readonly tokensBefore: number; readonly estimatedTokensAfter?: number }
@@ -186,7 +193,10 @@ export async function createPiSessionUsingRuntime(
           refreshTurnIdleTimeout();
         }
       };
-  const customTools = capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef);
+  const customTools = [
+    ...(config.projectReadRoot === undefined ? [] : createProjectReadToolDefinitions(config.projectReadRoot)),
+    ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef))
+  ];
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
@@ -294,8 +304,8 @@ function createCapabilityProxies(
   });
   const materialRecall = defineTool({
     name: "material_recall",
-    label: "Recall material",
-    description: "Start with cards or outline, then request bounded source-referenced excerpts. Never claim omitted blocks were read.",
+    label: "List and read project materials",
+    description: "List available Project files with disclosureLevel=cards, then select a materialId and request its outline or bounded source-referenced excerpts. Use this instead of public web search when the User names a local Project file. Never claim omitted blocks were read.",
     parameters: Type.Object({
       disclosureLevel: Type.Union([Type.Literal("cards"), Type.Literal("outline"), Type.Literal("excerpt"), Type.Literal("full")]),
       materialId: Type.Optional(Type.String()),
@@ -388,7 +398,90 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
   });
-  return [capabilityRequest, materialRecall, reflectionEvidenceDrilldown, projectStateRecall, memoryRecall, reflectionOutcomePropose, webSearch, webFetch, createTextOutputProxy(proxy)];
+  const academicResearch = defineTool({
+    name: "academic_research",
+    label: "Research academic evidence",
+    description: "Search and inspect AI papers, authors, citations, GitHub repositories, and Hugging Face assets through OpenAlex, arXiv, GitHub, and Hugging Face. Treat preprints, indexed metadata, repository READMEs, and Hub Cards according to their evidence type; this cannot prove conference acceptance, employment, financing, patents, or commercial adoption.",
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("search"),
+        Type.Literal("resolve"),
+        Type.Literal("inspect"),
+        Type.Literal("graph"),
+        Type.Literal("fetch_content"),
+        Type.Literal("link_artifacts")
+      ]),
+      queries: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 6 })),
+      identifier: Type.Optional(Type.Object({
+        kind: Type.Union([
+          Type.Literal("title"),
+          Type.Literal("doi"),
+          Type.Literal("arxiv"),
+          Type.Literal("openalex"),
+          Type.Literal("url"),
+          Type.Literal("github"),
+          Type.Literal("huggingface")
+        ]),
+        value: Type.String({ maxLength: 2_000 })
+      })),
+      targets: Type.Optional(Type.Array(Type.Union([
+        Type.Literal("works"),
+        Type.Literal("authors"),
+        Type.Literal("repositories"),
+        Type.Literal("models"),
+        Type.Literal("datasets"),
+        Type.Literal("spaces")
+      ]), { maxItems: 6 })),
+      sources: Type.Optional(Type.Array(Type.Union([
+        Type.Literal("openalex"),
+        Type.Literal("arxiv"),
+        Type.Literal("github"),
+        Type.Literal("huggingface")
+      ]), { maxItems: 4 })),
+      filters: Type.Optional(Type.Object({
+        dateFrom: Type.Optional(Type.String()),
+        dateTo: Type.Optional(Type.String()),
+        authors: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
+        institutions: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
+        categories: Type.Optional(Type.Array(Type.String(), { maxItems: 20 })),
+        minStars: Type.Optional(Type.Number({ minimum: 0 })),
+        updatedAfter: Type.Optional(Type.String())
+      })),
+      relation: Type.Optional(Type.Union([
+        Type.Literal("references"),
+        Type.Literal("citations"),
+        Type.Literal("related"),
+        Type.Literal("coauthors"),
+        Type.Literal("artifacts")
+      ])),
+      contentLevel: Type.Optional(Type.Union([Type.Literal("metadata"), Type.Literal("abstract"), Type.Literal("sections")])),
+      sort: Type.Optional(Type.Union([
+        Type.Literal("relevance"),
+        Type.Literal("recent"),
+        Type.Literal("citations"),
+        Type.Literal("activity"),
+        Type.Literal("popularity")
+      ])),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.academicResearch.maxItems })),
+      maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.academicResearch.maxChars }))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "academic_research", params, signal))
+  });
+  return [
+    capabilityRequest,
+    materialRecall,
+    reflectionEvidenceDrilldown,
+    projectStateRecall,
+    memoryRecall,
+    reflectionOutcomePropose,
+    webSearch,
+    webFetch,
+    academicResearch,
+    createTextOutputProxy(proxy),
+    createTextEditProxy(proxy),
+    createProjectCommandProxy(proxy)
+  ];
 }
 
 function toolResult(result: CapabilityExecutionResult) {
@@ -404,7 +497,7 @@ function createTextOutputProxy(
   return defineTool({
     name: "output.write_text",
     label: "Write text output",
-    description: "Create a requested text deliverable in the current Thread's authorized Output Location. Use only when the User explicitly requested a file or document.",
+    description: "Create a new requested text deliverable in the current Thread's authorized Output Location. Use only when the User explicitly requested a new file; use output.edit_text for an existing Output.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative output filename or path" }),
       content: Type.String({ description: "Complete UTF-8 text content" }),
@@ -420,6 +513,62 @@ function createTextOutputProxy(
       const result = await proxy(toolCallId, "output.write_text", params, signal);
       return toolResult(result);
     }
+  });
+}
+
+function createTextEditProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: "output.edit_text",
+    label: "Propose text Output edit",
+    description: "Propose exact replacements in an existing text or Markdown Output. The Host presents a diff and applies it only after User confirmation.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Relative path inside the authorized Output Location" }),
+      operations: Type.Array(Type.Object({
+        oldText: Type.String({ description: "Exact existing text that must match once" }),
+        newText: Type.String({ description: "Replacement text" }),
+        reason: Type.String({ description: "Why this replacement is needed" })
+      }), { minItems: 1, maxItems: 50 }),
+      mediaType: Type.Optional(Type.String()),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String()))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) =>
+      toolResult(await proxy(toolCallId, "output.edit_text", params, signal))
+  });
+}
+
+function createProjectCommandProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: "project.command",
+    label: "Run read-only Project command",
+    description: "Run one structured read-only rg, git status/diff/log, or pdfinfo operation in the active Project. Never use this to replace OCR, PDF parsing, Office integrations, or file writes.",
+    parameters: Type.Union([
+      Type.Object({
+        program: Type.Literal("rg"),
+        query: Type.String(),
+        path: Type.Optional(Type.String()),
+        glob: Type.Optional(Type.String()),
+        ignoreCase: Type.Optional(Type.Boolean())
+      }),
+      Type.Object({
+        program: Type.Literal("git"),
+        operation: Type.Union([Type.Literal("status"), Type.Literal("diff"), Type.Literal("log")]),
+        path: Type.Optional(Type.String()),
+        maxCount: Type.Optional(Type.Number({ minimum: 1, maximum: 100 }))
+      }),
+      Type.Object({
+        program: Type.Literal("pdfinfo"),
+        path: Type.String()
+      })
+    ]),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) =>
+      toolResult(await proxy(toolCallId, "project.command", params, signal))
   });
 }
 
@@ -525,6 +674,25 @@ function emptyUsage(): Usage {
 function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEvent) => void): () => void {
   let turnUsage = emptyUsage();
   session.subscribe((event) => {
+    if (event.type === "tool_execution_start" && isProjectReadToolName(event.toolName)) {
+      onEvent({
+        type: "tool_started",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        arguments: asToolArguments(event.args)
+      });
+      return;
+    }
+    if (event.type === "tool_execution_end" && isProjectReadToolName(event.toolName)) {
+      onEvent({
+        type: "tool_completed",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        content: summarizeToolResult(event.result),
+        isError: event.isError
+      });
+      return;
+    }
     if (event.type === "compaction_start") {
       onEvent({ type: "compaction_started", reason: event.reason });
       return;
@@ -569,6 +737,25 @@ function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEve
     }
   });
   return () => { turnUsage = emptyUsage(); };
+}
+
+function asToolArguments(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function summarizeToolResult(value: unknown): string {
+  if (typeof value !== "object" || value === null) return String(value ?? "");
+  const content = (value as { content?: unknown }).content;
+  if (!Array.isArray(content)) return JSON.stringify(value).slice(0, CAPABILITY_RESULT_CONTENT_MAX_CHARS);
+  return content.map((part) => {
+    if (typeof part !== "object" || part === null) return String(part);
+    const item = part as { type?: unknown; text?: unknown; mimeType?: unknown };
+    if (item.type === "text" && typeof item.text === "string") return item.text;
+    if (item.type === "image") return `[Image result${typeof item.mimeType === "string" ? `: ${item.mimeType}` : ""}]`;
+    return "";
+  }).filter(Boolean).join("\n").slice(0, CAPABILITY_RESULT_CONTENT_MAX_CHARS);
 }
 
 export function aggregateUsage(left: Usage, right: Usage): Usage {
