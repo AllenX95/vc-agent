@@ -159,6 +159,12 @@ export {
   type StagedExtension
 } from "./extension-admission.js";
 export {
+  BUNDLED_ACADEMIC_SKILL_IDS,
+  installBundledAcademicSkills,
+  type BundledAcademicSkillId,
+  type BundledAcademicSkillInstallResult
+} from "./bundled-academic-skills.js";
+export {
   doctorIsActivationFree,
   inspectEnvironmentDoctor,
   writeIntegrationGateReport,

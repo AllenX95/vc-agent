@@ -157,6 +157,76 @@ test("imports, inspects, activates, and restores a Skill through Settings", asyn
   }
 });
 
+test("completes Skills and Project file mentions from the composer", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-composer-e2e-"));
+  const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-composer-project-e2e-"));
+  const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-composer-skill-e2e-"));
+  writeFileSync(join(projectDirectory, "Investment Memo.md"), "# Investment Memo", "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: Fixture Skill\ndescription: Composer fixture\nkeywords: fixture\n---\n# Fixture Skill\n", "utf8");
+  writeFileSync(join(skillSource, "LICENSE"), "fixture", "utf8");
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory, {
+    VC_AGENT_TEST_PROJECT_PATH: projectDirectory,
+    VC_AGENT_TEST_SKILL_SOURCE: skillSource
+  });
+  try {
+    let window = await application.firstWindow();
+    const primaryProfile = await invokeRaw(window, "profile.create", { name: "Composer Primary", provider: "vc-agent-faux", model: "fixture", apiKey: "fixture-key", thinkingLevel: "off" }) as { payload: { profile: { id: string } } };
+    const alternateProfile = await invokeRaw(window, "profile.create", { name: "Composer Alternate", provider: "vc-agent-faux", model: "fixture", apiKey: "fixture-key", thinkingLevel: "low" }) as { payload: { profile: { id: string } } };
+    const opened = await invokeRaw(window, "project.open") as { payload: { project: { id: string } } };
+    await invokeRaw(window, "thread.create.project", { projectId: opened.payload.project.id, title: "Composer Commands" });
+    await window.reload();
+    await window.getByRole("button", { name: "Composer Commands", exact: true }).click();
+    await window.getByRole("combobox", { name: "Active Model Profile" }).selectOption(primaryProfile.payload.profile.id);
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.getByRole("button", { name: "Import Skill" }).click();
+    const row = window.locator("[data-testid=skills-settings] .profile-row");
+    await row.getByRole("button", { name: "Inspect" }).click();
+    await row.getByRole("button", { name: "Activate" }).click();
+    await window.getByRole("button", { name: "Settings" }).click();
+
+    const composer = window.getByRole("textbox", { name: "Message" });
+    await composer.fill("/");
+    const skills = window.getByRole("listbox", { name: "Slash commands" });
+    const skillPackageId = skillSource.split(/[\\/]/u).at(-1)!.toLocaleLowerCase();
+    await expect(skills).toContainText(`/skill:${skillPackageId}`);
+    await skills.getByRole("option", { name: new RegExp(`/skill:${skillPackageId}`, "u") }).click();
+    await expect(composer).toHaveValue(`/skill:${skillPackageId} `);
+
+    await composer.fill("Review @");
+    const files = window.getByRole("listbox", { name: "Project files" });
+    await expect(files).toContainText("@Investment Memo.md");
+    await composer.press("Enter");
+    await expect(composer).toHaveValue('Review @"Investment Memo.md" ');
+
+    await composer.fill("/model ");
+    await window.getByRole("listbox", { name: "Model Profiles" }).getByRole("option", { name: /Composer Alternate/u }).click();
+    await expect(window.getByRole("combobox", { name: "Active Model Profile" })).toHaveValue(alternateProfile.payload.profile.id);
+
+    await composer.fill("/thinking ");
+    await window.getByRole("listbox", { name: "Reasoning levels" }).getByRole("option", { name: /^high/u }).click();
+    await expect.poll(async () => {
+      const listed = await invokeRaw(window, "profile.list") as { payload: { profiles: Array<{ id: string; thinkingLevel: string }> } };
+      return listed.payload.profiles.find((profile) => profile.id === alternateProfile.payload.profile.id)?.thinkingLevel;
+    }).toBe("high");
+
+    await composer.fill("/reflection");
+    await composer.press("Enter");
+    await expect(window.getByRole("dialog", { name: "Start Investment Reflection" })).toBeVisible();
+    await window.getByRole("dialog", { name: "Start Investment Reflection" }).getByRole("button", { name: "Cancel" }).click();
+
+    await composer.fill("/dream");
+    await composer.press("Enter");
+    await expect(window.getByRole("dialog", { name: "Start Dream" })).toBeVisible();
+    await window.getByRole("dialog", { name: "Start Dream" }).getByRole("button", { name: "Cancel" }).click();
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+    rmSync(projectDirectory, { recursive: true, force: true });
+    rmSync(skillSource, { recursive: true, force: true });
+  }
+});
+
 test("exposes lazy Integration status and keeps MCP disconnected after configuration", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-integrations-e2e-"));
   const extensionSource = mkdtempSync(join(tmpdir(), "vc-agent-extension-source-e2e-"));
@@ -644,7 +714,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Invalid key fixture");
     await window.getByLabel("Provider").fill("anthropic");
     await window.getByLabel("Model").fill("claude-sonnet-4-5");
-    await window.getByLabel("API key").fill(apiKey);
+    await window.getByRole("textbox", { name: "API key", exact: true }).fill(apiKey);
     await window.getByRole("button", { name: "Save profile" }).click();
     await expect(window.getByText("Invalid key fixture", { exact: true })).toBeVisible();
 
@@ -1304,14 +1374,20 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     await window.getByRole("button", { name: "Send" }).click();
     await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
     for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
-      await expect(window.locator(".tool-activity").filter({ hasText: capability })).toContainText("completed");
+      await expect(window.locator(".tool-activity").filter({ hasText: capability })).toHaveClass(/completed/u);
     }
+    const toolStack = window.locator("details.tool-call-stack");
+    await expect(toolStack).not.toHaveAttribute("open", "");
+    await expect(toolStack.locator(".tool-call-history")).not.toBeVisible();
+    await toolStack.locator(":scope > summary").click();
+    await expect(toolStack.locator(".tool-call-history")).toBeVisible();
     const materialActivity = window.locator("details.tool-activity").filter({ hasText: "material_recall" });
     await expect(materialActivity).not.toHaveAttribute("open", "");
     await expect(materialActivity.locator(".tool-activity-content")).not.toBeVisible();
     await materialActivity.locator("summary").click();
     await expect(materialActivity.locator(".tool-activity-content")).toBeVisible();
     await expect(materialActivity.locator(".tool-activity-content")).toContainText("memo.md");
+    await expect(window.locator(".assistant-message > .turn-execution + .assistant-output")).toBeVisible();
     await expect(window.locator(".usage-row")).toContainText("reserve");
     await expect(window.locator(".usage-row")).toContainText("recall");
     await expect(window.locator(".usage-row")).toContainText("ms");
@@ -1446,7 +1522,9 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
     await expect(window.getByText("Which retention result would change your current view?", { exact: false })).toBeVisible();
     await expect(window.locator(".tool-activity").filter({ hasText: "memory_recall" })).toHaveCount(3);
-    await expect(window.locator(".tool-activity.completed").filter({ hasText: "reflection_evidence_drilldown" })).toBeVisible();
+    const evidenceDrilldown = window.locator(".tool-activity.completed").filter({ hasText: "reflection_evidence_drilldown" });
+    await expect(evidenceDrilldown).toHaveCount(1);
+    await expect(evidenceDrilldown).toContainText("reflection_evidence_drilldown");
     await expect(window.getByText("handoff claim is unsupported", { exact: false })).toBeVisible();
     await expect(window.locator(".tool-activity").filter({ hasText: "material_recall" })).toHaveCount(0);
     await expect(window.locator(".conversation")).not.toContainText("src_ref_reflection");
@@ -1923,7 +2001,7 @@ async function createProfile(window: import("@playwright/test").Page, input: { n
   await window.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
   await window.getByRole("textbox", { name: "Provider", exact: true }).fill(input.provider);
   await window.getByRole("textbox", { name: "Model", exact: true }).fill(input.model);
-  await window.getByLabel("API key").fill(input.apiKey);
+  await window.getByLabel("API key", { exact: true }).fill(input.apiKey);
   await window.getByRole("button", { name: "Save profile" }).click();
   await expect(window.getByText(input.name, { exact: true })).toBeVisible();
 }

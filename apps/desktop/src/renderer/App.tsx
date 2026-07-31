@@ -65,7 +65,18 @@ import {
   SlidersHorizontal,
   Trash2
 } from "lucide-react";
+import remarkGfm from "remark-gfm";
 import { useUiLanguage } from "./i18n";
+import {
+  applicationCommandSuggestions,
+  applyComposerSuggestion,
+  fileSuggestion,
+  matchComposerSuggestions,
+  profileSuggestion,
+  skillSuggestion,
+  thinkingSuggestion,
+  type ComposerSuggestion
+} from "./composer-suggestions";
 
 const Markdown = lazy(() => import("react-markdown"));
 
@@ -175,6 +186,8 @@ export function App() {
   const [conversations, setConversations] = useState<Record<string, ConversationItem[]>>({});
   const [sessionContextByThread, setSessionContextByThread] = useState<Record<string, ContextUsage>>({});
   const [prompt, setPrompt] = useState("");
+  const [composerCursor, setComposerCursor] = useState<number | null>(null);
+  const [composerSuggestionIndex, setComposerSuggestionIndex] = useState(0);
   const [conversationQuotesByThread, setConversationQuotesByThread] = useState<Record<string, ConversationQuote[]>>({});
   const [conversationSelection, setConversationSelection] = useState<ConversationSelection | null>(null);
   const [profileFormOpen, setProfileFormOpen] = useState(false);
@@ -228,6 +241,24 @@ export function App() {
   );
   const activeTurn = items.find((item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming"));
   const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
+  const composerCandidates: ComposerSuggestion[] = [
+    ...applicationCommandSuggestions(),
+    ...skillPackages
+      .filter((item) => item.enabled && item.state === "active")
+      .map((item) => skillSuggestion({
+        packageId: item.packageId,
+        name: item.packageId,
+        description: [item.metadata.name, item.metadata.description].filter(Boolean).join(" · ") || undefined
+      })),
+    ...profiles.map((profile) => profileSuggestion(profile)),
+    ...(["off", "minimal", "low", "medium", "high", "xhigh"] as const).map(thinkingSuggestion),
+    ...(activeThread?.scope === "project" ? (materialsByProject[activeThread.projectId] ?? [])
+      .filter((item) => item.availability === "active")
+      .map((item) => fileSuggestion(item.relativePath)) : [])
+  ];
+  const composerSuggestionMatch = composerCursor === null
+    ? null
+    : matchComposerSuggestions(prompt, composerCursor, composerCandidates);
   const learningTelemetry = {
     coveredScopes: dreamState?.batches.flatMap((batch) => batch.extractionScopes).filter((scope) => scope.status === "approved" || scope.status === "skipped").length ?? 0,
     totalScopes: dreamState?.batches.flatMap((batch) => batch.extractionScopes).length ?? 0,
@@ -644,9 +675,99 @@ export function App() {
     }));
   };
 
+  const executeComposerCommand = async (text: string): Promise<boolean> => {
+    const command = text.trim();
+    if (!command.startsWith("/")) return false;
+    const finish = () => {
+      setPrompt("");
+      setComposerCursor(null);
+      setComposerSuggestionIndex(0);
+    };
+    if (command === "/compact") {
+      finish();
+      if (activeThreadId === null || activeProfile === undefined || items.length === 0 || activeReflection !== undefined || hasActiveTurn) {
+        setDiagnostic(localDiagnostic("Compact requires an idle ordinary conversation with an active Model Profile and at least one completed Turn."));
+      } else {
+        await invoke(createCommand({ command: "thread.compact", payload: { threadId: activeThreadId } }));
+      }
+      return true;
+    }
+    if (command === "/dream") {
+      finish();
+      if (hasActiveTurn) {
+        setDiagnostic(localDiagnostic("Dream cannot be opened while this task has an active Turn."));
+      } else {
+        setDreamLaunchProfileId(taskAssignments.find((item) => item.taskType === "dream")?.profileId ?? activeThread?.activeProfileId ?? "");
+      }
+      return true;
+    }
+    if (command === "/reflection") {
+      finish();
+      if (activeThread === undefined || activeReflection !== undefined || hasActiveTurn) {
+        setDiagnostic(localDiagnostic("Reflection requires an idle task that is not already a Reflection."));
+      } else {
+        const profileId = taskAssignments.find((item) => item.taskType === "independent_evidence")?.profileId ?? "";
+        setReflectionLaunch(activeThread.scope === "project"
+          ? { scope: "project", projectId: activeThread.projectId, focus: "", profileId }
+          : { scope: "unscoped", threadId: activeThread.id, focus: "", profileId });
+      }
+      return true;
+    }
+    const modelMatch = command.match(/^\/model(?:\s+(.+))?$/u);
+    if (modelMatch !== null) {
+      const query = modelMatch[1]?.trim();
+      if (query === undefined || query === "") {
+        setDiagnostic(localDiagnostic("Choose a Model Profile after /model."));
+      } else if (hasActiveTurn) {
+        setDiagnostic(localDiagnostic("The Model Profile cannot be changed during an active Turn."));
+      } else {
+        const normalized = query.toLocaleLowerCase();
+        const profile = profiles.find((item) =>
+          item.id.toLocaleLowerCase() === normalized
+          || item.name.toLocaleLowerCase() === normalized
+          || item.model.toLocaleLowerCase() === normalized
+          || `${item.provider}/${item.model}`.toLocaleLowerCase() === normalized
+        );
+        if (profile === undefined) setDiagnostic(localDiagnostic(`Unknown Model Profile: ${query}`));
+        else selectProfile(profile.id);
+      }
+      finish();
+      return true;
+    }
+    const thinkingMatch = command.match(/^\/thinking(?:\s+(\S+))?$/u);
+    if (thinkingMatch !== null) {
+      const level = thinkingMatch[1] as ModelProfile["thinkingLevel"] | undefined;
+      const supported = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+      if (activeProfile === undefined) {
+        setDiagnostic(localDiagnostic("Select an active Model Profile before changing reasoning."));
+      } else if (hasActiveTurn) {
+        setDiagnostic(localDiagnostic("Reasoning cannot be changed during an active Turn."));
+      } else if (level === undefined || !supported.includes(level)) {
+        setDiagnostic(localDiagnostic(`Choose a reasoning level: ${supported.join(", ")}.`));
+      } else {
+        await invoke(createCommand({
+          command: "profile.update",
+          payload: {
+            profileId: activeProfile.id,
+            name: activeProfile.name,
+            provider: activeProfile.provider,
+            model: activeProfile.model,
+            thinkingLevel: level,
+            ...(activeProfile.contextWindow === undefined ? {} : { contextWindow: activeProfile.contextWindow }),
+            ...(activeProfile.maxOutputTokens === undefined ? {} : { maxOutputTokens: activeProfile.maxOutputTokens })
+          }
+        }));
+      }
+      finish();
+      return true;
+    }
+    return false;
+  };
+
   const submit = async (text = prompt, retryOfTurnId?: string) => {
     const threadId = activeThreadIdRef.current;
     if (threadId === null || text.trim().length === 0) return;
+    if (retryOfTurnId === undefined && await executeComposerCommand(text)) return;
     const includeConversationQuotes = retryOfTurnId === undefined && text === prompt;
     const submissionText = includeConversationQuotes
       ? serializeConversationQuotes(text.trim(), conversationQuotesByThread[threadId] ?? [])
@@ -660,6 +781,23 @@ export function App() {
       command: "turn.submit",
       payload: { threadId, text: submissionText, ...(retryOfTurnId === undefined ? {} : { retryOfTurnId }) }
     }));
+  };
+
+  const chooseComposerSuggestion = (suggestion: ComposerSuggestion) => {
+    if (composerSuggestionMatch === null) return;
+    const next = applyComposerSuggestion(prompt, composerSuggestionMatch, suggestion);
+    setPrompt(next.text);
+    const opensArguments = suggestion.kind === "command" && (suggestion.value === "/model" || suggestion.value === "/thinking");
+    setComposerCursor(opensArguments ? next.cursor : null);
+    setComposerSuggestionIndex(0);
+    if (suggestion.kind === "profile" || suggestion.kind === "thinking") {
+      void submit(next.text.trim());
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      composerInput.current?.focus();
+      composerInput.current?.setSelectionRange(next.cursor, next.cursor);
+    });
   };
 
   const stop = () => {
@@ -853,8 +991,8 @@ export function App() {
             <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
             <div className="message-list" onPointerUp={captureConversationSelection} onScroll={() => setConversationSelection(null)}>
               {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} outputLocation={activeThread.scope === "unscoped" ? activeThread.outputLocation : undefined} outcomes={reflectionOutcomes[activeReflection.id] ?? { judgments: [], learningProposals: [] }} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} prepareOutcomes={() => submit("Prepare a Judgment Record and one de-identified Long-term Learning Proposal from this Reflection.")} confirmJudgment={(draftId) => void invoke(createCommand({ command: "reflection.judgment.confirm", payload: { draftId } }))} discardOutcome={(draftId) => void invoke(createCommand({ command: "reflection.outcome.discard", payload: { draftId } }))} prepareLearningPatch={(proposalId, judgmentDraftId) => void invoke(createCommand({ command: "reflection.learning.prepare_patch", payload: { proposalId, judgmentDraftId } }))} />}
-              {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : items.map((item) => (
-                <MessageItem key={item.id} item={item} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
+              {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : groupConversationItems(items).map((turn) => (
+                <ConversationTurn key={turn.turnId} items={turn.items} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} retry={(text, turnId) => submit(text, turnId)} continueInterrupted={() => setPrompt("Continue from the interrupted response.")} />
               ))}
               {Object.values(memoryCandidates).filter((candidate) => candidate.threadId === activeThreadId && candidate.status === "active").map((candidate) => <div className="memory-candidate" key={candidate.id}><div><strong>Memory candidate captured</strong><span>{candidate.sourceSnippet}</span></div><div>{candidate.scope === "project" && <button type="button" onClick={() => reviewCandidate(candidate)}>Review</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "memory.candidate.dismiss", payload: { candidateId: candidate.id } }))}>Dismiss</button></div></div>)}
               {Object.values(confirmations).filter((item) => item.payload.threadId === activeThreadId).map((item) => <div className="action-proposal" role="dialog" aria-label="Capability confirmation" key={item.payload.requestId}>
@@ -907,8 +1045,56 @@ export function App() {
                 <button type="button" aria-label="Remove conversation quote" title={`Remove Conversation Quote ${index + 1}`} onClick={() => removeConversationQuote(quote.id)}>×</button>
               </div>)}
             </div>}
-            <textarea ref={composerInput} aria-label="Message" placeholder={readOnlyRecovery ? "Read-only Recovery" : hasActiveTurn ? "Queue a follow-up" : "Ask vc-agent"} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+            {composerSuggestionMatch !== null && <div className="composer-suggestions" role="listbox" aria-label={
+              composerSuggestionMatch.suggestions[0]?.kind === "file" ? "Project files"
+                : composerSuggestionMatch.suggestions[0]?.kind === "profile" ? "Model Profiles"
+                  : composerSuggestionMatch.suggestions[0]?.kind === "thinking" ? "Reasoning levels"
+                    : "Slash commands"
+            }>
+              {composerSuggestionMatch.suggestions.map((suggestion, index) => <button
+                key={suggestion.id}
+                type="button"
+                role="option"
+                aria-selected={index === composerSuggestionIndex}
+                className={index === composerSuggestionIndex ? "active" : ""}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseComposerSuggestion(suggestion)}
+              ><strong>{suggestion.label}</strong><span>{suggestion.description}</span></button>)}
+            </div>}
+            <textarea ref={composerInput} aria-label="Message" aria-autocomplete="list" aria-expanded={composerSuggestionMatch !== null} placeholder={readOnlyRecovery ? "Read-only Recovery" : hasActiveTurn ? "Queue a follow-up" : "Ask vc-agent"} value={prompt} onChange={(event) => {
+              setPrompt(event.target.value);
+              setComposerCursor(event.target.selectionStart);
+              setComposerSuggestionIndex(0);
+            }} onClick={(event) => {
+              setComposerCursor(event.currentTarget.selectionStart);
+              setComposerSuggestionIndex(0);
+            }} onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (composerSuggestionMatch !== null) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const direction = event.key === "ArrowDown" ? 1 : -1;
+                  setComposerSuggestionIndex((current) => (current + direction + composerSuggestionMatch.suggestions.length) % composerSuggestionMatch.suggestions.length);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setComposerCursor(null);
+                  return;
+                }
+                if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                  event.preventDefault();
+                  const selected = composerSuggestionMatch.suggestions[Math.min(composerSuggestionIndex, composerSuggestionMatch.suggestions.length - 1)]!;
+                  const executesImmediately = selected.kind === "command"
+                    && prompt.trim() === selected.value
+                    && selected.value !== "/model"
+                    && selected.value !== "/thinking";
+                  if (executesImmediately && event.key === "Enter") void submit();
+                  else chooseComposerSuggestion(selected);
+                  return;
+                }
+              }
+              if (event.key !== "Enter" || event.shiftKey) return;
               event.preventDefault();
               if (prompt.trim().length > 0) void submit();
             }} disabled={readOnlyRecovery} />
@@ -976,9 +1162,11 @@ function SkillsSettings({ packages, root, lastReport, invoke }: {
   lastReport: SkillCompatibilityReport | null;
   invoke(command: HostCommand): Promise<unknown>;
 }) {
+  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map"];
+  const activeAcademicSkillCount = academicSkillIds.filter((packageId) => packages.some((item) => item.packageId === packageId && item.enabled && item.state === "active")).length;
   return <div className="settings-section skills-settings" data-testid="skills-settings">
-    <div className="settings-section-header"><div><h2>Skills Directory</h2><p>Complete packages are copied into an app-owned directory and remain disabled until explicit activation.</p></div><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.import" }))}>Import Skill</button></div>
-    <dl><div><dt>Location</dt><dd title={root ?? undefined}>{root ?? "Not initialized"}</dd></div><div><dt>Packages</dt><dd>{packages.length}</dd></div><div><dt>Active</dt><dd>{packages.filter((item) => item.enabled && item.state === "active").length}</dd></div></dl>
+    <div className="settings-section-header"><div><h2>Skills Directory</h2><p>Complete packages are copied into an app-owned directory and remain disabled until explicit activation.</p></div><div className="form-actions"><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.academic.install" }))} disabled={activeAcademicSkillCount === academicSkillIds.length}>Install academic skills</button><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.import" }))}>Import Skill</button></div></div>
+    <dl><div><dt>Location</dt><dd title={root ?? undefined}>{root ?? "Not initialized"}</dd></div><div><dt>Packages</dt><dd>{packages.length}</dd></div><div><dt>Active</dt><dd>{packages.filter((item) => item.enabled && item.state === "active").length}</dd></div><div><dt>Academic research skills</dt><dd>{activeAcademicSkillCount}/{academicSkillIds.length}</dd></div></dl>
     {packages.length === 0 ? <p className="empty-setting">No imported Skill packages</p> : <div className="profile-list">{packages.map((item) => <div className="profile-row" key={item.revisionId}>
       <div><strong>{item.metadata.name ?? item.packageId}</strong><span>{item.packageId} · {item.compatibility} · {item.state}</span><span>{item.declaredDependencies.length === 0 ? "No declared dependencies" : item.declaredDependencies.join(", ")}</span>{item.findings.length > 0 && <span role="status">{item.findings.length} diagnostic(s)</span>}</div>
       <div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "skills.inspect", payload: { revisionId: item.revisionId } }))}>Inspect</button>{item.enabled ? <button type="button" onClick={() => void invoke(createCommand({ command: "skills.disable", payload: { packageId: item.packageId } }))}>Disable</button> : <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.activate", payload: { revisionId: item.revisionId } }))} disabled={item.compatibility !== "compatible" || !["awaiting_activation", "disabled", "invalidated"].includes(item.state)}>Activate</button>}</div>
@@ -1489,35 +1677,104 @@ function PromptSettings({ revisions, activeRevisionId, invoke }: {
   </div>;
 }
 
-function MessageItem({ item, configure, chooseOutput, retry, continueInterrupted }: { item: ConversationItem; configure(): void; chooseOutput(): void; retry(text: string, turnId: string): void; continueInterrupted(): void }) {
-  if (item.role === "user") {
-    const submitted = parseConversationQuotedPrompt(item.text);
-    return <article className="message user-message" data-conversation-message="true" data-turn-id={item.turnId} data-message-role="user"><div>
-      {submitted.quotes.length > 0 && <div className="submitted-conversation-quotes">{submitted.quotes.map((quote, index) => <div className="submitted-conversation-quote" key={`${quote.turnId}-${quote.role}-${index}`}>
-        <span>Conversation Quote · {quote.role} · Turn {quote.turnId.slice(0, 8)}</span>
-        <p>{conversationQuotePreview(quote.text)}</p>
-      </div>)}</div>}
-      <div className="user-message-text">{submitted.text}</div>
-    </div></article>;
-  }
-  if (item.role === "system") return <div className="system-event">{item.text}</div>;
-  if (item.role === "tool") return <details className={`tool-activity ${item.status}`}><summary><strong>{item.capabilityId}</strong><span>{item.status.replaceAll("_", " ")}</span></summary><div className="tool-activity-content">{item.capabilityId === "web_search" || item.capabilityId === "web_fetch" ? <WebSourceResult text={item.text} /> : <p>{item.text}</p>}{item.artifact && <a href={`#artifact-${item.artifact.id}`} title={item.artifact.destination}>{item.artifact.mediaType} · {item.artifact.destination}</a>}</div></details>;
+type ConversationTurnProps = {
+  items: ConversationItem[];
+  configure(): void;
+  chooseOutput(): void;
+  retry(text: string, turnId: string): void;
+  continueInterrupted(): void;
+};
+
+function ConversationTurn({ items, configure, chooseOutput, retry, continueInterrupted }: ConversationTurnProps) {
+  const user = items.find((item): item is Extract<ConversationItem, { role: "user" }> => item.role === "user");
+  const assistant = items.find((item): item is Extract<ConversationItem, { role: "assistant" }> => item.role === "assistant");
+  const tools = items.filter((item): item is Extract<ConversationItem, { role: "tool" }> => item.role === "tool");
+  const systemEvents = items.filter((item): item is Extract<ConversationItem, { role: "system" }> => item.role === "system");
+
+  return <section className="conversation-turn" data-turn-id={items[0]?.turnId}>
+    {user && <UserMessage item={user} />}
+    {assistant
+      ? <AssistantMessage item={assistant} tools={tools} systemEvents={systemEvents} configure={configure} chooseOutput={chooseOutput} retry={retry} continueInterrupted={continueInterrupted} />
+      : <div className="turn-execution">{systemEvents.map((item) => <div className="system-event" key={item.id}>{item.text}</div>)}<ToolCallStack tools={tools} /></div>}
+  </section>;
+}
+
+function UserMessage({ item }: { item: Extract<ConversationItem, { role: "user" }> }) {
+  const submitted = parseConversationQuotedPrompt(item.text);
+  return <article className="message user-message" data-conversation-message="true" data-turn-id={item.turnId} data-message-role="user"><div>
+    {submitted.quotes.length > 0 && <div className="submitted-conversation-quotes">{submitted.quotes.map((quote, index) => <div className="submitted-conversation-quote" key={`${quote.turnId}-${quote.role}-${index}`}>
+      <span>Conversation Quote · {quote.role} · Turn {quote.turnId.slice(0, 8)}</span>
+      <p>{conversationQuotePreview(quote.text)}</p>
+    </div>)}</div>}
+    <div className="user-message-text">{submitted.text}</div>
+  </div></article>;
+}
+
+function AssistantMessage({ item, tools, systemEvents, configure, chooseOutput, retry, continueInterrupted }: Omit<ConversationTurnProps, "items"> & {
+  item: Extract<ConversationItem, { role: "assistant" }>;
+  tools: Array<Extract<ConversationItem, { role: "tool" }>>;
+  systemEvents: Array<Extract<ConversationItem, { role: "system" }>>;
+}) {
+  const hasExecutionTrace = item.thinking !== "" || tools.length > 0 || systemEvents.length > 0;
   return <article className={`message assistant-message ${item.status}`} data-conversation-message="true" data-turn-id={item.turnId} data-message-role="assistant">
     <div className="message-meta"><span>vc-agent</span>{item.profile && <span>{item.profile.provider} / {item.profile.model}</span>}</div>
-    {item.thinking && <details className="thinking-block"><summary>Thinking</summary><div>{item.thinking}</div></details>}
-    {item.text && (item.status === "completed"
-      ? <MarkdownMessage text={item.text} />
-      : <div className="message-content streaming-markdown">{item.text}</div>)}
-    {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">Working</div>}
-    {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div>{item.failure.code === "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={chooseOutput}>Choose output location</button>}<button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button>{item.failure.code !== "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={configure}>Adjust profile</button>}</div></div>}
-    {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
-    {item.usage && <div className="usage-row">Input {formatExactTokenCount(item.usage.input)} · Reasoning {item.usage.reasoning === undefined ? "—" : formatExactTokenCount(item.usage.reasoning)} · Output {formatExactTokenCount(item.usage.output)}{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} prompt + ${item.prompt.contributions.toolSchemaEstimatedTokens} tools + ${item.prompt.contributions.contextEstimatedTokens} retained + ${item.prompt.contributions.outputReserveEstimatedTokens} reserve est.)` : ""}{item.prompt?.capabilitySurface === undefined ? "" : ` · surface ${item.prompt.capabilitySurface.visibleCapabilityIds.join(", ") || "none"} +${item.prompt.capabilitySurface.requestableCapabilityCount} on-demand`}{item.recalledStateEstimatedTokens === undefined ? "" : ` · recall ${item.recalledStateEstimatedTokens} est.`}{item.latencyMs === undefined ? "" : ` · ${item.latencyMs} ms`}</div>}
+    {hasExecutionTrace && <div className="turn-execution">
+      {item.thinking && <details className="thinking-block"><summary><span>Thinking</span><span className="thinking-preview">{compactActivityPreview(item.thinking)}</span><ChevronDown size={14} /></summary><div>{item.thinking}</div></details>}
+      {systemEvents.map((event) => <div className="system-event" key={event.id}>{event.text}</div>)}
+      <ToolCallStack tools={tools} />
+    </div>}
+    <div className="assistant-output">
+      {item.text && (item.status === "completed"
+        ? <MarkdownMessage text={item.text} />
+        : <div className="message-content streaming-markdown">{item.text}</div>)}
+      {(item.status === "queued" || item.status === "streaming") && !item.text && <div className="streaming-label">{tools.some((tool) => tool.status === "started") ? "Running tool" : "Working"}</div>}
+      {item.failure && <div className="provider-failure" role="alert"><strong>{item.failure.message}</strong><span>{item.failure.code}{item.failure.provider ? ` · ${item.failure.provider} / ${item.failure.model}` : ""}</span><div>{item.failure.code === "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={chooseOutput}>Choose output location</button>}<button type="button" onClick={() => item.retryText && retry(item.retryText, item.turnId)} disabled={!item.retryText}>Retry</button>{item.failure.code !== "OUTPUT_LOCATION_NOT_CONFIGURED" && <button type="button" onClick={configure}>Adjust profile</button>}</div></div>}
+      {item.status === "interrupted" && <div className="interrupted-state"><strong>Interrupted</strong><span>The previous request will not resume automatically.</span><button type="button" onClick={continueInterrupted}>Continue</button></div>}
+      {item.usage && <div className="usage-row">Input {formatExactTokenCount(item.usage.input)} · Reasoning {item.usage.reasoning === undefined ? "—" : formatExactTokenCount(item.usage.reasoning)} · Output {formatExactTokenCount(item.usage.output)}{item.prompt ? ` · prompt ${item.prompt.revisionId.slice(0, 8)} (${item.prompt.contributions.promptEstimatedTokens} prompt + ${item.prompt.contributions.toolSchemaEstimatedTokens} tools + ${item.prompt.contributions.contextEstimatedTokens} retained + ${item.prompt.contributions.outputReserveEstimatedTokens} reserve est.)` : ""}{item.prompt?.capabilitySurface === undefined ? "" : ` · surface ${item.prompt.capabilitySurface.visibleCapabilityIds.join(", ") || "none"} +${item.prompt.capabilitySurface.requestableCapabilityCount} on-demand`}{item.recalledStateEstimatedTokens === undefined ? "" : ` · recall ${item.recalledStateEstimatedTokens} est.`}{item.latencyMs === undefined ? "" : ` · ${item.latencyMs} ms`}</div>}
+    </div>
   </article>;
+}
+
+function ToolCallStack({ tools }: { tools: Array<Extract<ConversationItem, { role: "tool" }>> }) {
+  if (tools.length === 0) return null;
+  if (tools.length === 1) return <ToolActivity tool={tools[0]!} />;
+  const current = [...tools].reverse().find((tool) => tool.status === "started") ?? tools[tools.length - 1]!;
+  return <details className={`tool-call-stack ${current.status}`}>
+    <summary>
+      <span className="tool-status-dot" aria-hidden="true" />
+      <strong>{formatCapabilityName(current.capabilityId)}</strong>
+      <span className="tool-call-preview">{compactActivityPreview(current.text)}</span>
+      <span className="tool-call-count">{tools.length > 1 ? `${tools.length} calls` : formatToolStatus(current.status)}</span>
+      <ChevronDown size={14} />
+    </summary>
+    <div className="tool-call-history">
+      <div className="tool-call-history-heading"><span>Tool calls</span><span>{tools.length}</span></div>
+      {tools.map((tool) => <ToolActivity key={tool.id} tool={tool} />)}
+    </div>
+  </details>;
+}
+
+function ToolActivity({ tool }: { tool: Extract<ConversationItem, { role: "tool" }> }) {
+  return <details className={`tool-activity ${tool.status}`}><summary><span className="tool-status-dot" aria-hidden="true" /><strong>{formatCapabilityName(tool.capabilityId)}</strong><span>{formatToolStatus(tool.status)}</span><span className="sr-only">{tool.capabilityId} {tool.status}</span><ChevronDown size={13} /></summary><div className="tool-activity-content">{tool.capabilityId === "web_search" || tool.capabilityId === "web_fetch" ? <WebSourceResult text={tool.text} /> : <p>{tool.text}</p>}{tool.artifact && <a href={`#artifact-${tool.artifact.id}`} title={tool.artifact.destination}>{tool.artifact.mediaType} · {tool.artifact.destination}</a>}</div></details>;
+}
+
+function formatCapabilityName(capabilityId: string): string {
+  return capabilityId.replaceAll("_", " ").replaceAll("-", " ");
+}
+
+function formatToolStatus(status: Extract<ConversationItem, { role: "tool" }>["status"]): string {
+  if (status === "started") return "Running";
+  if (status === "unknown_outcome") return "Unknown outcome";
+  return status[0]!.toUpperCase() + status.slice(1);
+}
+
+function compactActivityPreview(text: string): string {
+  return text.replace(/\s+/gu, " ").trim().slice(0, 96);
 }
 
 const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
   return <Suspense fallback={<div className="message-content streaming-markdown">{text}</div>}>
-    <div className="message-content"><Markdown skipHtml>{text}</Markdown></div>
+    <div className="message-content"><Markdown remarkPlugins={[remarkGfm]} skipHtml>{text}</Markdown></div>
   </Suspense>;
 });
 
@@ -1587,6 +1844,16 @@ function parseWebSourceResult(text: string): { sources: Array<{ url: string; tit
     const warnings = (parsed.warnings ?? []).filter((warning): warning is string => typeof warning === "string");
     return { sources, warnings };
   } catch { return null; }
+}
+
+function groupConversationItems(items: ConversationItem[]): Array<{ turnId: string; items: ConversationItem[] }> {
+  const groups = new Map<string, ConversationItem[]>();
+  for (const item of items) {
+    const group = groups.get(item.turnId);
+    if (group === undefined) groups.set(item.turnId, [item]);
+    else group.push(item);
+  }
+  return [...groups].map(([turnId, turnItems]) => ({ turnId, items: turnItems }));
 }
 
 function projectTrajectory(

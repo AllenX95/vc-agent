@@ -54,6 +54,8 @@ export interface PiSessionConfig {
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
   readonly extensions: ExtensionInventorySnapshot;
+  /** Enabled by default; test-only callers may disable the bundled web extension. */
+  readonly usePiWebAccess?: boolean;
   readonly turnIdleTimeoutMs?: number;
   readonly capabilityProxy?: (
     toolCallId: string,
@@ -131,6 +133,15 @@ function assistantText(message: AssistantMessage): string {
     .join("");
 }
 
+function extensionToolNamesForCapabilities(capabilities: readonly string[]): string[] {
+  const names = new Set(capabilities);
+  // pi-web-access stores full fetch/search results and exposes bounded slices
+  // through this companion tool. Search results may reference it even when a
+  // caller preloads only web_search, so keep it active for either web tool.
+  if (names.has("web_search") || names.has("web_fetch")) names.add("web_fetch_content");
+  return [...names];
+}
+
 export async function createPiSession(
   config: PiSessionConfig,
   onEvent: (event: PiSessionEvent) => void
@@ -168,7 +179,8 @@ export async function createPiSessionUsingRuntime(
   const resourceLoader = new SnapshotResourceLoader({
     cwd: config.cwd,
     resources: config.resources,
-    extensions: config.extensions
+    extensions: config.extensions,
+    loadBundledExtensions: config.usePiWebAccess !== false
   });
   await resourceLoader.reload();
 
@@ -195,7 +207,7 @@ export async function createPiSessionUsingRuntime(
       };
   const customTools = [
     ...(config.projectReadRoot === undefined ? [] : createProjectReadToolDefinitions(config.projectReadRoot)),
-    ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef))
+    ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef, { includeHostWebFallback: config.usePiWebAccess === false }))
   ];
   const { session } = await createAgentSession({
     cwd: config.cwd,
@@ -210,6 +222,10 @@ export async function createPiSessionUsingRuntime(
   });
   sessionRef = session;
   session.setAutoCompactionEnabled(true);
+  // Capabilities are activated per turn from the Host surface. Extension
+  // registration must not make network tools implicitly active at session
+  // creation time.
+  session.setActiveToolsByName([]);
 
   let failureEmitted = false;
   let activeTimeoutError: Error | undefined;
@@ -239,7 +255,7 @@ export async function createPiSessionUsingRuntime(
     getContextUsage: () => session.getContextUsage(),
     submit: async (prompt, options) => {
       const activeCapabilities = options?.capabilitySurface?.visibleCapabilityIds ?? options?.activeCapabilities ?? [];
-      session.setActiveToolsByName([...activeCapabilities]);
+      session.setActiveToolsByName(extensionToolNamesForCapabilities(activeCapabilities));
       resetTurnUsage();
       failureEmitted = false;
       activeTimeoutError = undefined;
@@ -255,7 +271,10 @@ export async function createPiSessionUsingRuntime(
       refreshTurnIdleTimeout = armIdleTimeout;
       armIdleTimeout();
       try {
-        await session.prompt(prompt, { expandPromptTemplates: false });
+        // Pi's SDK expands task-scoped prompt templates and `/skill:<name>`
+        // commands here. Interactive-only commands remain unavailable because
+        // this app owns the surrounding UI and session lifecycle.
+        await session.prompt(prompt, { expandPromptTemplates: true });
         if (activeTimeoutError !== undefined) throw activeTimeoutError;
       } catch (error) {
         if (!failureEmitted) onEvent({ type: "failed", error });
@@ -279,7 +298,8 @@ export async function createPiSessionUsingRuntime(
 
 function createCapabilityProxies(
   proxy: NonNullable<PiSessionConfig["capabilityProxy"]>,
-  session: () => AgentSession | undefined
+  session: () => AgentSession | undefined,
+  options: { readonly includeHostWebFallback: boolean }
 ) {
   const capabilityRequest = defineTool({
     name: "capability_request",
@@ -297,7 +317,7 @@ function createCapabilityProxies(
       const result = await proxy(toolCallId, "capability_request", params, signal);
       if (result.activatedCapabilities !== undefined) {
         const active = session()?.getActiveToolNames() ?? [];
-        session()?.setActiveToolsByName([...new Set([...active, ...result.activatedCapabilities])]);
+        session()?.setActiveToolsByName(extensionToolNamesForCapabilities([...new Set([...active, ...result.activatedCapabilities])]));
       }
       return toolResult(result);
     }
@@ -382,22 +402,22 @@ function createCapabilityProxies(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "reflection_outcome_propose", params, signal))
   });
-  const webSearch = defineTool({
-    name: "web_search",
-    label: "Search public web",
-    description: "Search the current public web. Results are bounded, source-referenced, and transient.",
-    parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxItems })), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_search", params, signal))
-  });
-  const webFetch = defineTool({
-    name: "web_fetch",
-    label: "Fetch public URL",
-    description: "Fetch and extract a bounded public page or PDF without login, writes, or browser state.",
-    parameters: Type.Object({ url: Type.String(), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
-  });
+  const webSearch = options.includeHostWebFallback ? defineTool({
+      name: "web_search",
+      label: "Search public web",
+      description: "Search the current public web. Results are bounded, source-referenced, and transient.",
+      parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxItems })), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
+      executionMode: "sequential",
+      execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_search", params, signal))
+    }) : undefined;
+  const webFetch = options.includeHostWebFallback ? defineTool({
+      name: "web_fetch",
+      label: "Fetch public URL",
+      description: "Fetch and extract a bounded public page or PDF without login, writes, or browser state.",
+      parameters: Type.Object({ url: Type.String(), maxChars: Type.Optional(Type.Number({ minimum: 500, maximum: CAPABILITY_INPUT_LIMITS.webRecall.maxChars })) }),
+      executionMode: "sequential",
+      execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "web_fetch", params, signal))
+    }) : undefined;
   const academicResearch = defineTool({
     name: "academic_research",
     label: "Research academic evidence",
@@ -475,8 +495,8 @@ function createCapabilityProxies(
     projectStateRecall,
     memoryRecall,
     reflectionOutcomePropose,
-    webSearch,
-    webFetch,
+    ...(webSearch === undefined ? [] : [webSearch]),
+    ...(webFetch === undefined ? [] : [webFetch]),
     academicResearch,
     createTextOutputProxy(proxy),
     createTextEditProxy(proxy),

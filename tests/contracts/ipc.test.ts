@@ -80,6 +80,11 @@ describe("versioned IPC contracts", () => {
     expect(hostCommandSchema.parse(command)).toEqual(command);
   });
 
+  it("accepts the explicit bundled academic Skill installation command", () => {
+    const command = { ...createBootstrapCommand(), command: "skills.academic.install" };
+    expect(hostCommandSchema.parse(command)).toEqual(command);
+  });
+
   it("rejects unsupported schema versions", () => {
     const command = { ...createBootstrapCommand(), schemaVersion: 2 };
     expect(hostCommandSchema.safeParse(command).success).toBe(false);

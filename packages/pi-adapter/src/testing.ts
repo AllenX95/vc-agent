@@ -39,6 +39,9 @@ export async function createFauxPiSession(input: {
   return createPiSessionUsingRuntime(
     {
       ...input.config,
+      // Faux sessions must remain deterministic and network-free unless a
+      // test explicitly opts into the bundled web extension.
+      usePiWebAccess: input.config.usePiWebAccess ?? false,
       profile: { provider: faux.provider.id, model: faux.models[0].id, apiKey: "faux-runtime-key", ...input.profileOverrides }
     },
     input.onEvent,

@@ -18,6 +18,7 @@
     "@earendil-works/pi-coding-agent": "0.80.8",
     "@vc-agent/contracts": "workspace:*",
     "pi-mcp-adapter": "1.5.1",
+    "pi-web-access": "0.17.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {

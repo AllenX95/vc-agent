@@ -32,6 +32,10 @@ extraResources:
       - "!**/*.map"
   - from: apps/utility-worker/package.json
     to: workers/utility-worker/package.json
+  - from: skills/academic-research
+    to: bundled-skills/academic-research
+    filter:
+      - "**/*"
   - from: packaging/parser-runtime
     to: parser-runtime
     filter:

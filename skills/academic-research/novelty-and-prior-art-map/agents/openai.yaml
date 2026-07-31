@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novelty and Prior-Art Map"
+  short_description: "Map academic novelty and predecessor work"
+  default_prompt: "Use $novelty-and-prior-art-map to map a technology's academic predecessors, parallel work, successors, alternatives, and novelty."

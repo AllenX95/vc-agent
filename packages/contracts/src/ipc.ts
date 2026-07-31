@@ -55,7 +55,7 @@ export type SkillFinding = z.infer<typeof skillFindingSchema>;
 
 export const skillInventoryItemSchema = z.object({
   schemaVersion: z.literal(1), packageId: z.string().min(1), revisionId: z.string().uuid(), importId: z.string().uuid(),
-  sourceKind: z.enum(["local_directory", "creator_draft"]), importedAt: z.string().datetime(), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceKind: z.enum(["local_directory", "creator_draft", "bundled_reviewed"]), importedAt: z.string().datetime(), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
   overlayHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), compatibility: z.enum(["unknown", "compatible", "incompatible", "blocked"]),
   declaredDependencies: z.array(z.string()), overlayRevision: z.string().uuid().optional(), enabled: z.boolean(), licensePresent: z.boolean(),
   state: z.enum(["copying", "copied", "inspecting", "compatible", "incompatible", "blocked", "awaiting_activation", "active", "disabled", "invalidated", "failed"]),
@@ -539,6 +539,7 @@ const restorePersonalCognitionCommandSchema = commandMetadataSchema.extend({ com
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
 const listSkillsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.list") });
 const importSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.import") });
+const installAcademicSkillsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.academic.install") });
 const inspectSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.inspect"), payload: z.object({ revisionId: z.string().uuid() }) });
 const activateSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.activate"), payload: z.object({ revisionId: z.string().uuid() }) });
 const disableSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.disable"), payload: z.object({ packageId: z.string().min(1) }) });
@@ -828,6 +829,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   listProfilesCommandSchema,
   listSkillsCommandSchema,
   importSkillCommandSchema,
+  installAcademicSkillsCommandSchema,
   inspectSkillCommandSchema,
   activateSkillCommandSchema,
   disableSkillCommandSchema,
@@ -1059,7 +1061,7 @@ const skillsUpdatedEventSchema = eventMetadataSchema.extend({
   payload: z.object({
     root: z.string().min(1),
     packages: z.array(skillInventoryItemSchema),
-    action: z.enum(["listed", "imported", "inspected", "activated", "disabled"]),
+    action: z.enum(["listed", "imported", "bundled_installed", "inspected", "activated", "disabled"]),
     selectedRevisionId: z.string().uuid().optional(),
     report: skillCompatibilityReportSchema.optional()
   })

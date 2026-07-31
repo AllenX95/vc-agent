@@ -23,10 +23,15 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
     await expect(fixture.window.locator(".provider-failure")).toHaveCount(0);
     const response = fixture.window.locator(".assistant-message.completed").last();
     await expect(response.getByRole("heading", { name: "Markdown Fixture" })).toBeVisible();
-    await expect(response.locator("strong")).toHaveText("strong emphasis");
+    await expect(response.getByText("strong emphasis", { exact: true })).toBeVisible();
+    const markdownTable = response.getByRole("table");
+    await expect(markdownTable).toBeVisible();
+    await expect(markdownTable).toHaveCSS("overflow-x", "auto");
+    await expect(markdownTable.getByRole("columnheader")).toHaveText(["Dimension", "Conclusion", "Evidence"]);
+    await expect(markdownTable.getByRole("cell")).toHaveText(["Architecture", "Partially supported", "Paper and public repository"]);
     await expect(response.locator("span", { hasText: "unsafe fixture markup" })).toHaveCount(0);
 
-    await selectElementText(response.locator("strong"));
+    await selectElementText(response.getByText("strong emphasis", { exact: true }));
     await fixture.window.getByRole("button", { name: "Add to task" }).click();
     const quotes = fixture.window.getByLabel("Conversation Quotes");
     await expect(quotes).toContainText("strong emphasis");
@@ -35,7 +40,7 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
     await quotes.getByRole("button", { name: "Remove conversation quote" }).click();
     await expect(quotes).toHaveCount(0);
 
-    await selectElementText(response.locator("strong"));
+    await selectElementText(response.getByText("strong emphasis", { exact: true }));
     await fixture.window.getByRole("button", { name: "Add to task" }).click();
     await fixture.window.getByLabel("Message").fill("Focus on this excerpt.");
     await fixture.window.getByRole("button", { name: "Send" }).click();
@@ -51,6 +56,11 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
     const restored = fixture.window.locator(".user-message").last();
     await expect(restored.locator(".submitted-conversation-quote")).toContainText("strong emphasis");
     await expect(restored.locator(".user-message-text")).toHaveText("Focus on this excerpt.");
+
+    await fixture.window.getByLabel("Message").fill("/compact");
+    await fixture.window.getByLabel("Message").press("Enter");
+    await expect(fixture.window.getByText(/Thread compaction started/u)).toBeVisible({ timeout: 10_000 });
+    await expect(fixture.window.getByText(/Thread compaction (completed|failed):/u)).toBeVisible({ timeout: 10_000 });
   } finally {
     await fixture.close();
   }
@@ -84,6 +94,7 @@ async function launchWorkerFixture(extraEnvironment: Record<string, string> = {}
     env: testEnvironment({
       VC_AGENT_USER_DATA_DIR: userDataDirectory,
       VC_AGENT_TEST_PROJECT_PATH: projectDirectory,
+      VC_AGENT_TEST_WEB_FIXTURE: "1",
       ...extraEnvironment
     })
   });

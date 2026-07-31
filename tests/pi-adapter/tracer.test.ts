@@ -180,6 +180,22 @@ describe("real Pi SDK tracer", () => {
     expect(Object.isFrozen(loader.snapshot)).toBe(true);
   });
 
+  it("loads the bundled pi-web-access extension with the vc-agent web tool names", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-web-extension-"));
+    temporaryDirectories.push(cwd);
+    const loader = new SnapshotResourceLoader({ cwd, resources, extensions, loadBundledExtensions: true });
+    await loader.reload();
+
+    const extension = loader.getExtensions().extensions.find((item) => item.path === "pi-web-access@0.17.0");
+    expect(extension).toBeDefined();
+    expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining([
+      "web_search",
+      "source_check",
+      "web_fetch",
+      "web_fetch_content"
+    ]));
+  });
+
   it("projects task-scoped Skill instructions into the real Pi resource loader", () => {
     const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-loader-"));
     temporaryDirectories.push(cwd);
@@ -193,7 +209,7 @@ describe("real Pi SDK tracer", () => {
         instructions: [{
           packageId: "docx",
           revisionId: "docx-rev-1",
-          name: "docx",
+          name: "Word Documents",
           description: "Create Word documents",
           filePath: skillPath,
           baseDir: join(cwd, "active", "docx"),
@@ -208,6 +224,50 @@ describe("real Pi SDK tracer", () => {
     expect(loader.getAppendSystemPrompt().at(-1)).toContain("Use the imported Word workflow.");
     expect(loader.getAppendSystemPrompt().at(-1)).toContain(`References are relative to ${join(cwd, "active", "docx")}.`);
     expect(Object.isFrozen(loader.snapshot.resources.skills)).toBe(true);
+  });
+
+  it("expands a supported Skill slash command before sending it to the model", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-command-"));
+    temporaryDirectories.push(cwd);
+    const skillDirectory = join(cwd, "active", "docx");
+    const skillPath = join(skillDirectory, "SKILL.md");
+    mkdirSync(skillDirectory, { recursive: true });
+    writeFileSync(skillPath, "---\nname: Word Documents\n---\nFollow the imported document workflow.", "utf8");
+    const skillResources: RuntimeResourceSnapshot = {
+      ...resources,
+      skills: {
+        schemaVersion: 1,
+        revisionId: "skill-command-snapshot",
+        decisions: [{ packageId: "docx", revisionId: "docx-rev-1", reason: "explicit", resources: ["SKILL.md"], capabilities: [] }],
+        instructions: [{
+          packageId: "docx",
+          revisionId: "docx-rev-1",
+          name: "Word Documents",
+          description: "Create Word documents",
+          filePath: skillPath,
+          baseDir: skillDirectory,
+          content: "Follow the imported document workflow."
+        }],
+        resources: []
+      }
+    };
+    const handle = await createFauxPiSession({
+      config: { cwd, threadDirectory: cwd, contextHistory: [], resources: skillResources, extensions },
+      responses: [fauxAssistantMessage("Done.")],
+      onEvent: () => {}
+    });
+
+    await handle.submit("/skill:docx Summarize the evidence.");
+    const userText = readFileSync(handle.sessionFile, "utf8")
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: Array<{ type?: string; text?: string }> } })
+      .find((entry) => entry.type === "message" && entry.message?.role === "user")
+      ?.message?.content?.find((part) => part.type === "text")?.text;
+    expect(userText).toContain('<skill name="docx"');
+    expect(userText).toContain("Follow the imported document workflow.");
+    expect(userText).toContain("Summarize the evidence.");
+    handle.dispose();
   });
 
   it("resumes only an exactly acknowledged Pi context and rebuilds when the Host is ahead", async () => {
@@ -529,6 +589,7 @@ describe("real Pi SDK tracer", () => {
         contextHistory: [],
         resources,
         extensions,
+        usePiWebAccess: false,
         capabilityProxy: async (_toolCallId, capabilityId) => {
           requests.push(capabilityId);
           return { schemaVersion: 1, requestId: "web-request", status: "completed", content: "bounded web result" };
