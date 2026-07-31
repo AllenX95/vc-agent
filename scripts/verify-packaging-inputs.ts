@@ -16,6 +16,11 @@ const requiredFiles = [
   "apps/utility-worker/dist/parser.py",
   "apps/utility-worker/dist/ocr_runtime.py",
   "apps/utility-worker/package.json",
+  "skills/academic-research/paper-technical-diligence/SKILL.md",
+  "skills/academic-research/founder-academic-diligence/SKILL.md",
+  "skills/academic-research/technical-claim-verification/SKILL.md",
+  "skills/academic-research/novelty-and-prior-art-map/SKILL.md",
+  "skills/academic-research/research-to-company-map/SKILL.md",
   "packaging/parser-runtime/python.exe",
   "packaging/parser-runtime/runtime-manifest.json",
   "packaging/THIRD_PARTY_NOTICES.txt"

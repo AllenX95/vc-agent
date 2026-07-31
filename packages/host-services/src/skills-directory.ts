@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
-export type SkillSourceKind = "local_directory" | "creator_draft";
+export type SkillSourceKind = "local_directory" | "creator_draft" | "bundled_reviewed";
 export type SkillPackageState = "copying" | "copied" | "inspecting" | "compatible" | "incompatible" | "blocked" | "awaiting_activation" | "active" | "disabled" | "invalidated" | "failed";
 export type SkillFindingSeverity = "info" | "warning" | "block";
 
@@ -139,6 +139,11 @@ export class SkillPackageManager {
       const files = listFiles(stagedPath);
       if (!files.some((path) => basename(path).toLowerCase() === "skill.md")) throw new Error("SKILL_METADATA_INVALID");
       const contentHash = hashDirectory(stagedPath);
+      const existing = this.inventory().find((item) => item.packageId === packageId && item.contentHash === contentHash);
+      if (existing !== undefined) {
+        rmSync(jobRoot, { recursive: true, force: true });
+        return { package: clonePackage(existing), stagedPath: this.sourcePath(existing) };
+      }
       const revisionId = randomUUID();
       const importPath = join(this.importsRoot(), importId);
       mkdirSync(dirnameFor(importPath), { recursive: true });
@@ -247,7 +252,11 @@ export class SkillPackageManager {
     renameSync(partialPath, activePath);
     const activeHash = hashDirectory(activePath);
     const updated = this.update(record, { state: "active", enabled: true, activeHash });
-    this.#saveState({ packages: this.inventory().map((item) => item.revisionId === record.revisionId ? updated : item) });
+    this.#saveState({ packages: this.inventory().map((item) => {
+      if (item.revisionId === record.revisionId) return updated;
+      if (item.packageId === record.packageId && item.enabled) return this.update(item, { enabled: false, state: "disabled" });
+      return item;
+    }) });
     return { packageId: record.packageId, revisionId: record.revisionId, reason: "explicit", resources: record.files, capabilities: [] };
   }
 
@@ -364,8 +373,9 @@ export class SkillResourceProjector {
     const explicit = new Set(request.enabledSkillIds ?? []);
     return this.#manager.inventory().filter((item) => item.enabled && item.state === "active").flatMap((item) => {
       const keywords = (item.metadata.keywords ?? "").split(/[\s,;|]+/u).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 3);
+      const descriptionTriggers = skillDescriptionTriggers(item.metadata.description ?? "");
       const name = (item.metadata.name ?? item.packageId).toLowerCase();
-      const relevant = explicit.has(item.packageId) || explicit.has(item.revisionId) || task.includes(item.packageId.toLowerCase()) || task.includes(name) || keywords.some((term) => task.includes(term));
+      const relevant = explicit.has(item.packageId) || explicit.has(item.revisionId) || task.includes(item.packageId.toLowerCase()) || task.includes(name) || keywords.some((term) => task.includes(term)) || descriptionTriggers.some((term) => task.includes(term));
       if (!relevant) return [];
       return [{ packageId: item.packageId, revisionId: item.revisionId, reason: explicit.has(item.packageId) || explicit.has(item.revisionId) ? "explicit" as const : "task_match" as const, resources: item.files, capabilities: [] }];
     });
@@ -403,6 +413,12 @@ export class SkillResourceProjector {
     const revisionId = createHash("sha256").update(JSON.stringify({ decisions, instructions, resources }), "utf8").digest("hex");
     return { schemaVersion: 1, revisionId, decisions: decisions.map((decision) => ({ ...decision, resources: [...decision.resources], capabilities: [] })), instructions, resources };
   }
+}
+
+function skillDescriptionTriggers(description: string): string[] {
+  const marker = /(?:triggers?|触发词)\s*[:：]\s*(.+)$/iu.exec(description);
+  if (marker?.[1] === undefined) return [];
+  return marker[1].split(/[|,，;；]+/u).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 3);
 }
 
 function normalizePackageId(value: string): string {

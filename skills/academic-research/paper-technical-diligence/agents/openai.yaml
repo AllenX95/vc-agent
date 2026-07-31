@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Technical Diligence"
+  short_description: "VC-grade diligence on AI research papers"
+  default_prompt: "Use $paper-technical-diligence to evaluate an AI paper's novelty, evidence, artifacts, limitations, and VC relevance."

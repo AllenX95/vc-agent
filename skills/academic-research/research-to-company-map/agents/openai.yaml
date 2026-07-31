@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research to Company Map"
+  short_description: "Trace research into commercial organizations"
+  default_prompt: "Use $research-to-company-map to trace papers, authors, repositories, and Hub assets to candidate commercialization organizations."

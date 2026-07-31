@@ -21,7 +21,7 @@ test("edits saved profiles, scrolls long conversations, and sends with Enter", a
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Editable profile");
     await window.getByLabel("Provider").fill("provider-before");
     await window.getByLabel("Model").fill("model-before");
-    await window.getByLabel("API key").fill("fixture-secret");
+    await window.getByRole("textbox", { name: "API key", exact: true }).fill("fixture-secret");
     await window.getByRole("button", { name: "Save profile" }).click();
     await window.getByRole("button", { name: "Edit Editable profile" }).click();
     await window.getByLabel("Provider").fill("provider-after");

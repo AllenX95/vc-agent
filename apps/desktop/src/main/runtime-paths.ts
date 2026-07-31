@@ -11,6 +11,7 @@ export interface DesktopRuntimePathInput {
 export interface DesktopRuntimePaths {
   readonly agentWorkerEntry: string;
   readonly utilityWorkerEntry: string;
+  readonly bundledAcademicSkillsRoot: string;
   readonly parserPython?: string;
 }
 
@@ -32,6 +33,7 @@ export function resolveDesktopRuntimePaths(input: DesktopRuntimePathInput): Desk
         ? "../../../agent-worker/dist-test/index.js"
         : "../../../agent-worker/dist/index.js"),
       utilityWorkerEntry: resolve(input.mainDirectory, "../../../utility-worker/dist/index.js"),
+      bundledAcademicSkillsRoot: resolve(input.mainDirectory, "../../../../skills/academic-research"),
       ...(nonEmpty(environment.VC_AGENT_PYTHON) === undefined ? {} : { parserPython: resolve(environment.VC_AGENT_PYTHON!) })
     };
   }
@@ -41,6 +43,7 @@ export function resolveDesktopRuntimePaths(input: DesktopRuntimePathInput): Desk
   return {
     agentWorkerEntry: join(input.resourcesPath, "workers", "agent-worker", "dist", "index.js"),
     utilityWorkerEntry: join(input.resourcesPath, "workers", "utility-worker", "dist", "index.js"),
+    bundledAcademicSkillsRoot: join(input.resourcesPath, "bundled-skills", "academic-research"),
     ...(parserOverride !== undefined
       ? { parserPython: resolve(parserOverride) }
       : existsSync(bundledParser)
@@ -53,6 +56,7 @@ export function validatePackagedRuntimePaths(paths: DesktopRuntimePaths): readon
   return [
     ...(existsSync(paths.agentWorkerEntry) ? [] : ["Agent Worker"]),
     ...(existsSync(paths.utilityWorkerEntry) ? [] : ["Utility Worker"]),
+    ...(existsSync(paths.bundledAcademicSkillsRoot) ? [] : ["Bundled academic Skills"]),
     ...(paths.parserPython !== undefined && existsSync(paths.parserPython) ? [] : ["Parser runtime"])
   ];
 }

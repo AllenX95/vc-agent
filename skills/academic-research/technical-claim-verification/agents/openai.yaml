@@ -1,0 +1,4 @@
+interface:
+  display_name: "Technical Claim Verification"
+  short_description: "Verify startup technical claims with evidence"
+  default_prompt: "Use $technical-claim-verification to decompose and verify a startup's technical claims against academic and artifact evidence."

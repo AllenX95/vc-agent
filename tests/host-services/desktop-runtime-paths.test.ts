@@ -12,7 +12,8 @@ describe("desktop packaged runtime paths", () => {
       environment: {}
     })).toEqual({
       agentWorkerEntry: resolve("apps/agent-worker/dist/index.js"),
-      utilityWorkerEntry: resolve("apps/utility-worker/dist/index.js")
+      utilityWorkerEntry: resolve("apps/utility-worker/dist/index.js"),
+      bundledAcademicSkillsRoot: resolve("skills/academic-research")
     });
   });
 
@@ -40,6 +41,7 @@ describe("desktop packaged runtime paths", () => {
     expect(paths).toEqual({
       agentWorkerEntry: join(resourcesPath, "workers", "agent-worker", "dist", "index.js"),
       utilityWorkerEntry: join(resourcesPath, "workers", "utility-worker", "dist", "index.js"),
+      bundledAcademicSkillsRoot: join(resourcesPath, "bundled-skills", "academic-research"),
       parserPython: join(resourcesPath, "custom-parser", "python.exe")
     });
   });

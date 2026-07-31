@@ -1,0 +1,4 @@
+interface:
+  display_name: "Founder Academic Diligence"
+  short_description: "Assess founder research strength and fit"
+  default_prompt: "Use $founder-academic-diligence to assess a founder's academic identity, research contributions, independence, engineering evidence, and startup fit."

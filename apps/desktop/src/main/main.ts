@@ -43,7 +43,7 @@ import {
 import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
 import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { ANTHROPIC_SKILLS_SOURCE, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { ANTHROPIC_SKILLS_SOURCE, BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
@@ -141,6 +141,7 @@ let extensionAdmission: ExtensionAdmissionManager | null = null;
 let globalExtensionRevisions: GlobalExtensionRevisionManager | null = null;
 let skillsDirectory: SkillPackageManager | null = null;
 let skillProjector: SkillResourceProjector | null = null;
+let bundledAcademicSkillsRoot: string | null = null;
 let officeOrchestrator: OfficeSkillOrchestrator | null = null;
 let skillCreatorWorkflow: SkillCreationWorkflow | null = null;
 let pageRecoveryPipeline: PageRecoveryPipeline | null = null;
@@ -193,8 +194,9 @@ function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readon
   const inventory = skillsDirectory?.inventory() ?? [];
   const active = inventory.filter((item) => item.enabled && item.state === "active");
   const office = active.filter((item) => (ANTHROPIC_SKILLS_SOURCE.skills as readonly { packageId: string }[]).some((definition) => definition.packageId === item.packageId));
+  const academic = active.filter((item) => BUNDLED_ACADEMIC_SKILL_IDS.some((packageId) => packageId === item.packageId));
   if (inventory.length === 0) return { status: "attention", message: "No imported Skill package is configured; the app-owned directory remains dormant." };
-  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} Anthropic Office/Creator package(s); no package was activated by Doctor.` };
+  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} Anthropic Office/Creator package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
 }
 
 function skillPackageProjection(item: SkillInventoryItem): ContractSkillInventoryItem {
@@ -219,7 +221,7 @@ function skillReportProjection(report: SkillCompatibilityReport): ContractSkillC
   };
 }
 
-function skillsStateEvent(correlationId: string, action: "listed" | "imported" | "inspected" | "activated" | "disabled", selectedRevisionId?: string, report?: SkillCompatibilityReport): HostEvent {
+function skillsStateEvent(correlationId: string, action: "listed" | "imported" | "bundled_installed" | "inspected" | "activated" | "disabled", selectedRevisionId?: string, report?: SkillCompatibilityReport): HostEvent {
   if (skillsDirectory === null) return diagnostic(correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
   return {
     ...eventMetadata(correlationId),
@@ -840,6 +842,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (sourceDirectory === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill import was canceled.");
         const imported = await skillsDirectory.importLocalDirectory({ sourceDirectory });
         return skillsStateEvent(command.correlationId, "imported", imported.package.revisionId);
+      }
+      case "skills.academic.install": {
+        if (command.actor.actorType !== "user" || skillsDirectory === null || bundledAcademicSkillsRoot === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Bundled academic Skill installation requires explicit User action and an initialized Skills Directory.");
+        await installBundledAcademicSkills({ manager: skillsDirectory, sourceRoot: bundledAcademicSkillsRoot });
+        return skillsStateEvent(command.correlationId, "bundled_installed");
       }
       case "skills.inspect": {
         if (skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
@@ -2235,9 +2242,12 @@ function submitTurn(
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   const reflectionOutcomeIntent = reflectionRun !== undefined && detectReflectionOutcomeIntent(input.text);
   const academicWorkflow = reflectionRun === undefined ? academicWorkflowPrototype(input.text) : undefined;
+  const runtimeSkills = runtimeSkillsForTask(input.text, thread.scope);
+  const academicWorkflowLoaded = academicWorkflow !== undefined
+    && runtimeSkills.decisions.some((decision) => decision.packageId === academicWorkflow.id);
   const effectiveAppendSystemPrompt = options.appendSystemPrompt
     ?? (reflectionRun === undefined
-      ? academicWorkflow === undefined ? [] : [academicWorkflow.instructions]
+      ? academicWorkflow === undefined || academicWorkflowLoaded ? [] : [academicWorkflow.instructions]
       : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS]);
   const preloadHints = reflectionRun === undefined
     ? [
@@ -2293,7 +2303,7 @@ function submitTurn(
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
-      skillEstimatedTokens: 0,
+      skillEstimatedTokens: estimateTokens(runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")),
       materialEstimatedTokens: 0
     },
     capabilitySurface: {
@@ -2448,7 +2458,7 @@ function submitTurn(
       revisionId: promptRevision.id,
       systemPrompt: promptRevision.content,
       appendSystemPrompt: [...(context.appendSystemPrompt ?? [])],
-      skills: runtimeSkillsForTask(input.text, thread.scope)
+      skills: runtimeSkills
     },
     extensions: extensionRuntimeSnapshot()
   };
@@ -3494,6 +3504,7 @@ app.whenReady().then(() => {
     resourcesPath: process.resourcesPath,
     mainDirectory: __dirname
   });
+  bundledAcademicSkillsRoot = runtimePaths.bundledAcademicSkillsRoot;
   if (app.isPackaged) {
     const missingRuntimeComponents = validatePackagedRuntimePaths(runtimePaths);
     if (missingRuntimeComponents.length > 0) {
@@ -3945,6 +3956,7 @@ async function shutdownApplication(): Promise<void> {
   extensionAdmission = null;
   globalExtensionRevisions = null;
   skillProjector = null;
+  bundledAcademicSkillsRoot = null;
   skillsDirectory = null;
   for (const state of materialWatchers.values()) {
     state.watcher.close();

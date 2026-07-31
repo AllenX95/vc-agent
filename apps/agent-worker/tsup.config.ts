@@ -5,7 +5,7 @@ const shared = {
   platform: "node" as const,
   target: "es2023",
   external: ["electron"],
-  noExternal: [/^@earendil-works\//, "@vc-agent/contracts", "@vc-agent/pi-adapter", "typebox"],
+  noExternal: [/^@earendil-works\//, "@vc-agent/contracts", "@vc-agent/pi-adapter", "pi-web-access", "typebox"],
   banner: {
     js: 'import { createRequire as __vcCreateRequire } from "node:module"; const require = __vcCreateRequire(import.meta.url);'
   },
