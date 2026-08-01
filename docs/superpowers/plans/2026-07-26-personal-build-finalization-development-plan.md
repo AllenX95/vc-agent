@@ -105,7 +105,7 @@ P1 is complete in the current working tree:
 
 P2 is complete:
 
-- Provisioned the pinned Anthropic Office Skills source revision `fa0fa64bdc967915dc8399e803be67759e1e62b8` into vc-agent-owned application directories outside the repository; no other agent's Skills directory is consulted.
+- Provisioned a user-supplied local Office Skill package into vc-agent-owned application directories outside the repository; no vendor source is fetched and no other agent's Skills directory is consulted.
 - Ran DOCX create, edit, reopen validation, and controlled replacement through an external Microsoft Word stdin-manifest runner and emitted sanitized Office evidence outside the repository. LibreOffice is neither required nor used.
 - Installed the official `@modelcontextprotocol/server-filesystem@2026.7.10` outside the repository, scoped it to a dedicated sandbox, and exercised lazy read, confirmed write, and restart dormancy through `pi-mcp-adapter@1.5.1`.
 - Reused the already configured real OCR evidence.

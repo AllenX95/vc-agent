@@ -757,6 +757,10 @@ const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
 const deleteThreadTrajectoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.trajectory.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
 const setThreadArchivedCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.archive.set"), payload: z.object({ threadId: z.string().min(1), archived: z.boolean() }) });
 const deleteThreadCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
+const renameThreadCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.rename"),
+  payload: z.object({ threadId: z.string().min(1), title: z.string().trim().min(1).max(120) })
+});
 const createThreadCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.create.unscoped"),
   payload: z.object({ title: z.string().trim().min(1).max(120) })
@@ -951,6 +955,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   deleteThreadTrajectoryCommandSchema,
   setThreadArchivedCommandSchema,
   deleteThreadCommandSchema,
+  renameThreadCommandSchema,
   createThreadCommandSchema,
   createProjectThreadCommandSchema,
   selectThreadProfileCommandSchema,
@@ -1192,6 +1197,10 @@ const threadTrajectoryLoadedEventSchema = eventMetadataSchema.extend({
 });
 const threadCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.created"),
+  payload: z.object({ thread: threadSchema })
+});
+const threadRenamedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.renamed"),
   payload: z.object({ thread: threadSchema })
 });
 const threadProfileSelectedEventSchema = eventMetadataSchema.extend({
@@ -1461,6 +1470,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   threadsListedEventSchema,
   threadTrajectoryLoadedEventSchema,
   threadCreatedEventSchema,
+  threadRenamedEventSchema,
   threadProfileSelectedEventSchema,
   threadProfileChangeRequiredEventSchema,
   threadProfileChangeResolvedEventSchema,

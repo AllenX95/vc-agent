@@ -1,0 +1,4 @@
+interface:
+  display_name: "ArXiv Full-Text Reader"
+  short_description: "HTML-first ArXiv downloads with PDF fallback"
+  default_prompt: "Use $arxiv-fulltext-reader to fetch an arXiv paper, prefer HTML, and retain a PDF fallback."

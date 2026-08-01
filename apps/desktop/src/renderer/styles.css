@@ -233,6 +233,11 @@ button { font: inherit; letter-spacing: 0; }
 .workspace-dialog span { color: #707870; font-size: 10px; overflow-wrap: anywhere; }
 .workspace-dialog div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .workspace-dialog button { min-height: 28px; padding: 0 9px; border: 1px solid #c5cbc4; border-radius: 5px; background: #fff; color: #36423a; font-size: 10px; }
+.rename-thread-dialog { display: grid; gap: 10px; }
+.rename-thread-dialog label { display: grid; gap: 5px; color: #59615a; font-size: 11px; }
+.rename-thread-dialog input { width: 100%; min-height: 34px; padding: 0 9px; border: 1px solid #c9cec8; border-radius: 5px; outline: 0; background: #fff; color: #28332c; font-size: 12px; }
+.rename-thread-dialog input:focus { border-color: #52715e; box-shadow: 0 0 0 2px rgba(82, 113, 94, .12); }
+.rename-thread-dialog > span { margin-top: -4px; color: #707870; font-size: 10px; }
 .reflection-launch { display: grid; gap: 10px; }
 .reflection-launch label { display: grid; gap: 5px; color: #59615a; font-size: 11px; }
 .reflection-launch textarea, .reflection-launch select { width: 100%; padding: 8px; border: 1px solid #c9cec8; border-radius: 5px; background: #fff; color: #28332c; }

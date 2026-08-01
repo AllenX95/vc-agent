@@ -287,6 +287,8 @@ describe("HostStateStore", () => {
     ]);
     expect(store.isProjectProfileAuthorized(project.id, profile.id)).toBe(true);
     expect(store.getPhysicalContext(first.id)?.sessionFile).not.toBe(store.getPhysicalContext(second.id)?.sessionFile);
+    expect(store.renameThread(first.id, "Investment Thesis")).toMatchObject({ id: first.id, title: "Investment Thesis", stateVersion: 2 });
+    expect(store.getThread(first.id)?.title).toBe("Investment Thesis");
     expect(store.setThreadArchived(first.id, true)).toMatchObject({ id: first.id, archivedAt: expect.any(String) });
     expect(store.listThreads().find((thread) => thread.id === first.id)?.archivedAt).toEqual(expect.any(String));
     expect(store.setThreadArchived(first.id, false)).not.toHaveProperty("archivedAt");
@@ -297,6 +299,7 @@ describe("HostStateStore", () => {
     expect(store.listExecutionQueue().some((item) => item.threadId === first.id)).toBe(false);
     expect(store.listArtifacts(first.id)).toMatchObject([{ id: "project-thread-artifact" }]);
     expect(() => store.setThreadArchived(first.id, true)).toThrow("Thread not found");
+    expect(() => store.renameThread(first.id, "Deleted")).toThrow("Thread not found");
     expect(store.getBootstrapState("0.1.0", idleActivity).entityCounts).toMatchObject({ projects: 1, threads: 1 });
     store.close();
   });

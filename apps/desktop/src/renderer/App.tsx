@@ -61,6 +61,7 @@ import {
   Minimize2,
   Moon,
   PanelRight,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -225,6 +226,7 @@ export function App() {
   const [dreamLaunchProfileId, setDreamLaunchProfileId] = useState<string | null>(null);
   const [dreamNoticeDismissed, setDreamNoticeDismissed] = useState(false);
   const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<{ threadId: string; title: string } | null>(null);
   const longTermMemoryDirty = useRef(false);
   const activeThreadIdRef = useRef<string | null>(null);
   const pendingProfileSelections = useRef<Record<string, Promise<unknown>>>({});
@@ -417,6 +419,7 @@ export function App() {
         setMemoryCandidates((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !event.payload.removedCandidateIds.includes(id))));
         setActiveThreadId((current) => current === event.payload.threadId ? null : current);
         setDeleteThreadId(null);
+        setRenameDraft((current) => current?.threadId === event.payload.threadId ? null : current);
         break;
       case "project.outputs.listed":
       case "project.outputs.updated": setOutputsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.outputs })); break;
@@ -451,6 +454,10 @@ export function App() {
         activeThreadIdRef.current = event.payload.thread.id;
         setActiveThreadId(event.payload.thread.id);
         setView("workspace");
+        break;
+      case "thread.renamed":
+        setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
+        setRenameDraft((current) => current?.threadId === event.payload.thread.id ? null : current);
         break;
       case "thread.profile.selected":
         setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
@@ -814,6 +821,19 @@ export function App() {
     void invoke(createCommand({ command: "turn.stop", payload: { threadId: activeThreadId, turnId: activeTurn.turnId } }));
   };
 
+  const openRenameThread = (thread: Thread) => {
+    if (readOnlyRecovery) return;
+    setRenameDraft({ threadId: thread.id, title: thread.title });
+  };
+
+  const submitRenameThread = async () => {
+    if (renameDraft === null) return;
+    const title = renameDraft.title.trim();
+    if (title.length === 0) return;
+    const event = await invoke(createCommand({ command: "thread.rename", payload: { threadId: renameDraft.threadId, title } }));
+    if (event?.event === "thread.renamed") setRenameDraft(null);
+  };
+
   const compact = () => {
     if (activeThreadId === null || hasActiveTurn) return;
     void invoke(createCommand({ command: "thread.compact", payload: { threadId: activeThreadId } }));
@@ -997,7 +1017,7 @@ export function App() {
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
+             <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title="Rename thread" aria-label="Rename thread" onClick={() => openRenameThread(activeThread)} disabled={readOnlyRecovery}><Pencil size={15} /></button><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
             <div className="message-list" onPointerUp={captureConversationSelection} onScroll={() => setConversationSelection(null)}>
               {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} outputLocation={activeThread.scope === "unscoped" ? activeThread.outputLocation : undefined} outcomes={reflectionOutcomes[activeReflection.id] ?? { judgments: [], learningProposals: [] }} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} prepareOutcomes={() => submit("Prepare a Judgment Record and one de-identified Long-term Learning Proposal from this Reflection.")} confirmJudgment={(draftId) => void invoke(createCommand({ command: "reflection.judgment.confirm", payload: { draftId } }))} discardOutcome={(draftId) => void invoke(createCommand({ command: "reflection.outcome.discard", payload: { draftId } }))} prepareLearningPatch={(proposalId, judgmentDraftId) => void invoke(createCommand({ command: "reflection.learning.prepare_patch", payload: { proposalId, judgmentDraftId } }))} />}
               {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : groupConversationItems(items).map((turn) => (
@@ -1035,6 +1055,7 @@ export function App() {
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
         {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>{reflectionLaunch.scope === "project" ? "The first pass is isolated from Project Memory and Long-term Memory." : "The first pass uses only frozen User inputs and public evidence. It cannot access Project State or Memory."}</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder={reflectionLaunch.scope === "project" ? "Review this Project broadly" : "Review this investment question broadly"} /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
         {dreamLaunchProfileId !== null && <div className="workspace-dialog dream-launch" role="dialog" aria-label="Start Dream"><strong>Start Dream</strong><span>This creates one frozen cross-project review batch. It does not authorize any Memory write.</span><label>Dream Model Profile<select aria-label="Dream Model Profile" value={dreamLaunchProfileId} onChange={(event) => setDreamLaunchProfileId(event.target.value)}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setDreamLaunchProfileId(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchDream()} disabled={dreamLaunchProfileId === ""}>Create Dream Batch</button></div></div>}
+        {renameDraft !== null && <form className="workspace-dialog rename-thread-dialog" role="dialog" aria-label="Rename thread" onSubmit={(event) => { event.preventDefault(); void submitRenameThread(); }}><strong>Rename thread</strong><label>Thread name<input aria-label="Thread name" value={renameDraft.title} maxLength={120} autoFocus onChange={(event) => setRenameDraft({ ...renameDraft, title: event.target.value })} /></label><span>Use 1–120 characters.</span><div className="form-actions"><button type="button" onClick={() => setRenameDraft(null)}>Cancel</button><button className="primary-button" type="submit" disabled={renameDraft.title.trim().length === 0}>Save name</button></div></form>}
         {deleteThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread"><strong>Delete this thread?</strong><span>This removes the Thread from the project, together with its retained conversation, physical context, queued work, unapproved candidates, and Dream source text. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThread()}>Delete thread</button></div></div>}
         {view === "workspace" && preparedMemoryPatch && <div className="workspace-dialog reflection-memory-patch" role="dialog" aria-label="Reflection Memory patch preview"><strong>Confirm Long-term Memory change</strong><span>This is a separate confirmation after the Judgment Record. Review the lineage and file diffs before committing.</span><p>{preparedMemoryPatch.rationale}</p><pre>{preparedMemoryPatch.lineageDiff}</pre>{preparedMemoryPatch.files.map((file) => <details key={file.kind} open={file.changed}><summary>{file.kind.replaceAll("_", " ")} · {file.changed ? "changed" : "unchanged"}</summary><span title={file.path}>{file.path}</span><pre>{file.diff}</pre></details>)}<div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.discard", payload: { patchId: preparedMemoryPatch.id } }))}>Discard</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.commit", payload: { patchId: preparedMemoryPatch.id, confirmed: true } }))}>Confirm Memory change</button></div></div>}
 

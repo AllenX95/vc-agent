@@ -8,13 +8,13 @@ Blocked by: None
 
 用真实但不入库的用户依赖验证 Integration Build，并使 `G3 Practical Integration Workflow Gate` 从 `blocked` 变为 `pass`。
 
-Closure evidence: the pinned Anthropic Office source was provisioned only under vc-agent-owned application data, and an external Microsoft Word runner passed create/edit/reopen/replace without LibreOffice. Configured OCR evidence remained valid, and an external official filesystem MCP service passed lazy-read/confirmed-write/restart through `pi-mcp-adapter@1.5.1`. `pnpm integration-gate:release` reports `pass` for G3-T-001 through G3-T-011. Evidence files, dependency packages, generated documents, and MCP sandbox contents remain outside the repository.
+Closure evidence: a user-supplied local Office package was provisioned only under vc-agent-owned application data, and an external Microsoft Word runner passed create/edit/reopen/replace without LibreOffice. Configured OCR evidence remained valid, and an external official filesystem MCP service passed lazy-read/confirmed-write/restart through `pi-mcp-adapter@1.5.1`. `pnpm integration-gate:release` reports `pass` for G3-T-001 through G3-T-011. Evidence files, dependency packages, generated documents, and MCP sandbox contents remain outside the repository.
 
 ## Real Dependency Matrix
 
 | Integration | Required real evidence | Repository rule |
 | --- | --- | --- |
-| Office | One complete user-supplied Claude Office Skill create/edit/diff/replace path | Package bytes stay outside Git |
+| Office | One complete user-supplied local Office Skill create/edit/diff/replace path | Package bytes stay outside Git |
 | OCR | Configured PaddleOCR and OvisOCR2 local runtime on native/scanned/complex pages | No weights or environment paths in Git/report |
 | MCP | Actually installed and locked pinned `pi-mcp-adapter` plus fixture server | No second client and no credentials in config export |
 | Skill Creator | Complete reused package stages a valid disabled Skill | Generated personal package stays in app data |

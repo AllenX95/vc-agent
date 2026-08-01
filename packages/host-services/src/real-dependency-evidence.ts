@@ -46,7 +46,7 @@ function validOcrEvidence(value: Record<string, unknown>): boolean {
 }
 
 function validOfficeEvidence(value: Record<string, unknown>): boolean {
-  if (typeof value.sourceRevision !== "string" || value.sourceRevision.length === 0 || !hasWorkflowSet(value.workflows, ["create", "edit", "replace"])) return false;
+  if (typeof value.sourceContentHash !== "string" || !/^[a-f0-9]{64}$/u.test(value.sourceContentHash) || !hasWorkflowSet(value.workflows, ["create", "edit", "replace"])) return false;
   const packageIds = value.packageIds;
   const formats = value.formats;
   const runner = value.runner;

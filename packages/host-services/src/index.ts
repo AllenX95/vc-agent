@@ -80,12 +80,13 @@ export {
   type SkillSourceKind
 } from "./skills-directory.js";
 export {
-  ANTHROPIC_SKILLS_SOURCE,
-  provisionAnthropicSkills,
-  type AnthropicSkillPackageId,
-  type ProvisionAnthropicSkillsInput,
-  type ProvisionedAnthropicSkill
-} from "./claude-skills.js";
+  USER_OFFICE_SKILL_FORMATS,
+  isUserOfficeSkillPackage,
+  provisionUserOfficeSkills,
+  type ProvisionUserOfficeSkillsInput,
+  type ProvisionedUserOfficeSkill,
+  type UserOfficeSkillFormat
+} from "./office-skills.js";
 export {
   OfficeSkillOrchestrator,
   type OfficeExecutionPlan,

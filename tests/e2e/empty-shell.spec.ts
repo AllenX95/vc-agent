@@ -88,6 +88,31 @@ test("launches the empty shell without activating execution resources", async ()
   }
 });
 
+test("renames a Thread from the conversation header", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-rename-thread-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory);
+
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "Thread 1", exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Rename thread", exact: true }).click();
+    await expect(window.getByRole("dialog", { name: "Rename thread" })).toBeVisible();
+    await window.getByLabel("Thread name").fill("Investment Thesis");
+    await window.getByRole("button", { name: "Save name", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "Investment Thesis", exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Investment Thesis", exact: true })).toBeVisible();
+    await expect(invokeRaw(window, "thread.list")).resolves.toMatchObject({
+      event: "threads.listed",
+      payload: { threads: [{ title: "Investment Thesis" }] }
+    });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("opens newer local state in visible read-only recovery without changing it", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-newer-state-e2e-"));
   const root = resolve(import.meta.dirname, "../..");

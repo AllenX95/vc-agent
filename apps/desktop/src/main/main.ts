@@ -44,7 +44,7 @@ import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapabili
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
 import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { ANTHROPIC_SKILLS_SOURCE, BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
@@ -196,10 +196,10 @@ function runtimeSkillsForTask(task: string, scope: "project" | "unscoped"): Cont
 function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
   const inventory = skillsDirectory?.inventory() ?? [];
   const active = inventory.filter((item) => item.enabled && item.state === "active");
-  const office = active.filter((item) => (ANTHROPIC_SKILLS_SOURCE.skills as readonly { packageId: string }[]).some((definition) => definition.packageId === item.packageId));
+  const office = active.filter((item) => isUserOfficeSkillPackage(item.packageId));
   const academic = active.filter((item) => BUNDLED_ACADEMIC_SKILL_IDS.some((packageId) => packageId === item.packageId));
   if (inventory.length === 0) return { status: "attention", message: "No imported Skill package is configured; the app-owned directory remains dormant." };
-  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} Anthropic Office/Creator package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
+  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} user-supplied Office package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
 }
 
 function skillPackageProjection(item: SkillInventoryItem): ContractSkillInventoryItem {
@@ -241,13 +241,13 @@ function skillsStateEvent(correlationId: string, action: "listed" | "imported" |
 
 function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
   const inventory = skillsDirectory?.inventory() ?? [];
-  const imported = ANTHROPIC_SKILLS_SOURCE.skills.filter((definition) => inventory.some((item) => item.packageId === definition.packageId));
-  const active = imported.filter((definition) => inventory.some((item) => item.packageId === definition.packageId && item.enabled && item.state === "active"));
-  if (imported.length === 0) return { status: "attention", message: "Anthropic docx/pptx/xlsx/skill-creator packages are not imported; run the explicit provisioning command." };
+  const imported = inventory.filter((item) => isUserOfficeSkillPackage(item.packageId));
+  const active = imported.filter((item) => item.enabled && item.state === "active");
+  if (imported.length === 0) return { status: "attention", message: "No compatible user-supplied Office Skill package is imported; import a local package from Settings." };
   const runnerConfigured = (process.env.VC_AGENT_OFFICE_RUNNER?.trim() ?? "") !== "";
   const status = active.length === imported.length && runnerConfigured ? "ready" : "attention";
   const dependencyMessage = runnerConfigured ? "an explicit Office runner is configured" : "VC_AGENT_OFFICE_RUNNER is not configured";
-  return { status, message: `${active.length}/${imported.length} imported Anthropic package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
+  return { status, message: `${active.length}/${imported.length} imported user-supplied Office package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
 }
 
 function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
@@ -1599,6 +1599,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "thread.create.project": {
         const thread = stateStore.createProjectThread(command.payload.projectId, command.payload.title);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
+      }
+      case "thread.rename": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Thread renaming requires explicit User action.");
+        const thread = stateStore.renameThread(command.payload.threadId, command.payload.title);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.renamed", payload: { thread } };
       }
       case "thread.profile.select":
         return selectThreadProfile(command.correlationId, command.payload.threadId, command.payload.profileId);
