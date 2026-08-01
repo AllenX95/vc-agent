@@ -1194,7 +1194,7 @@ function SkillsSettings({ packages, root, lastReport, invoke }: {
   lastReport: SkillCompatibilityReport | null;
   invoke(command: HostCommand): Promise<unknown>;
 }) {
-  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map"];
+  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map", "arxiv-fulltext-reader"];
   const activeAcademicSkillCount = academicSkillIds.filter((packageId) => packages.some((item) => item.packageId === packageId && item.enabled && item.state === "active")).length;
   return <div className="settings-section skills-settings" data-testid="skills-settings">
     <div className="settings-section-header"><div><h2>Skills Directory</h2><p>Complete packages are copied into an app-owned directory and remain disabled until explicit activation.</p></div><div className="form-actions"><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.academic.install" }))} disabled={activeAcademicSkillCount === academicSkillIds.length}>Install academic skills</button><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.import" }))}>Import Skill</button></div></div>

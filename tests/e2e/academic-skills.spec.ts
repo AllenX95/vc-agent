@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { testEnvironment } from "./test-environment";
 
-test("installs and activates the five bundled academic skills from Settings", async () => {
+test("installs and activates the bundled academic skills from Settings", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-academic-skills-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
   const application = await electron.launch({
@@ -20,14 +20,15 @@ test("installs and activates the five bundled academic skills from Settings", as
     const install = section.getByRole("button", { name: "Install academic skills" });
     await expect(install).toBeEnabled();
     await install.click();
-    await expect(section.getByText("5/5", { exact: true })).toBeVisible();
+    await expect(section.getByText("6/6", { exact: true })).toBeVisible();
     await expect(install).toBeDisabled();
     for (const packageId of [
       "paper-technical-diligence",
       "founder-academic-diligence",
       "technical-claim-verification",
       "novelty-and-prior-art-map",
-      "research-to-company-map"
+      "research-to-company-map",
+      "arxiv-fulltext-reader"
     ]) {
       await expect(section.locator(".profile-row").filter({ hasText: packageId })).toContainText("active");
     }
@@ -35,7 +36,7 @@ test("installs and activates the five bundled academic skills from Settings", as
     const inventoryPath = join(userDataDirectory, "skills", "inventory.json");
     expect(existsSync(inventoryPath)).toBe(true);
     const inventory = JSON.parse(readFileSync(inventoryPath, "utf8")) as { packages: Array<{ sourceKind: string; enabled: boolean }> };
-    expect(inventory.packages).toHaveLength(5);
+    expect(inventory.packages).toHaveLength(6);
     expect(inventory.packages.every((item) => item.sourceKind === "bundled_reviewed" && item.enabled)).toBe(true);
   } finally {
     await application.close();
