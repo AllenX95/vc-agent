@@ -141,3 +141,34 @@ export const subAgentProjectionSchema = z.object({
   attempts: z.array(subAgentAttemptSchema).max(256)
 });
 export type SubAgentProjection = z.infer<typeof subAgentProjectionSchema>;
+
+/** Default Run/Task projection. Attempt bodies and tool events are loaded separately. */
+export const subAgentTaskSummarySchema = subAgentTaskSchema.pick({
+  schemaVersion: true,
+  id: true,
+  runId: true,
+  role: true,
+  objective: true,
+  status: true,
+  handoff: true,
+  usage: true,
+  failure: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true
+}).extend({ attemptCount: z.number().int().nonnegative().max(32) });
+export type SubAgentTaskSummary = z.infer<typeof subAgentTaskSummarySchema>;
+
+export const subAgentRunProjectionSchema = z.object({
+  run: subAgentRunSchema,
+  tasks: z.array(subAgentTaskSummarySchema).max(32),
+  attemptCount: z.number().int().nonnegative().max(256)
+});
+export type SubAgentRunProjection = z.infer<typeof subAgentRunProjectionSchema>;
+
+export const subAgentTaskDetailProjectionSchema = z.object({
+  run: subAgentRunSchema,
+  task: subAgentTaskSchema,
+  attempts: z.array(subAgentAttemptSchema).max(32)
+});
+export type SubAgentTaskDetailProjection = z.infer<typeof subAgentTaskDetailProjectionSchema>;

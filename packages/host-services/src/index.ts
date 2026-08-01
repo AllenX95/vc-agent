@@ -2,7 +2,9 @@ import type {
   AccessMode,
   ActionProposal,
   CapabilityExecutionRequest,
-  CapabilityExecutionResult
+  CapabilityExecutionResult,
+  DecisionClass,
+  CapabilityMetadata
 } from "@vc-agent/contracts";
 import { normalizeCapabilityExecutionResult } from "@vc-agent/contracts";
 import {
@@ -13,6 +15,7 @@ import {
 } from "@vc-agent/capabilities";
 export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
 export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
+export { CONTEXT_BUDGET_ESTIMATOR_REVISION, DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS, ESTIMATED_BYTES_PER_TOKEN, ContextBudgetService, estimateTextTokens, estimateUtf8Tokens, type ContextBudgetDecision, type ContextBudgetInput, type ContextBudgetTelemetry } from "./context-budget.js";
 export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMaterialFingerprint } from "./material-inventory.js";
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
 export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, serializeBoundedRetrieval, type BoundedRecallEnvelope, type MaterialParseUnavailable, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
@@ -22,6 +25,7 @@ export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextSto
 export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 export { COGNITIVE_EVOLUTION_HISTORY_HEADER, LONG_TERM_MEMORY_ARCHIVE_HEADER, LONG_TERM_MEMORY_HEADER, LongTermMemoryRecallSource, LongTermMemoryStore, createLongTermMemoryIndexContent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, parseLongTermMemory, type LongTermMemoryDocument, type LongTermMemoryEntry, type LongTermMemoryFileSummary, type LongTermMemoryMaturity, type LongTermMemoryRecallItem, type LongTermMemoryRecallPolicy, type LongTermMemoryRecallQuery, type LongTermMemoryStatus, type LongTermMemoryWarning } from "./long-term-memory.js";
 export { MemoryEvolutionStore, type AtomicMemoryFileAddition, type CondensationArchiveItem, type CondensationRetention, type LocalMemoryProvenanceInspection, type LocalMemoryProvenanceRecord, type MemoryEvolutionAction, type MemoryEvolutionStoreOptions, type MemoryLearningDraft, type MemoryMaintenanceState, type MemoryPatchFileDiff, type MemoryPatchRequest, type PreparedMemoryPatch } from "./memory-evolution.js";
+export { MemoryReviewService, type MemoryChangeRequest, type MemoryCommitResult, type MemoryHistoryProjection, type MemoryHistoryQuery, type MemoryReviewServiceOptions, type MemoryWorkspaceView, type PendingMemoryKind, type PendingMemoryProjection, type PendingMemoryQuery, type PreparedMemoryChange } from "./memory-review.js";
 export { DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, parseIndependentAssessment, reflectionFraming, type BuildReflectionProjectBriefInput } from "./investment-reflection.js";
 export { ReflectionEvidenceDrilldownSource, parseMaterialBlockReference, type ReflectionEvidenceAccess, type ReflectionEvidenceDrilldownQuery } from "./reflection-evidence.js";
 export { captureReflectionDependencies, reflectionDependencyFingerprint, staleReflectionDependencies, type CaptureReflectionDependenciesInput, type ReflectionDependencyEntry, type ReflectionDependencyState } from "./reflection-staleness.js";
@@ -34,6 +38,7 @@ export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutc
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";
+export { ExecutionLifecycleCoordinator, type BeginTurnRequest, type CheckpointUpdate, type ExecutionAdmissionRequest, type ExecutionLifecycleCallbacks, type ExecutionShutdownReport, type InterruptExecutionRequest, type ReconciliationReport, type TerminalExecutionEvent, type TerminalExecutionOutcome } from "./execution-lifecycle.js";
 export { SubAgentRuntime, createSubAgentProfileResolver, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
 export { ProviderSubAgentAdapter, type SubAgentProviderExecutor } from "./sub-agent-provider-adapter.js";
 export { SubAgentContextCompiler, type SubAgentContextBundle, type SubAgentContextEntry, type SubAgentContextResolution, type SubAgentContextResolver } from "./sub-agent-context.js";
@@ -255,7 +260,12 @@ export class CapabilityGateway {
       };
     }
     if (sensitive !== undefined && authorization.accessMode === "standard") {
-      const proposal: ActionProposal = { requestId: request.requestId, capabilityId: request.capabilityId, ...sensitive };
+      const proposal: ActionProposal = {
+        requestId: request.requestId,
+        capabilityId: request.capabilityId,
+        ...sensitive,
+        decisionClass: sensitive.decisionClass ?? decisionClassForCapability(prepared.definition.metadata)
+      };
       this.#pending.set(request.requestId, {
         request,
         definition: prepared.definition,
@@ -319,6 +329,17 @@ export class CapabilityGateway {
       return failure(context.request.requestId, "CAPABILITY_EXECUTION_FAILED", error instanceof Error ? error.message : "Capability execution failed.");
     }
   }
+}
+
+/**
+ * Conservative defaulting keeps older capability definitions safe while
+ * ensuring every confirmation projection declares exactly one decision class.
+ */
+export function decisionClassForCapability(metadata: Pick<CapabilityMetadata, "activationClass" | "sideEffectClass">): DecisionClass {
+  if (metadata.activationClass === "protected_workflow" || metadata.activationClass === "host_only") return "G1";
+  if (metadata.sideEffectClass === "external_write" || metadata.sideEffectClass === "destructive") return "G2";
+  if (metadata.sideEffectClass === "local_write") return "G3";
+  return "G4";
 }
 
 export function detectOutputIntent(text: string): boolean {

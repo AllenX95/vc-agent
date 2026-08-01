@@ -41,8 +41,9 @@ import {
   type TaskModelType
 } from "@vc-agent/contracts";
 import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { ANTHROPIC_SKILLS_SOURCE, BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
@@ -66,11 +67,13 @@ const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
 const configuredExecutionCapacity = Number.parseInt(process.env.VC_AGENT_EXECUTION_CAPACITY ?? "2", 10);
 const EXECUTION_CAPACITY = Number.isInteger(configuredExecutionCapacity) && configuredExecutionCapacity > 0 ? configuredExecutionCapacity : 2;
+const contextBudgetService = new ContextBudgetService();
 const ACADEMIC_CREDENTIAL_ENVIRONMENT: Readonly<Record<AcademicCredentialSource, string>> = {
   openalex: "OPENALEX_API_KEY",
   github: "GITHUB_TOKEN",
   huggingface: "HF_TOKEN"
 };
+
 const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "app.bootstrap",
   "state.recovery.export",
@@ -753,6 +756,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           event: "app.bootstrap.completed",
           payload: {
             ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
+            piProviders: [...PI_BUILTIN_PROVIDER_IDS],
             executionScheduler: executionSchedulerTelemetry(),
             environmentDoctor: {
               pi: recovery ? { status: "unavailable", message: "Pi execution is disabled in Read-only Recovery." } : { status: "ready", message: "Bundled Pi SDK is available." },
@@ -1427,6 +1431,10 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
         try {
           dreamReviews.reviewScope(command.payload.batchId, command.payload.scopeId, command.payload.decision);
+          const reviewedBatch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
+          if (reviewedBatch?.status === "synthesis_pending" && reviewedBatch.synthesis === undefined) {
+            return startDreamGlobalSynthesis(command.correlationId, command.payload.batchId);
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream scope could not be reviewed.");
@@ -1440,7 +1448,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream proposal review requires explicit User action.");
         if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
         try {
-          dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
+          const reviewedBatch = dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
+          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
+            revalidateDreamSynthesis();
+            dreamCommits.prepare(command.payload.batchId, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposal could not be reviewed."); }
       }
@@ -1450,7 +1462,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const batch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
           if (batch?.synthesis === undefined) throw new Error("DREAM_SYNTHESIS_NOT_REVIEWABLE");
-          dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
+          const reviewedBatch = dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
+          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
+            revalidateDreamSynthesis();
+            dreamCommits.prepare(batch.id, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposals could not be reviewed."); }
       }
@@ -1665,12 +1681,15 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "sub_agent.run.list": {
         if (subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent runtime is unavailable.");
-        const runs = subAgentRuntime.listRuns();
-        return { ...eventMetadata(command.correlationId), event: "sub_agent.runs.listed", payload: { projections: runs.flatMap((run) => { const projection = subAgentRuntime!.inspect(run.id); return projection === undefined ? [] : [projection]; }) } };
+        return { ...eventMetadata(command.correlationId), event: "sub_agent.runs.listed", payload: { projections: subAgentRuntime.listRunProjections() } };
       }
       case "sub_agent.run.inspect": {
         const projection = subAgentRuntime?.inspect(command.payload.runId);
         return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent run not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.inspected", payload: { projection } };
+      }
+      case "sub_agent.task.inspect": {
+        const projection = subAgentRuntime?.inspectTask(command.payload.runId, command.payload.taskId);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.task.inspected", payload: { projection } };
       }
       case "sub_agent.run.stop": {
         if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Stopping a Sub-Agent run requires explicit User action.");
@@ -2293,18 +2312,36 @@ function submitTurn(
   const crossesPromptBoundary = !loadedPromptByThread.has(input.threadId);
   const contextHistory = options.contextHistory ?? trajectoryStore!.contextHistory(input.threadId);
   const workerPrompt = options.workerPrompt ?? input.text;
+  const toolSchemaText = JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema));
+  const budget = contextBudgetService.telemetry({
+    systemPromptBytes: Buffer.byteLength(promptRevision.content, "utf8"),
+    toolSchemaBytes: Buffer.byteLength(toolSchemaText, "utf8"),
+    taskBytes: Buffer.byteLength(`${workerPrompt}\n${effectiveAppendSystemPrompt.join("\n")}\n${runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")}`, "utf8"),
+    retainedHistoryBytes: Buffer.byteLength(JSON.stringify(contextHistory), "utf8"),
+    retrievalBytes: 0,
+    contextWindowTokens: profile?.contextWindow ?? Number.MAX_SAFE_INTEGER,
+    reservedOutputTokens: profile?.maxOutputTokens ?? 2_048
+  });
+  const budgetTelemetry = {
+    estimatorRevision: contextBudgetService.estimatorRevision,
+    safetyMarginTokens: contextBudgetService.safetyMarginTokens,
+    usableContextTokens: budget.usableContextTokens,
+    estimatedInputTokens: budget.estimatedInputTokens,
+    action: budget.action
+  } as const;
   const promptTelemetry = {
     revisionId: promptRevision.id,
     hash: promptRevision.hash,
     contributions: {
       promptEstimatedTokens: estimateTokens(promptRevision.content),
-      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
+      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(toolSchemaText),
       taskEstimatedTokens: estimateTokens(workerPrompt) + estimateTokens(effectiveAppendSystemPrompt.join("\n")),
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
       skillEstimatedTokens: estimateTokens(runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")),
-      materialEstimatedTokens: 0
+      materialEstimatedTokens: 0,
+      contextBudget: budgetTelemetry
     },
     capabilitySurface: {
       revision: capabilitySurface.revision,
@@ -2443,7 +2480,8 @@ function submitTurn(
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
     contextHistory,
-    estimatedInputTokens: Object.values(promptTelemetry.contributions).reduce((sum, value) => sum + value, 0),
+    contextBudget: budgetTelemetry,
+    estimatedInputTokens: budget.estimatedInputTokens,
     currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
     capabilitySurface,
     activeCapabilities: [...context.activeCapabilities],

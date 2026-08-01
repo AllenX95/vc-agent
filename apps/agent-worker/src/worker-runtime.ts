@@ -204,7 +204,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
     }
     if (runtime.stopRequested) { sendInterrupted(runtime, command, "user_stop"); return; }
     if (command.compactOnly === true) { await runtime.session!.compact("manual"); return; }
-    const usableContextTokens = Math.max(0, runtime.session!.contextWindow - runtime.session!.maxOutputTokens - 2_048);
+    const usableContextTokens = Math.max(0, runtime.session!.contextWindow - runtime.session!.maxOutputTokens - (command.contextBudget?.safetyMarginTokens ?? 2_048));
     if (command.currentInputTokens > usableContextTokens) {
       failureSent = true;
       send(runtime, {

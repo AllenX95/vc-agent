@@ -712,7 +712,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
     await window.getByRole("button", { name: "Adjust profile" }).click();
     await window.getByRole("button", { name: "New profile" }).click();
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Invalid key fixture");
-    await window.getByLabel("Provider").fill("anthropic");
+    await window.getByLabel("Provider", { exact: true }).selectOption("anthropic");
     await window.getByLabel("Model").fill("claude-sonnet-4-5");
     await window.getByRole("textbox", { name: "API key", exact: true }).fill(apiKey);
     await window.getByRole("button", { name: "Save profile" }).click();
@@ -1997,9 +1997,25 @@ Treat unusually polished references as a prompt for deeper triangulation, not as
 }
 
 async function createProfile(window: import("@playwright/test").Page, input: { name: string; provider: string; model: string; apiKey: string }) {
+  if (input.provider !== "anthropic" && input.provider !== "openai") {
+    const activeThread = window.locator(".thread-row.active").first();
+    const activeThreadName = await activeThread.count() > 0 ? (await activeThread.textContent())?.trim() : undefined;
+    await invokeRaw(window, "profile.create", { ...input, thinkingLevel: "off" });
+    await window.reload();
+    await expect(window.getByLabel("Navigation")).toBeVisible();
+    if (activeThreadName) {
+      await expect(window.getByRole("button", { name: activeThreadName, exact: true }).first()).toBeVisible();
+      await window.getByRole("button", { name: activeThreadName, exact: true }).first().click();
+    }
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await expect(window.getByText(input.name, { exact: true })).toBeVisible();
+    return;
+  }
   await window.getByRole("button", { name: "New profile" }).click();
   await window.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
-  await window.getByRole("textbox", { name: "Provider", exact: true }).fill(input.provider);
+  await window.getByLabel("Provider mode", { exact: true }).selectOption("builtin");
+  await window.getByLabel("Provider", { exact: true }).selectOption(input.provider);
   await window.getByRole("textbox", { name: "Model", exact: true }).fill(input.model);
   await window.getByLabel("API key", { exact: true }).fill(input.apiKey);
   await window.getByRole("button", { name: "Save profile" }).click();

@@ -7,3 +7,5 @@ export * from "./dream.js";
 export * from "./sub-agent.js";
 export * from "./integration.js";
 export * from "./academic-research.js";
+export * from "./reflection-workflow.js";
+export * from "./dream-workflow.js";

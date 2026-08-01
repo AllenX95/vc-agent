@@ -76,7 +76,7 @@ function buildIsolatedPrompt(input: SubAgentExecutionInput, contextBundle?: SubA
     `Authorized source references: ${references}`,
     `Context character limit: ${task.contextBoundary.maxChars}`,
     `Authorized capabilities: ${task.capabilitySet.join(", ")}`,
-    ...(task.outputTarget === undefined ? [] : [`Authorized output target: ${outputFileName(task.outputTarget)}; use output.write_text only when the objective requires a file.`]),
+    ...(task.outputTarget === undefined ? [] : [`Authorized output target: ${outputFileName(task.outputTarget)}; use output_write_text only when the objective requires a file.`]),
     `Context bundle: ${contextBundle?.hash ?? "reference-only"}`,
     "",
     "Bounded authorized context:",

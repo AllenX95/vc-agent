@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
-import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
+import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunProjectionSchema, subAgentRunSchema, subAgentTaskDetailProjectionSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
 
 export const IPC_SCHEMA_VERSION = 1 as const;
 
@@ -283,9 +283,25 @@ export const promptContributionSchema = z.object({
   recalledStateEstimatedTokens: z.number().int().nonnegative(),
   outputReserveEstimatedTokens: z.number().int().nonnegative(),
   skillEstimatedTokens: z.number().int().nonnegative(),
-  materialEstimatedTokens: z.number().int().nonnegative()
+  materialEstimatedTokens: z.number().int().nonnegative(),
+  contextBudget: z.object({
+    estimatorRevision: z.string().min(1),
+    safetyMarginTokens: z.number().int().nonnegative(),
+    usableContextTokens: z.number().int().nonnegative(),
+    estimatedInputTokens: z.number().int().nonnegative(),
+    action: z.enum(["admit", "compact_then_admit", "reject_current_input", "reject_additional_retrieval"])
+  }).optional()
 });
 export type PromptContribution = z.infer<typeof promptContributionSchema>;
+
+export const contextBudgetTelemetrySchema = z.object({
+  estimatorRevision: z.string().min(1),
+  safetyMarginTokens: z.number().int().nonnegative(),
+  usableContextTokens: z.number().int().nonnegative(),
+  estimatedInputTokens: z.number().int().nonnegative(),
+  action: z.enum(["admit", "compact_then_admit", "reject_current_input", "reject_additional_retrieval"])
+});
+export type ContextBudgetTelemetry = z.infer<typeof contextBudgetTelemetrySchema>;
 
 export const capabilitySurfaceTelemetrySchema = z.object({
   revision: z.string().regex(/^[a-f0-9]{64}$/),
@@ -617,7 +633,7 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
   command: z.literal("profile.create"),
   payload: z.object({
     name: z.string().trim().min(1).max(80),
-    provider: z.string().trim().min(1).max(100),
+    provider: z.string().trim().min(1).max(2_048),
     model: z.string().trim().min(1).max(160),
     apiKey: z.string().min(1).max(8192),
     thinkingLevel: thinkingLevelSchema
@@ -628,7 +644,7 @@ const updateProfileCommandSchema = commandMetadataSchema.extend({
   payload: z.object({
     profileId: z.string().min(1),
     name: z.string().trim().min(1).max(80),
-    provider: z.string().trim().min(1).max(100),
+    provider: z.string().trim().min(1).max(2_048),
     model: z.string().trim().min(1).max(160),
     apiKey: z.string().min(1).max(8192).optional(),
     thinkingLevel: thinkingLevelSchema
@@ -813,6 +829,7 @@ const authorizeSubAgentRunCommandSchema = commandMetadataSchema.extend({
 });
 const listSubAgentRunsCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.list") });
 const inspectSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.inspect"), payload: z.object({ runId: z.string().uuid() }) });
+const inspectSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.inspect"), payload: z.object({ runId: z.string().uuid(), taskId: z.string().uuid() }) });
 const stopSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.stop"), payload: z.object({ runId: z.string().uuid(), reason: z.string().trim().max(200).optional() }) });
 const retrySubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.retry"), payload: z.object({ taskId: z.string().uuid() }) });
 const skipSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.skip"), payload: z.object({ taskId: z.string().uuid() }) });
@@ -951,6 +968,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   authorizeSubAgentRunCommandSchema,
   listSubAgentRunsCommandSchema,
   inspectSubAgentRunCommandSchema,
+  inspectSubAgentTaskCommandSchema,
   stopSubAgentRunCommandSchema,
   retrySubAgentTaskCommandSchema,
   skipSubAgentTaskCommandSchema,
@@ -1007,6 +1025,7 @@ export const bootstrapStateSchema = z.object({
     providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
   }),
+  piProviders: z.array(z.string().min(1)).optional(),
   executionScheduler: executionSchedulerTelemetrySchema,
   environmentDoctor: z.record(z.string().min(1).max(80), z.object({
     status: z.enum(["ready", "attention", "unavailable"]),
@@ -1344,6 +1363,7 @@ const capabilityConfirmationRequiredEventSchema = eventMetadataSchema.extend({
     turnId: z.string().min(1),
     requestId: z.string().min(1),
     capabilityId: z.string().min(1),
+    decisionClass: z.enum(["G1", "G2", "G3", "G4"]),
     action: z.string().min(1),
     target: z.string().min(1),
     reason: z.string().min(1),
@@ -1390,7 +1410,11 @@ const subAgentAttemptCreatedEventSchema = eventMetadataSchema.extend({
 });
 const subAgentRunsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("sub_agent.runs.listed"),
-  payload: z.object({ projections: z.array(subAgentProjectionSchema).max(32) })
+  payload: z.object({ projections: z.array(subAgentRunProjectionSchema).max(32) })
+});
+const subAgentTaskInspectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("sub_agent.task.inspected"),
+  payload: z.object({ projection: subAgentTaskDetailProjectionSchema })
 });
 const subAgentBudgetExhaustedEventSchema = eventMetadataSchema.extend({
   event: z.literal("sub_agent.budget.exhausted"),
@@ -1474,6 +1498,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   capabilityExecutionUpdatedEventSchema,
   subAgentProjectionEventSchema,
   subAgentRunsListedEventSchema,
+  subAgentTaskInspectedEventSchema,
   subAgentAttemptCreatedEventSchema,
   subAgentBudgetExhaustedEventSchema
 ]);

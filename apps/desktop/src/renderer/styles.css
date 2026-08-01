@@ -368,6 +368,8 @@ button { font: inherit; letter-spacing: 0; }
 .profile-form label { display: flex; flex-direction: column; gap: 5px; color: #59615a; font-size: 10px; font-weight: 650; }
 .profile-form input, .profile-form select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #cfd5ce; border-radius: 5px; outline: 0; background: #fff; color: #282d29; font-size: 12px; }
 .profile-form input:focus, .profile-form select:focus { border-color: #52715e; box-shadow: 0 0 0 2px rgba(82, 113, 94, .12); }
+.profile-provider-hint { grid-column: 1 / -1; color: #687269; font-size: 10px; }
+.decision-class { display: inline-flex; width: fit-content; padding: 2px 6px; border-radius: 999px; color: #59615a; background: #edf1ec; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .profile-limit-error { grid-column: 1 / -1; color: #9b3d35; font-size: 10px; }
 .secret-input { position: relative; display: block; }
 .secret-input svg { position: absolute; left: 9px; top: 10px; color: #737b74; }

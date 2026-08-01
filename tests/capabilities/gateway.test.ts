@@ -141,7 +141,7 @@ describe("Capability Gateway", () => {
     const { gateway } = createGatewayFixture();
     const executionRequest = request();
     const decision = await gateway.request(executionRequest, authorization(directory));
-    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { target: join(directory, "memo.txt") } });
+    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { target: join(directory, "memo.txt"), decisionClass: "G3" } });
     expect(readFileSync(join(directory, "memo.txt"), "utf8")).toBe("Old content");
 
     const result = await gateway.resolve(executionRequest.requestId, true, authorization(directory));
@@ -183,7 +183,7 @@ describe("Capability Gateway", () => {
       executionRequest,
       auth
     );
-    expect(decision).toMatchObject({ type: "confirmation_required" });
+    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { decisionClass: "G2" } });
     const result = await subject.resolve(executionRequest.requestId, true, auth);
     expect(result).toMatchObject({ status: "unknown_outcome", code: "UNKNOWN_TOOL_OUTCOME" });
     expect(attempts).toBe(1);

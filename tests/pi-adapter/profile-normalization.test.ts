@@ -9,6 +9,27 @@ describe("resolvePiModelProfile", () => {
     });
   });
 
+  it("maps the saved DeepSeek endpoints to the built-in DeepSeek provider", () => {
+    expect(resolvePiModelProfile({ provider: "https://api.deepseek.com/anthropic", model: "deepseek-v4-flash" })).toEqual({
+      provider: "deepseek",
+      model: "deepseek-v4-flash"
+    });
+  });
+
+  it("turns a custom OpenAI-compatible URL into a runtime provider registration", () => {
+    expect(resolvePiModelProfile({ provider: "https://gateway.example/v1", model: "custom-model" })).toMatchObject({
+      provider: expect.stringMatching(/^vc-agent-url-[0-9a-f]{8}$/u),
+      model: "custom-model",
+      customUrl: { baseUrl: "https://gateway.example/v1", api: "openai-completions" }
+    });
+  });
+
+  it("detects Anthropic compatibility from a custom URL path", () => {
+    expect(resolvePiModelProfile({ provider: "https://gateway.example/anthropic", model: "custom-model" })).toMatchObject({
+      customUrl: { api: "anthropic-messages" }
+    });
+  });
+
   it("leaves ordinary Provider ids unchanged", () => {
     expect(resolvePiModelProfile({ provider: "anthropic", model: "claude-sonnet" })).toEqual({
       provider: "anthropic",

@@ -4,9 +4,12 @@ import { dirname, normalize, resolve, sep } from "node:path";
 import {
   subAgentAttemptSchema,
   subAgentProjectionSchema,
+  subAgentRunProjectionSchema,
   subAgentRunSchema,
   subAgentTaskInputSchema,
   subAgentTaskSchema,
+  subAgentTaskDetailProjectionSchema,
+  subAgentTaskSummarySchema,
   type SubAgentAttempt,
   type SubAgentCapability,
   type SubAgentExplicitIntentEvidence,
@@ -14,9 +17,11 @@ import {
   type SubAgentHandoff,
   type SubAgentProfileSnapshot,
   type SubAgentProjection,
+  type SubAgentRunProjection,
   type SubAgentRole,
   type SubAgentRun,
   type SubAgentTask,
+  type SubAgentTaskDetailProjection,
   type SubAgentTaskInput,
   type SubAgentUsage
 } from "@vc-agent/contracts";
@@ -168,10 +173,29 @@ export class SubAgentRuntime {
     return [...this.#runs.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  /** Returns the default Run/Task view without Attempt bodies or tool events. */
+  listRunProjections(): SubAgentRunProjection[] {
+    return this.listRuns().flatMap((run) => {
+      try { return [this.#runProjection(run.id)]; } catch { return []; }
+    });
+  }
+
   inspect(runId: string): SubAgentProjection | undefined {
     const run = this.#runs.get(runId);
     if (run === undefined) return undefined;
     return this.#projection(runId);
+  }
+
+  /** Loads only one Task's retained Attempt details for an explicit expansion. */
+  inspectTask(runId: string, taskId: string): SubAgentTaskDetailProjection | undefined {
+    const run = this.#runs.get(runId);
+    const task = this.#tasks.get(taskId);
+    if (run === undefined || task === undefined || task.runId !== runId) return undefined;
+    return subAgentTaskDetailProjectionSchema.parse({
+      run,
+      task,
+      attempts: task.attemptIds.map((attemptId) => this.#attempts.get(attemptId)).filter((item): item is SubAgentAttempt => item !== undefined)
+    });
   }
 
   authorize(input: {
@@ -509,6 +533,27 @@ export class SubAgentRuntime {
     const run = this.#runs.get(runId);
     if (run === undefined) throw new Error("SUB_AGENT_RUN_NOT_FOUND");
     return subAgentProjectionSchema.parse({ run, tasks: run.taskIds.map((id) => this.#tasks.get(id)).filter((item): item is SubAgentTask => item !== undefined), attempts: run.taskIds.flatMap((id) => { const task = this.#tasks.get(id); return task?.attemptIds.map((attemptId) => this.#attempts.get(attemptId)).filter((item): item is SubAgentAttempt => item !== undefined) ?? []; }) });
+  }
+
+  #runProjection(runId: string): SubAgentRunProjection {
+    const run = this.#runs.get(runId);
+    if (run === undefined) throw new Error("SUB_AGENT_RUN_NOT_FOUND");
+    const tasks = run.taskIds.map((id) => this.#tasks.get(id)).filter((item): item is SubAgentTask => item !== undefined).map((task) => subAgentTaskSummarySchema.parse({
+      schemaVersion: task.schemaVersion,
+      id: task.id,
+      runId: task.runId,
+      role: task.role,
+      objective: task.objective,
+      status: task.status,
+      ...(task.handoff === undefined ? {} : { handoff: task.handoff }),
+      usage: task.usage,
+      ...(task.failure === undefined ? {} : { failure: task.failure }),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      ...(task.deletedAt === undefined ? {} : { deletedAt: task.deletedAt }),
+      attemptCount: task.attemptIds.length
+    }));
+    return subAgentRunProjectionSchema.parse({ run, tasks, attemptCount: tasks.reduce((total, task) => total + task.attemptCount, 0) });
   }
 
   #emit(event: SubAgentRuntimeEvent): void { this.#onEvent(event); }

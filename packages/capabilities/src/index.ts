@@ -18,7 +18,8 @@ import type {
   CapabilityCatalogEntry,
   CapabilityExecutionRequest,
   CapabilityMetadata,
-  CapabilityExecutionResult
+  CapabilityExecutionResult,
+  DecisionClass
 } from "@vc-agent/contracts";
 export {
   createTurnCapabilitySurface,
@@ -45,6 +46,8 @@ export interface CapabilityExecutionContext {
 }
 
 export interface SensitiveAction {
+  /** Optional at the definition boundary; the Gateway fills a safe default. */
+  readonly decisionClass?: DecisionClass;
   readonly action: string;
   readonly target: string;
   readonly reason: string;
@@ -199,7 +202,7 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
       id: "output.write_text",
       version: "1.1.0",
       label: "Write text output",
-      description: "Create a new requested UTF-8 text or Markdown deliverable. Do not use this to edit an existing Output; use output.edit_text so the User can review a diff. Distinguish sourced facts, inference, uncertainty, and material disagreement, and supply stable Material references or public URLs used.",
+      description: "Create a new requested UTF-8 text or Markdown deliverable. Do not use this to edit an existing Output; use the text-edit capability so the User can review a diff. Distinguish sourced facts, inference, uncertainty, and material disagreement, and supply stable Material references or public URLs used.",
       useWhen: "Use only when the User asks for a durable text or Markdown deliverable.",
       tier: "preconditioned",
       activationClass: "preconditioned_execution",
