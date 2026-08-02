@@ -9,7 +9,7 @@ import {
   UnknownOutcomeError,
   createTextOutputCapability
 } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectOutputIntent, detectProjectCommandIntent, detectTextEditIntent } from "@vc-agent/host-services";
+import { CapabilityGateway, detectFileDownloadIntent, detectOutputIntent, detectProjectCommandIntent, detectTextEditIntent } from "@vc-agent/host-services";
 
 const temporaryDirectories: string[] = [];
 
@@ -77,6 +77,9 @@ describe("Capability Gateway", () => {
     expect(detectOutputIntent("Create a memo file for this analysis")).toBe(true);
     expect(detectOutputIntent("请生成一份投资报告文档")).toBe(true);
     expect(detectOutputIntent("请生成一个投资 memo")).toBe(true);
+    expect(detectOutputIntent("下载 PDF 到当前文件夹")).toBe(true);
+    expect(detectFileDownloadIntent("下载 PDF 到当前文件夹")).toBe(true);
+    expect(detectFileDownloadIntent("Download the PDF file locally")).toBe(true);
     expect(detectOutputIntent("Analyze the company and discuss the risks")).toBe(false);
     expect(detectTextEditIntent("请修改已有的投资报告文件")).toBe(true);
     expect(detectTextEditIntent("Revise the existing memo document")).toBe(true);
@@ -97,17 +100,15 @@ describe("Capability Gateway", () => {
     expect(readdirSync(directory)).toEqual([]);
   });
 
-  it("creates a format-neutral Artifact atomically after authorized Output Intent", async () => {
+  it("requires approval before creating a format-neutral Artifact", async () => {
     const directory = outputDirectory();
     const { gateway } = createGatewayFixture();
-    const decision = await gateway.request(request(), authorization(directory));
-    expect(decision).toMatchObject({
-      type: "result",
-      result: {
-        status: "completed",
-        artifact: { mediaType: "text/plain; charset=utf-8", producer: { type: "agent" } }
-      }
-    });
+    const executionRequest = request();
+    const decision = await gateway.request(executionRequest, authorization(directory));
+    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { action: "Create text Output", decisionClass: "G3" } });
+    expect(readdirSync(directory)).toEqual([]);
+    const result = await gateway.resolve(executionRequest.requestId, true, authorization(directory));
+    expect(result).toMatchObject({ status: "completed", artifact: { mediaType: "text/plain; charset=utf-8", producer: { type: "agent" } } });
     expect(readFileSync(join(directory, "memo.txt"), "utf8")).toBe("Investment view");
     expect(readdirSync(directory).filter((name) => name.endsWith(".partial"))).toEqual([]);
   });
@@ -121,7 +122,9 @@ describe("Capability Gateway", () => {
       arguments: { path: "investment-memo.md", content: "# View\n\nFact [material:block-1]\n\nInference: execution risk remains.", mediaType: "text/markdown", sourceReferences: ["material:one/block:block-1@hash", "https://example.com/source"], warnings: ["One inference remains uncertain."] }
     });
     const decision = await gateway.request(executionRequest, authorization(outputLocation, { scope: "project", outputLocation }));
-    expect(decision).toMatchObject({ type: "result", result: { status: "completed", artifact: { destination: join(outputLocation, "investment-memo.md"), mediaType: "text/markdown" } } });
+    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { decisionClass: "G3", target: join(outputLocation, "investment-memo.md") } });
+    const result = await gateway.resolve(executionRequest.requestId, true, authorization(outputLocation, { scope: "project", outputLocation }));
+    expect(result).toMatchObject({ status: "completed", artifact: { destination: join(outputLocation, "investment-memo.md"), mediaType: "text/markdown" } });
     expect(readFileSync(join(outputLocation, "investment-memo.md"), "utf8")).toContain("Inference:");
     expect(JSON.stringify(decision)).not.toMatch(/draft|final/iu);
   });

@@ -20,6 +20,7 @@ The current project is a Personal Build for one User. It is not a multi-user Saa
 | --- | --- |
 | Projects and Threads | Open local Projects, create Project / Unscoped Threads, maintain independent context, and rename a Thread from the conversation header. |
 | Materials and evidence | Inventory project files and, on demand, parse PDF, DOCX, PPTX, XLSX, and text into source-referenced Canonical Parse and bounded retrieval results. |
+| File downloads and Outputs | Save an explicitly requested public HTTP(S) file into the authorized Output Location; Standard Access shows the source, destination, and a G3 approval before downloads and new text Outputs. |
 | Model execution | Pi SDK-based streaming conversations, Model Profiles, Provider changes, context budgets, Thread Compaction, execution queues, and visible failure states. |
 | Investment workflows | Ordinary VC dialogue, public research, Investment Reflection, Investment Retrospective, and explicitly authorized Sub-Agent work. |
 | Memory and review | Project Context, Project Memory, Long-term Memory, Memory Evolution, and two-stage Dream review; durable writes require separate User confirmation. |

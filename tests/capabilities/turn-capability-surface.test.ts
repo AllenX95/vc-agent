@@ -33,6 +33,7 @@ const inventory = [
   metadata("memory_recall", ["unscoped", "project"]),
   metadata("output.write_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("output.edit_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("file_download", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("reflection_evidence_drilldown", ["project"])
 ];
 
@@ -141,6 +142,21 @@ describe("TurnCapabilitySurface", () => {
     });
 
     expect(surface.visibleCapabilityIds).toContain("output.edit_text");
+    expect(surface.visibleCapabilityIds).not.toContain("output.write_text");
+  });
+
+  it("exposes file_download only when the Turn has explicit write intent", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      outputRequested: true,
+      outputCreateRequested: false,
+      preloadHints: ["file_download"]
+    });
+
+    expect(surface.visibleCapabilityIds).toContain("file_download");
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "file_download" }));
     expect(surface.visibleCapabilityIds).not.toContain("output.write_text");
   });
 

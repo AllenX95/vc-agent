@@ -20,6 +20,7 @@ VC Agent 是一个面向单人风险投资工作的本地优先桌面 Agent。�
 | --- | --- |
 | Project 与 Thread | 打开本地 Project，创建 Project / Unscoped Thread，独立维护对话上下文，并支持在会话标题栏重命名 Thread。 |
 | 项目材料与证据 | 盘点项目文件，按需解析 PDF、DOCX、PPTX、XLSX 和文本，生成带来源引用的 Canonical Parse 与受控检索结果。 |
+| 文件下载与输出 | 可将用户明确指定的公共 HTTP(S) 文件下载到授权 Output Location；下载和新建文本 Output 在 Standard Access 下都会先显示目标、来源和 G3 审批。 |
 | 模型执行 | 基于 Pi SDK 的流式对话、Model Profile、Provider 切换、上下文预算、Thread Compaction、执行队列和可见失败状态。 |
 | 投资工作流 | 支持普通 VC 对话、公共资料研究、Investment Reflection、Investment Retrospective，以及显式授权的 Sub-Agent 工作。 |
 | 记忆与复盘 | Project Context、Project Memory、Long-term Memory、Memory Evolution 和 Dream 两阶段复盘；持久化写入需要单独的用户确认。 |

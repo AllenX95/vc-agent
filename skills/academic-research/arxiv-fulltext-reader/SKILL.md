@@ -12,13 +12,13 @@ Use the bundled downloader to make paper acquisition deterministic and local. It
 ## Workflow
 
 1. Normalize the supplied arXiv ID, abstract URL, PDF URL, or HTML URL.
-2. Run the bundled script with an explicit output directory:
+2. When the User asks only to retain a raw HTML or PDF artifact, use the Host `file_download` capability with the exact public URL and a relative path under the authorized Output Location. Standard Access pauses for User approval before the network request or local write. Do not use the read-only `project.command` capability to run the downloader script. If the complete metadata/HTML-first bundle is required and a separately configured local runtime is available, the bundled script may still be run manually with an explicit output directory:
 
    ```text
    python "<skill-root>/scripts/arxiv_fulltext.txt" "<arXiv ID or URL>" --output-dir "<target directory>" --json
    ```
 
-   If the user says “current folder”, pass the current project directory as `--output-dir`; the script creates a safe per-paper subdirectory.
+   If the User says “current folder”, pass the current project directory as `--output-dir`; the script creates a safe per-paper subdirectory.
 3. Read `metadata.json` before interpreting the paper. Use its `source` field to report whether the result came from official HTML, optional ar5iv HTML, or PDF.
 4. For `source = html` or `ar5iv_html`, read `paper.md` for the main text and consult `paper.html` for equations, links, figures, and table structure.
 5. For `source = pdf`, read `paper.pdf`; use `paper.md` only as a text convenience and return to the PDF when layout, equations, tables, or figures matter.

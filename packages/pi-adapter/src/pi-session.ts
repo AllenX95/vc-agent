@@ -578,6 +578,7 @@ function createCapabilityProxies(
     ...(webSearch === undefined ? [] : [webSearch]),
     ...(webFetch === undefined ? [] : [webFetch]),
     academicResearch,
+    createFileDownloadProxy(proxy),
     createTextOutputProxy(proxy),
     createTextEditProxy(proxy),
     createProjectCommandProxy(proxy)
@@ -611,6 +612,29 @@ function createTextOutputProxy(
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {
       const result = await proxy(toolCallId, "output.write_text", params, signal);
+      return toolResult(result);
+    }
+  });
+}
+
+function createFileDownloadProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: "file_download",
+    label: "Download file",
+    description: "Download one public HTTP(S) file into the authorized Output Location. The Host shows the source and destination and requires User confirmation in Standard Access.",
+    parameters: Type.Object({
+      url: Type.String({ description: "Unauthenticated public HTTP(S) URL" }),
+      path: Type.String({ description: "Relative path inside the authorized Output Location" }),
+      mediaType: Type.Optional(Type.String()),
+      replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" })),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String()))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => {
+      const result = await proxy(toolCallId, "file_download", params, signal);
       return toolResult(result);
     }
   });

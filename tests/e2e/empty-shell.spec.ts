@@ -1397,6 +1397,9 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     await window.getByLabel("Active Model Profile").selectOption({ label: "Dogfood fixture" });
     await window.getByLabel("Message").fill("Search the current public web, use project materials, Context and Memory, and create an investment memo file with sources and uncertainty.");
     await window.getByRole("button", { name: "Send" }).click();
+    const outputConfirmation = window.getByRole("dialog", { name: "Capability confirmation" });
+    await expect(outputConfirmation).toContainText("Create text Output");
+    await outputConfirmation.getByRole("button", { name: "Approve" }).click();
     await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
     for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
       await expect(window.locator(".tool-activity").filter({ hasText: capability })).toHaveClass(/completed/u);

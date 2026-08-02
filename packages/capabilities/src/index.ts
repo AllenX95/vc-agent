@@ -62,6 +62,14 @@ export {
   type ProjectCommandResult
 } from "./controlled-project-tools.js";
 export {
+  BinaryOutputStore,
+  FetchFileDownloadClient,
+  MAX_FILE_DOWNLOAD_BYTES,
+  createFileDownloadCapability,
+  type FileDownloadClient,
+  type FileDownloadResponse
+} from "./file-tools.js";
+export {
   createAcademicResearchCapability,
   type AcademicResearchExecutor
 } from "./academic-research.js";
@@ -200,10 +208,10 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
   return {
     metadata: {
       id: "output.write_text",
-      version: "1.1.0",
+      version: "1.2.0",
       label: "Write text output",
-      description: "Create a new requested UTF-8 text or Markdown deliverable. Do not use this to edit an existing Output; use the text-edit capability so the User can review a diff. Distinguish sourced facts, inference, uncertainty, and material disagreement, and supply stable Material references or public URLs used.",
-      useWhen: "Use only when the User asks for a durable text or Markdown deliverable.",
+      description: "Create a new requested UTF-8 text or Markdown deliverable. The Host shows the destination and requires User confirmation in Standard Access. Do not use this to edit an existing Output; use the text-edit capability so the User can review a diff.",
+      useWhen: "Use only when the User asks for a durable text or Markdown deliverable and is ready to approve the local write.",
       tier: "preconditioned",
       activationClass: "preconditioned_execution",
       sideEffectClass: "local_write",
@@ -235,12 +243,13 @@ export function createTextOutputCapability(store: TextOutputStore): CapabilityDe
       if (context.outputLocation === undefined) throw new Error("Output Location is not configured");
       assertUserOutputPath(input.path, context);
       const target = store.resolveTarget(context.outputLocation, input.path);
-      if (!store.targetExists(context.outputLocation, input.path)) return undefined;
+      const replacing = store.targetExists(context.outputLocation, input.path);
       return {
-        action: "Replace existing Output",
+        decisionClass: "G3",
+        action: replacing ? "Replace existing Output" : "Create text Output",
         target,
-        reason: "The requested destination already exists.",
-        expectedEffect: "The existing file will be replaced atomically with the generated text Output."
+        reason: replacing ? "The requested destination already exists." : "The User explicitly requested a durable text or Markdown Output.",
+        expectedEffect: replacing ? "After approval, the existing file will be replaced atomically with the generated text Output." : "After approval, the generated text Output will be written atomically to the authorized Output Location."
       };
     },
     async execute(input, context) {

@@ -20,7 +20,7 @@ export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMater
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
 export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, serializeBoundedRetrieval, type BoundedRecallEnvelope, type MaterialParseUnavailable, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
 export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
-export { detectAcademicResearchIntent, detectMaterialRecallIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectTextEditIntent } from "./task-intent.js";
+export { detectAcademicResearchIntent, detectFileDownloadIntent, detectMaterialRecallIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectTextEditIntent } from "./task-intent.js";
 export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextStore, parseProjectContext, type ProjectContextDocument, type ProjectContextRecallAccess, type ProjectContextRecallItem, type ProjectContextRecallQuery, type ProjectContextSection, type ProjectContextWarning } from "./project-context.js";
 export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 export { COGNITIVE_EVOLUTION_HISTORY_HEADER, LONG_TERM_MEMORY_ARCHIVE_HEADER, LONG_TERM_MEMORY_HEADER, LongTermMemoryRecallSource, LongTermMemoryStore, createLongTermMemoryIndexContent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, parseLongTermMemory, type LongTermMemoryDocument, type LongTermMemoryEntry, type LongTermMemoryFileSummary, type LongTermMemoryMaturity, type LongTermMemoryRecallItem, type LongTermMemoryRecallPolicy, type LongTermMemoryRecallQuery, type LongTermMemoryStatus, type LongTermMemoryWarning } from "./long-term-memory.js";
@@ -344,9 +344,9 @@ export function decisionClassForCapability(metadata: Pick<CapabilityMetadata, "a
 }
 
 export function detectOutputIntent(text: string): boolean {
-  const englishAction = /\b(save|create|write|generate|export|produce|draft|edit|modify|revise|update|replace|rewrite)\b/iu.test(text);
+  const englishAction = /\b(save|create|write|generate|export|produce|draft|edit|modify|revise|update|replace|rewrite|download|store)\b/iu.test(text);
   const englishObject = /\b(file|document|memo|report|output|markdown|text)\b/iu.test(text);
-  const chineseAction = /(保存|创建|生成|写入|导出|制作|输出|修改|编辑|修订|更新|替换|改写)/u.test(text);
+  const chineseAction = /(保存|创建|生成|写入|导出|制作|输出|修改|编辑|修订|更新|替换|改写|下载|落盘)/u.test(text);
   const chineseObject = /(文件|文档|报告|备忘录|输出|文本|memo)/iu.test(text);
   return (englishAction && englishObject) || (chineseAction && chineseObject);
 }

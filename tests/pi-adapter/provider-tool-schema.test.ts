@@ -23,6 +23,7 @@ const ACTIVE_CAPABILITIES = [
   "web_search",
   "web_fetch",
   "academic_research",
+  "file_download",
   "output.write_text",
   "output.edit_text",
   "project.command"
@@ -38,6 +39,7 @@ const EXPECTED_PROVIDER_TOOL_NAMES = [
   "web_search",
   "web_fetch",
   "academic_research",
+  "file_download",
   "output_write_text",
   "output_edit_text",
   "project_command"

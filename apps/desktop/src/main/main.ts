@@ -40,10 +40,10 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { BinaryOutputStore, CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
@@ -2259,7 +2259,8 @@ function submitTurn(
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Turn");
   const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
-  const outputIntent = reflectionRun === undefined && detectOutputIntent(input.text);
+  const fileDownloadIntent = reflectionRun === undefined && detectFileDownloadIntent(input.text);
+  const outputIntent = reflectionRun === undefined && (detectOutputIntent(input.text) || fileDownloadIntent);
   const textEditIntent = reflectionRun === undefined && detectTextEditIntent(input.text);
   const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
@@ -2281,8 +2282,9 @@ function submitTurn(
         projectStateRecall: detectProjectStateRecallIntent(input.text),
         memoryRecall: memoryRecallMode !== "none",
         webResearch: detectWebResearchIntent(input.text),
-        outputWrite: outputIntent && !textEditIntent
+        outputWrite: outputIntent && !textEditIntent && !fileDownloadIntent
       }),
+        ...(fileDownloadIntent ? ["file_download"] : []),
         ...(textEditIntent ? ["output.edit_text"] : []),
         ...(detectAcademicResearchIntent(input.text) ? ["academic_research"] : []),
         ...(thread.scope === "project" && detectProjectCommandIntent(input.text) ? ["project.command"] : []),
@@ -2300,7 +2302,7 @@ function submitTurn(
     preloadHints,
     fixedCapabilityIds,
     outputRequested: outputIntent,
-    outputCreateRequested: outputIntent && !textEditIntent,
+    outputCreateRequested: outputIntent && !textEditIntent && !fileDownloadIntent,
     explicitMemoryRecall: memoryRecallMode === "explicit",
     availability: {
       materials: thread.scope === "project" && stateStore!.listMaterials(thread.projectId).length > 0,
@@ -3177,11 +3179,17 @@ function finalizeCapability(
       if (thread?.scope === "project") {
         const project = stateStore!.getProject(thread.projectId);
         if (project === undefined) throw new Error("Project not found");
+        const sourceReferences = Array.isArray(request.arguments.sourceReferences)
+          ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string")
+          : [];
+        if (request.capabilityId === "file_download" && typeof request.arguments.url === "string" && !sourceReferences.includes(request.arguments.url)) {
+          sourceReferences.push(request.arguments.url);
+        }
         projectOutput = projectOutputs.record({
           projectId: project.id, projectPath: project.path, artifact: result.artifact,
           profile: { id: context.profile.id, provider: context.profile.provider, model: context.profile.model }, capabilityId: request.capabilityId,
           ...(typeof request.arguments.skillId === "string" ? { skillId: request.arguments.skillId } : {}),
-          sourceReferences: Array.isArray(request.arguments.sourceReferences) ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string") : [],
+          sourceReferences,
           warnings: Array.isArray(request.arguments.warnings) ? request.arguments.warnings.filter((value): value is string => typeof value === "string") : [],
           relatedArtifacts: Array.isArray(request.arguments.relatedArtifacts) ? request.arguments.relatedArtifacts.flatMap((value) => {
             const parsed = zRelatedArtifact(value); return parsed === undefined ? [] : [parsed];
@@ -3194,7 +3202,7 @@ function finalizeCapability(
         requestId: result.requestId,
         status: "unknown_outcome",
         code: "ARTIFACT_COMMIT_UNKNOWN",
-        content: "The file write completed but artifact registration could not be confirmed. Inspect the target before retrying."
+        content: "The file operation completed but artifact registration could not be confirmed. Inspect the target before retrying."
       };
     }
   }
@@ -3674,6 +3682,7 @@ app.whenReady().then(() => {
   const textOutputStore = new TextOutputStore();
   capabilityRegistry.register(createTextOutputCapability(textOutputStore));
   capabilityRegistry.register(createTextEditCapability(textOutputStore));
+  capabilityRegistry.register(createFileDownloadCapability(new BinaryOutputStore(), new FetchFileDownloadClient()));
   capabilityRegistry.register(createProjectCommandCapability({
     run: async ({ projectRoot, invocation }) => {
       if (utilityJobRunner === null) throw new Error("Utility Worker is unavailable.");

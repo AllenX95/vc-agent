@@ -17,6 +17,12 @@ export function detectTextEditIntent(text: string): boolean {
   return chinese || english;
 }
 
+export function detectFileDownloadIntent(text: string): boolean {
+  const chinese = /(下载|保存|存到|落盘).{0,40}(PDF|文件|文档|附件|本地|磁盘|文件夹|目录|当前|项目)/iu.test(text);
+  const english = /\b(download|save|store)\b.{0,60}\b(file|pdf|document|attachment|locally|disk|folder|directory)\b/iu.test(text);
+  return chinese || english;
+}
+
 export function detectProjectCommandIntent(text: string): boolean {
   const chinese = /(运行|执行|调用|检查|查看).{0,16}(命令|rg|ripgrep|git\s*(status|diff|log)|pdfinfo|PDF\s*信息)/iu.test(text);
   const english = /\b(run|execute|invoke|inspect|show)\b.{0,30}\b(command|ripgrep|rg|git\s+(status|diff|log)|pdfinfo|pdf metadata)\b/iu.test(text);

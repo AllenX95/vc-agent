@@ -21,6 +21,7 @@ describe("Minimal VC System Prompt", () => {
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/never claim unread or omitted content was reviewed/i);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/material_recall.*cards.*Project.*file/i);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/do not substitute public web/i);
+    expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/file_download.*explicit User intent.*Standard Access.*scoped approval/i);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/edit existing text Outputs via diff-and-confirm/i);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/never to write files or duplicate available OCR/i);
     expect(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT).toMatch(/Do not take durable or external action beyond explicit User intent/i);
