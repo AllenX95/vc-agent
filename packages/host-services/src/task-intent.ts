@@ -17,6 +17,18 @@ export function detectTextEditIntent(text: string): boolean {
   return chinese || english;
 }
 
+export function detectFileDownloadIntent(text: string): boolean {
+  const chinese = /(下载|保存|存到|落盘|归档).{0,40}(PDF|文件|文档|附件|本地|磁盘|文件夹|目录|当前|项目|arxiv|论文|全文)/iu.test(text);
+  const english = /\b(download|save|store|archive|retain)\b.{0,60}\b(file|pdf|document|attachment|locally|disk|folder|directory|arxiv|paper|full[- ]?text)\b/iu.test(text);
+  return chinese || english;
+}
+
+export function detectArxivFulltextIntent(text: string): boolean {
+  const acquisition = /(下载|保存|存到|落盘|归档|保留|download|save|store|archive|retain)/iu.test(text);
+  const arxiv = /(?:arxiv(?:\.org)?|arxiv\s*(?:论文|paper|全文|full[- ]?text))/iu.test(text);
+  return acquisition && arxiv;
+}
+
 export function detectProjectCommandIntent(text: string): boolean {
   const chinese = /(运行|执行|调用|检查|查看).{0,16}(命令|rg|ripgrep|git\s*(status|diff|log)|pdfinfo|PDF\s*信息)/iu.test(text);
   const english = /\b(run|execute|invoke|inspect|show)\b.{0,30}\b(command|ripgrep|rg|git\s+(status|diff|log)|pdfinfo|pdf metadata)\b/iu.test(text);

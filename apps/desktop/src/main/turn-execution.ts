@@ -5,7 +5,7 @@ import type {
   SystemPromptRevision,
   WorkerCommand
 } from "@vc-agent/contracts";
-import type { DreamSynthesisInput } from "@vc-agent/host-services";
+import type { CitationRegistry, DreamSynthesisInput } from "@vc-agent/host-services";
 
 type ExecuteCommand = Extract<WorkerCommand, { command: "turn.execute" }>;
 type StartFailureHandler = (error: unknown) => void;
@@ -22,6 +22,7 @@ export interface TurnContext {
   readonly activeCapabilities: string[];
   readonly executableCapabilityIds: string[];
   readonly capabilitySurface: TurnCapabilitySurfaceSnapshot;
+  readonly citations: CitationRegistry;
   readonly expectedStateVersion: number;
   readonly promptRevision: SystemPromptRevision;
   readonly retryOfTurnId?: string;

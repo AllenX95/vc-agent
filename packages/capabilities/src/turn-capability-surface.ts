@@ -64,6 +64,16 @@ const DEFAULT_AVAILABILITY: TurnCapabilityAvailability = {
 
 const NEVER_ORDINARY_REQUESTABLE = new Set(["reflection_evidence_drilldown", "reflection_outcome_propose"]);
 
+// Keep the Host-mediated text write/edit surface stable across ordinary Turns.
+// Visibility is not authorization: Standard Access turns a call into a
+// scoped approval, while Full Access still requires Host-confirmed Output
+// Intent before any local write.
+const ORDINARY_TEXT_WRITE_CAPABILITIES = [
+  "output.write_text",
+  "output.edit_text",
+  "workspace.write_batch"
+] as const;
+
 /**
  * Builds the model-facing capability surface for one Turn. This is deliberately
  * pure: StateStore and Gateway policy are supplied as snapshots by the Host,
@@ -115,6 +125,7 @@ function ordinaryVisibleIds(
     addIfAllowed(ids, "web_fetch", input, byId);
   }
   if (input.scope === "unscoped" && availability.directAttachments) addIfAllowed(ids, "material_recall", input, byId);
+  for (const id of ORDINARY_TEXT_WRITE_CAPABILITIES) addIfAllowed(ids, id, input, byId);
   for (const hint of input.preloadHints ?? []) {
     const metadata = byId.get(hint);
     if (metadata === undefined || !metadata.modelCallable || !metadata.allowedScopes.includes(input.scope)) continue;

@@ -3,17 +3,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { extname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  ANTHROPIC_SKILLS_SOURCE,
+  USER_OFFICE_SKILL_FORMATS,
   OfficeSkillOrchestrator,
   SkillPackageManager,
-  provisionAnthropicSkills,
+  provisionUserOfficeSkills,
   type OfficeExecutionPlan,
   type OfficeFormat,
   type OfficeSkillJobAdapter
 } from "../packages/host-services/src/index.ts";
 
 /**
- * Runs one complete user-supplied Anthropic Office Skill through the same
+ * Runs one complete user-supplied local Office Skill through the same
  * stdin-manifest contract used by the Desktop Utility Worker. The runner is
  * intentionally external: this script never invents a document engine and
  * never copies a third-party package into the repository.
@@ -34,7 +34,7 @@ interface OfficeEvidence {
   readonly schemaVersion: 1;
   readonly sanitized: true;
   readonly kind: "office-compatibility";
-  readonly sourceRevision: string;
+  readonly sourceContentHash: string;
   readonly packageIds: readonly string[];
   readonly formats: readonly string[];
   readonly runner: { readonly mode: "external-stdin-manifest"; readonly status: "ready" };
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   const sourceRoot = resolveRequired(flags["source-root"] ?? process.env.VC_AGENT_REAL_OFFICE_SOURCE, "VC_AGENT_REAL_OFFICE_SOURCE");
   const evidencePath = resolveRequired(flags.evidence ?? process.env.VC_AGENT_REAL_OFFICE_EVIDENCE, "VC_AGENT_REAL_OFFICE_EVIDENCE");
   const format = (flags.format ?? "docx") as OfficeFormat;
-  if (!(["docx", "pptx", "xlsx"] as readonly string[]).includes(format)) throw new Error("BLOCKED: only docx, pptx, and xlsx have an imported Anthropic Skill package.");
+  if (!(USER_OFFICE_SKILL_FORMATS as readonly string[]).includes(format)) throw new Error("BLOCKED: only docx, pptx, and xlsx local Office Skill packages are supported.");
   assertExternalPath(sourceRoot);
   assertExternalPath(evidencePath);
   if (!existsSync(sourceRoot)) throw new Error("OFFICE_SOURCE_MISSING");
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   const activeChildren = new Map<string, ChildProcessWithoutNullStreams>();
   try {
     const skills = new SkillPackageManager({ root: join(workRoot, "skills") });
-    const imported = await provisionAnthropicSkills({ sourceRoot, manager: skills, packageIds: [format] });
+    const imported = await provisionUserOfficeSkills({ sourceRoot, manager: skills, packageIds: [format] });
     const selected = imported[0];
     if (selected === undefined) throw new Error("OFFICE_SKILL_UNAVAILABLE");
     const projectPath = join(workRoot, "project");
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       schemaVersion: 1,
       sanitized: true,
       kind: "office-compatibility",
-      sourceRevision: ANTHROPIC_SKILLS_SOURCE.revision,
+      sourceContentHash: selected.overlay.contentHash,
       packageIds: [selected.packageId],
       formats: [format],
       runner: { mode: "external-stdin-manifest", status: "ready" },
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     };
     mkdirSync(resolve(evidencePath, ".."), { recursive: true });
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + "\n", "utf8");
-    console.log(JSON.stringify({ status: "pass", evidencePath: `external/office/compatibility.json`, packageId: selected.packageId, sourceRevision: ANTHROPIC_SKILLS_SOURCE.revision }, null, 2));
+    console.log(JSON.stringify({ status: "pass", evidencePath: `external/office/compatibility.json`, packageId: selected.packageId, sourceContentHash: selected.overlay.contentHash }, null, 2));
   } finally {
     for (const child of activeChildren.values()) terminateChild(child);
     rmSync(workRoot, { recursive: true, force: true });

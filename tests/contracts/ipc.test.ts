@@ -188,6 +188,23 @@ describe("versioned IPC contracts", () => {
     }).success).toBe(true);
   });
 
+  it("supports renaming a Thread through the versioned Host contract", () => {
+    const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "thread.rename", payload: { threadId: "thread-1", title: "Investment Thesis" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "thread.rename", payload: { threadId: "thread-1", title: "   " } }).success).toBe(false);
+    expect(hostEventSchema.safeParse({
+      schemaVersion: 1,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 0,
+      actor: { actorType: "host", actorId: "desktop-host" },
+      provenance: { producerType: "host", producerId: "desktop-host" },
+      occurredAt: new Date().toISOString(),
+      event: "thread.renamed",
+      payload: { thread: { id: "thread-1", title: "Investment Thesis", scope: "unscoped", stateVersion: 2, createdAt: new Date().toISOString() } }
+    }).success).toBe(true);
+  });
+
   it("requires explicit versioned commands to start and stop Independent Evidence", () => {
     const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
     const runId = crypto.randomUUID();

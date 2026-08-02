@@ -1215,6 +1215,12 @@ export class HostStateStore {
     return this.getThread(threadId)!;
   }
 
+  renameThread(threadId: string, title: string): Thread {
+    const result = this.#database.prepare("UPDATE threads SET title = ?, state_version = state_version + 1 WHERE id = ? AND deleted_at IS NULL").run(title, threadId);
+    if (result.changes !== 1) throw new Error("Thread not found");
+    return this.getThread(threadId)!;
+  }
+
   deleteThread(threadId: string): boolean {
     this.#database.exec("BEGIN IMMEDIATE");
     try {

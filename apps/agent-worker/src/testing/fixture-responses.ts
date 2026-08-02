@@ -6,7 +6,7 @@ export function dogfoodFixtureResponses() {
     fauxAssistantMessage(fauxToolCall("project_state_recall", { source: "project_context", query: "current focus", maxItems: 2, maxChars: 2_000 }), { stopReason: "toolUse" }),
     fauxAssistantMessage(fauxToolCall("memory_recall", { source: "project_memory", disclosureLevel: "cards", query: "risk", maxItems: 2, maxChars: 2_000 }), { stopReason: "toolUse" }),
     fauxAssistantMessage(fauxToolCall("web_search", { query: "current venture market evidence", maxResults: 2, maxChars: 2_000 }), { stopReason: "toolUse" }),
-    fauxAssistantMessage(fauxToolCall("output.write_text", {
+    fauxAssistantMessage(fauxToolCall("output_write_text", {
       path: "dogfood-investment-note.md",
       mediaType: "text/markdown",
       content: "# Dogfood Investment Note\n\n## Sourced facts\n- The project material was inventoried and parsed [material inventory].\n- Public market evidence was reviewed [https://example.com/market].\n\n## User-confirmed judgment\n- Execution stability is the core risk [Project Memory].\n\n## Inference and uncertainty\n- The opportunity may be attractive, but evidence remains incomplete and the execution risk requires diligence.\n",
@@ -191,7 +191,7 @@ export function subAgentFixtureResponses(prompt: string) {
   const outputTarget = /Authorized output target: ([^;\r\n]+)/u.exec(prompt)?.[1];
   if (outputTarget !== undefined) {
     return [
-      fauxAssistantMessage(fauxToolCall("output.write_text", {
+      fauxAssistantMessage(fauxToolCall("output_write_text", {
         path: outputTarget,
         mediaType: "text/markdown",
         content: "# Fixture Sub-Agent Output\n\nProvider-backed fixture completed the bounded writer objective.\n",

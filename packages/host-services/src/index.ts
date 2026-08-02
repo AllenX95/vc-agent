@@ -2,7 +2,9 @@ import type {
   AccessMode,
   ActionProposal,
   CapabilityExecutionRequest,
-  CapabilityExecutionResult
+  CapabilityExecutionResult,
+  DecisionClass,
+  CapabilityMetadata
 } from "@vc-agent/contracts";
 import { normalizeCapabilityExecutionResult } from "@vc-agent/contracts";
 import {
@@ -12,16 +14,19 @@ import {
   type CapabilityExecutionContext
 } from "@vc-agent/capabilities";
 export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
-export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
+export { CITATION_OUTPUT_INSTRUCTIONS, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
+export { CitationRegistry } from "./citations.js";
+export { CONTEXT_BUDGET_ESTIMATOR_REVISION, DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS, ESTIMATED_BYTES_PER_TOKEN, ContextBudgetService, estimateTextTokens, estimateUtf8Tokens, type ContextBudgetDecision, type ContextBudgetInput, type ContextBudgetTelemetry } from "./context-budget.js";
 export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMaterialFingerprint } from "./material-inventory.js";
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
 export { MaterialRecallSource, retrievalMetadata, retrievalTrajectorySummary, serializeBoundedRetrieval, type BoundedRecallEnvelope, type MaterialParseUnavailable, type MaterialRecallAccess, type MaterialRecallItem, type MaterialRecallQuery, type RecallContext, type RecallSource } from "./recall.js";
 export { PublicWebRecallSource, detectWebResearchIntent, type PublicWebAccess, type PublicWebItem, type PublicWebQuery } from "./public-web.js";
-export { detectAcademicResearchIntent, detectMaterialRecallIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectTextEditIntent } from "./task-intent.js";
+export { detectAcademicResearchIntent, detectArxivFulltextIntent, detectFileDownloadIntent, detectMaterialRecallIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectTextEditIntent } from "./task-intent.js";
 export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextStore, parseProjectContext, type ProjectContextDocument, type ProjectContextRecallAccess, type ProjectContextRecallItem, type ProjectContextRecallQuery, type ProjectContextSection, type ProjectContextWarning } from "./project-context.js";
 export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 export { COGNITIVE_EVOLUTION_HISTORY_HEADER, LONG_TERM_MEMORY_ARCHIVE_HEADER, LONG_TERM_MEMORY_HEADER, LongTermMemoryRecallSource, LongTermMemoryStore, createLongTermMemoryIndexContent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, parseLongTermMemory, type LongTermMemoryDocument, type LongTermMemoryEntry, type LongTermMemoryFileSummary, type LongTermMemoryMaturity, type LongTermMemoryRecallItem, type LongTermMemoryRecallPolicy, type LongTermMemoryRecallQuery, type LongTermMemoryStatus, type LongTermMemoryWarning } from "./long-term-memory.js";
 export { MemoryEvolutionStore, type AtomicMemoryFileAddition, type CondensationArchiveItem, type CondensationRetention, type LocalMemoryProvenanceInspection, type LocalMemoryProvenanceRecord, type MemoryEvolutionAction, type MemoryEvolutionStoreOptions, type MemoryLearningDraft, type MemoryMaintenanceState, type MemoryPatchFileDiff, type MemoryPatchRequest, type PreparedMemoryPatch } from "./memory-evolution.js";
+export { MemoryReviewService, type MemoryChangeRequest, type MemoryCommitResult, type MemoryHistoryProjection, type MemoryHistoryQuery, type MemoryReviewServiceOptions, type MemoryWorkspaceView, type PendingMemoryKind, type PendingMemoryProjection, type PendingMemoryQuery, type PreparedMemoryChange } from "./memory-review.js";
 export { DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, parseIndependentAssessment, reflectionFraming, type BuildReflectionProjectBriefInput } from "./investment-reflection.js";
 export { ReflectionEvidenceDrilldownSource, parseMaterialBlockReference, type ReflectionEvidenceAccess, type ReflectionEvidenceDrilldownQuery } from "./reflection-evidence.js";
 export { captureReflectionDependencies, reflectionDependencyFingerprint, staleReflectionDependencies, type CaptureReflectionDependenciesInput, type ReflectionDependencyEntry, type ReflectionDependencyState } from "./reflection-staleness.js";
@@ -34,6 +39,7 @@ export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutc
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";
+export { ExecutionLifecycleCoordinator, type BeginTurnRequest, type CheckpointUpdate, type ExecutionAdmissionRequest, type ExecutionLifecycleCallbacks, type ExecutionShutdownReport, type InterruptExecutionRequest, type ReconciliationReport, type TerminalExecutionEvent, type TerminalExecutionOutcome } from "./execution-lifecycle.js";
 export { SubAgentRuntime, createSubAgentProfileResolver, type SubAgentAdapter, type SubAgentExecutionInput, type SubAgentExecutionResult, type SubAgentProfileResolver, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentRuntimeEvent } from "./sub-agent-runtime.js";
 export { ProviderSubAgentAdapter, type SubAgentProviderExecutor } from "./sub-agent-provider-adapter.js";
 export { SubAgentContextCompiler, type SubAgentContextBundle, type SubAgentContextEntry, type SubAgentContextResolution, type SubAgentContextResolver } from "./sub-agent-context.js";
@@ -75,12 +81,13 @@ export {
   type SkillSourceKind
 } from "./skills-directory.js";
 export {
-  ANTHROPIC_SKILLS_SOURCE,
-  provisionAnthropicSkills,
-  type AnthropicSkillPackageId,
-  type ProvisionAnthropicSkillsInput,
-  type ProvisionedAnthropicSkill
-} from "./claude-skills.js";
+  USER_OFFICE_SKILL_FORMATS,
+  isUserOfficeSkillPackage,
+  provisionUserOfficeSkills,
+  type ProvisionUserOfficeSkillsInput,
+  type ProvisionedUserOfficeSkill,
+  type UserOfficeSkillFormat
+} from "./office-skills.js";
 export {
   OfficeSkillOrchestrator,
   type OfficeExecutionPlan,
@@ -255,7 +262,12 @@ export class CapabilityGateway {
       };
     }
     if (sensitive !== undefined && authorization.accessMode === "standard") {
-      const proposal: ActionProposal = { requestId: request.requestId, capabilityId: request.capabilityId, ...sensitive };
+      const proposal: ActionProposal = {
+        requestId: request.requestId,
+        capabilityId: request.capabilityId,
+        ...sensitive,
+        decisionClass: sensitive.decisionClass ?? decisionClassForCapability(prepared.definition.metadata)
+      };
       this.#pending.set(request.requestId, {
         request,
         definition: prepared.definition,
@@ -295,7 +307,13 @@ export class CapabilityGateway {
     if (request.scope.kind !== authorization.scope || !definition.metadata.allowedScopes.includes(authorization.scope)) return { result: failure(request.requestId, "SCOPE_REJECTED", "Capability is outside the authorized scope.") };
     if (request.scope.kind === "unscoped" && request.scope.threadId !== request.threadId) return { result: failure(request.requestId, "SCOPE_REJECTED", "Unscoped capability Thread does not match.") };
     if (request.expectedStateVersion !== authorization.stateVersion) return { result: failure(request.requestId, "STALE_CAPABILITY_STATE", "Capability state changed before execution.") };
-    if (definition.metadata.activationClass === "preconditioned_execution" && !authorization.outputIntent) return { result: failure(request.requestId, "OUTPUT_INTENT_REQUIRED", "Output Intent is required for this capability.") };
+    // In Standard Access, the scoped Action Proposal is itself an explicit
+    // User-intent boundary. Do not make a brittle natural-language preload
+    // hint a correctness gate; Full Access still requires host-confirmed
+    // Output Intent because it has no interactive approval fallback.
+    if (definition.metadata.activationClass === "preconditioned_execution" && !authorization.outputIntent && authorization.accessMode === "full") {
+      return { result: failure(request.requestId, "OUTPUT_INTENT_REQUIRED", "Output Intent is required for this capability in Full Access.") };
+    }
     const parsed = definition.inputSchema.safeParse(request.arguments);
     if (!parsed.success) return { result: failure(request.requestId, "INVALID_CAPABILITY_ARGUMENTS", "Capability arguments are invalid.") };
     const context: CapabilityExecutionContext = {
@@ -321,10 +339,21 @@ export class CapabilityGateway {
   }
 }
 
+/**
+ * Conservative defaulting keeps older capability definitions safe while
+ * ensuring every confirmation projection declares exactly one decision class.
+ */
+export function decisionClassForCapability(metadata: Pick<CapabilityMetadata, "activationClass" | "sideEffectClass">): DecisionClass {
+  if (metadata.activationClass === "protected_workflow" || metadata.activationClass === "host_only") return "G1";
+  if (metadata.sideEffectClass === "external_write" || metadata.sideEffectClass === "destructive") return "G2";
+  if (metadata.sideEffectClass === "local_write") return "G3";
+  return "G4";
+}
+
 export function detectOutputIntent(text: string): boolean {
-  const englishAction = /\b(save|create|write|generate|export|produce|draft|edit|modify|revise|update|replace|rewrite)\b/iu.test(text);
+  const englishAction = /\b(save|create|write|generate|export|produce|draft|edit|modify|revise|update|replace|rewrite|download|store)\b/iu.test(text);
   const englishObject = /\b(file|document|memo|report|output|markdown|text)\b/iu.test(text);
-  const chineseAction = /(保存|创建|生成|写入|导出|制作|输出|修改|编辑|修订|更新|替换|改写)/u.test(text);
+  const chineseAction = /(保存|创建|生成|写入|导出|制作|输出|修改|编辑|修订|更新|替换|改写|下载|落盘)/u.test(text);
   const chineseObject = /(文件|文档|报告|备忘录|输出|文本|memo)/iu.test(text);
   return (englishAction && englishObject) || (chineseAction && chineseObject);
 }

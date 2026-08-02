@@ -6,6 +6,7 @@
   "description": "Versioned vc-agent boundary around the real Pi SDK.",
   "exports": {
     ".": "./src/index.ts",
+    "./provider-catalog": "./src/provider-catalog.ts",
     "./project-read-tool-metadata": "./src/project-read-tool-metadata.ts",
     "./testing": "./src/testing.ts",
     "./mcp": "./src/mcp-adapter.ts"

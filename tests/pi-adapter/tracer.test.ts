@@ -8,6 +8,7 @@ import {
   aggregateUsage,
   createPiSession,
   listKnownPiModels,
+  providerToolNameForCapability,
   sanitizeProviderFailure,
   type ExtensionInventorySnapshot,
   type PiSessionEvent,
@@ -379,7 +380,7 @@ describe("real Pi SDK tracer", () => {
       },
       responses: [
         fauxAssistantMessage(
-          fauxToolCall("output.write_text", { path: "memo.txt", content: "Investment view", mediaType: "text/plain" }),
+          fauxToolCall("output_write_text", { path: "memo.txt", content: "Investment view", mediaType: "text/plain" }),
           { stopReason: "toolUse" }
         ),
         fauxAssistantMessage("The requested Output was created.")
@@ -428,6 +429,52 @@ describe("real Pi SDK tracer", () => {
     await handle.submit("Inspect the project materials.", { activeCapabilities: ["capability_request"] });
     expect(requested).toEqual(["capability_request", "material_recall"]);
     handle.dispose();
+  });
+
+  it("uses Provider-safe names when activating dotted Host capabilities", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-provider-tool-name-"));
+    temporaryDirectories.push(cwd);
+    const requested: string[] = [];
+    const handle = await createFauxPiSession({
+      config: {
+        cwd,
+        threadDirectory: cwd,
+        contextHistory: [],
+        resources,
+        extensions,
+        capabilityProxy: async (_toolCallId, capabilityId) => {
+          requested.push(capabilityId);
+          if (capabilityId === "capability_request") {
+            return {
+              schemaVersion: 1,
+              requestId: "request-project-command",
+              status: "completed",
+              content: "Activated project.command",
+              activatedCapabilities: ["project.command"]
+            };
+          }
+          return { schemaVersion: 1, requestId: "request-project-command-execution", status: "completed", content: "Project command completed" };
+        }
+      },
+      responses: [
+        fauxAssistantMessage(fauxToolCall("capability_request", { mode: "activate", need: "Inspect the project", capabilityId: "project.command" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("project_command", { program: "git", operation: "status" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("The project inspection completed.")
+      ],
+      onEvent: () => {}
+    });
+
+    await handle.submit("Inspect the project.", { activeCapabilities: ["capability_request"] });
+    expect(requested).toEqual(["capability_request", "project.command"]);
+    handle.dispose();
+  });
+
+  it("keeps Host capability IDs separate from Provider function names", () => {
+    const capabilityIds = ["output.write_text", "output.edit_text", "project.command", "academic_research"];
+    const providerNames = capabilityIds.map(providerToolNameForCapability);
+
+    expect(providerNames).toEqual(["output_write_text", "output_edit_text", "project_command", "academic_research"]);
+    expect(providerNames.every((name) => /^[a-zA-Z0-9_-]+$/u.test(name))).toBe(true);
   });
 
   it("forwards native Project read tool lifecycle events without duplicating Host capability events", async () => {

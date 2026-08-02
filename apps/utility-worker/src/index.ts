@@ -8,6 +8,7 @@ import { canonicalParseSchema, utilityJobCommandSchema, type OfficeSkillJobComma
 import { resolveParserPython } from "./python-runtime.js";
 import { prepareProjectCommand, runPreparedProjectCommand } from "./project-command.js";
 import { extractAcademicPdf } from "./academic-pdf-extract.js";
+import { runArxivFulltext } from "./arxiv-fulltext.js";
 
 const parentPort = process.parentPort;
 if (parentPort === undefined) throw new Error("Utility Worker requires an Electron Utility Process parent port");
@@ -24,6 +25,7 @@ async function run(command: UtilityJobCommand): Promise<void> {
   else if (command.command === "page_recovery.ocr") await runOcr(command);
   else if (command.command === "office.skill") await runOfficeSkill(command);
   else if (command.command === "project.command") await runProjectCommand(command);
+  else if (command.command === "arxiv.fulltext") parentPort.postMessage(await runArxivFulltext(command));
   else await runAcademicPdf(command);
 }
 

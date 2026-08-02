@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""Download an arXiv paper with an HTML-first, PDF-retaining fallback."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html.parser
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, urlparse
+from urllib.request import Request, urlopen
+
+
+USER_AGENT = "arxiv-fulltext-reader/1.0 (+https://arxiv.org/)"
+MAX_HTML_BYTES = 25 * 1024 * 1024
+MAX_PDF_BYTES = 100 * 1024 * 1024
+MIN_PDF_BYTES = 1024
+NEW_ID = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
+OLD_ID = re.compile(r"^[A-Za-z][A-Za-z0-9.-]*/\d{7}(?:v\d+)?$")
+ALLOWED_ARXIV_HOSTS = {"arxiv.org", "www.arxiv.org", "export.arxiv.org", "browse.arxiv.org"}
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    url: str
+    status: int | None
+    content_type: str
+    body: bytes
+    error: str | None = None
+    transport: str = "urllib"
+
+
+class ReadableHtmlParser(html.parser.HTMLParser):
+    """Extract readable text without executing page content."""
+
+    _SKIP = {"script", "style", "nav", "header", "footer", "aside", "noscript"}
+    _BLOCK = {"article", "section", "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "blockquote", "tr", "br"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._SKIP:
+            self._skip_depth += 1
+        elif self._skip_depth == 0 and tag in self._BLOCK:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP and self._skip_depth > 0:
+            self._skip_depth -= 1
+        elif self._skip_depth == 0 and tag in self._BLOCK:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0 and data.strip():
+            self._parts.append(data)
+
+    def text(self) -> str:
+        value = "".join(self._parts).replace("\u00a0", " ")
+        value = re.sub(r"[ \t]+", " ", value)
+        value = re.sub(r"\n[ \t]+", "\n", value)
+        return re.sub(r"\n{3,}", "\n\n", value).strip()
+
+
+def normalize_identifier(value: str) -> str:
+    """Normalize an arXiv ID or supported arXiv URL and preserve its version."""
+
+    raw = value.strip()
+    if not raw:
+        raise ValueError("An arXiv ID or URL is required.")
+
+    if raw.lower().startswith("arxiv:"):
+        raw = raw.split(":", 1)[1]
+
+    if "://" in raw:
+        parsed = urlparse(raw)
+        if parsed.hostname is None or parsed.hostname.lower() not in ALLOWED_ARXIV_HOSTS:
+            raise ValueError("Only arxiv.org URLs are supported.")
+        path = unquote(parsed.path).strip("/")
+        match = re.match(r"^(?:abs|pdf|html)/(.+)$", path, flags=re.IGNORECASE)
+        raw = match.group(1) if match else path
+
+    raw = unquote(raw).strip().strip("/")
+    raw = re.sub(r"^(?:abs|pdf|html)/", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\.pdf$", "", raw, flags=re.IGNORECASE)
+    if NEW_ID.fullmatch(raw) or OLD_ID.fullmatch(raw):
+        return raw
+    raise ValueError(f"Invalid arXiv identifier: {value}")
+
+
+def paper_urls(paper_id: str) -> dict[str, str]:
+    path_id = quote(paper_id, safe="/.")
+    return {
+        "abstract": f"https://arxiv.org/abs/{path_id}",
+        "html": f"https://arxiv.org/html/{path_id}",
+        "ar5iv": f"https://ar5iv.labs.arxiv.org/html/{path_id}",
+        "pdf": f"https://arxiv.org/pdf/{path_id}.pdf",
+    }
+
+
+def fetch(url: str, timeout: float, max_bytes: int) -> FetchResult:
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/pdf;q=0.9,*/*;q=0.1"})
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200))
+            content_type = response.headers.get("Content-Type", "")
+            body = read_limited(response, max_bytes)
+            return FetchResult(url, status, content_type, body)
+    except HTTPError as error:
+        return FetchResult(url, int(error.code), error.headers.get("Content-Type", "") if error.headers else "", b"", str(error))
+    except (URLError, TimeoutError, OSError, ValueError) as error:
+        fallback = fetch_with_curl(url, timeout, max_bytes)
+        if fallback is not None:
+            return fallback
+        return FetchResult(url, None, "", b"", str(error))
+
+
+def fetch_with_curl(url: str, timeout: float, max_bytes: int) -> FetchResult | None:
+    """Use system curl when Python's TLS stack cannot reach arXiv."""
+
+    executable = shutil.which("curl.exe") or shutil.which("curl")
+    if executable is None:
+        return None
+
+    marker = "__ARXIV_CURL_STATUS__"
+    command = [
+        executable,
+        "--location",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        str(max(1, int(timeout + 0.999))),
+        "--user-agent",
+        USER_AGENT,
+        "--header",
+        "Accept: text/html,application/pdf;q=0.9,*/*;q=0.1",
+        "--write-out",
+        f"\n{marker}:%{{http_code}}:%{{content_type}}\n",
+        url,
+    ]
+    if sys.platform == "win32":
+        # Schannel may fail revocation checks in offline/corporate environments;
+        # this keeps certificate validation while bypassing only the revocation lookup.
+        command.insert(1, "--ssl-no-revoke")
+
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=max(10.0, timeout + 5.0), check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    payload = completed.stdout
+    marker_bytes = ("\n" + marker + ":").encode("ascii")
+    marker_index = payload.rfind(marker_bytes)
+    if marker_index < 0:
+        return FetchResult(url, None, "", b"", completed.stderr.decode("utf-8", errors="replace").strip() or "curl did not return a response", "curl")
+
+    body = payload[:marker_index]
+    trailer = payload[marker_index + 1 :].decode("utf-8", errors="replace")
+    match = re.search(rf"{re.escape(marker)}:(\d{{3}}):(.*)", trailer)
+    if match is None:
+        return FetchResult(url, None, "", body, "curl response metadata was malformed", "curl")
+    status = int(match.group(1))
+    content_type = match.group(2).strip()
+    if len(body) > max_bytes:
+        return FetchResult(url, status, content_type, b"", f"Response exceeds {max_bytes} bytes.", "curl")
+    error = completed.stderr.decode("utf-8", errors="replace").strip() or None
+    return FetchResult(url, status, content_type, body, error if completed.returncode != 0 else None, "curl")
+
+
+def read_limited(response: Any, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(min(1024 * 1024, max_bytes - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"Response exceeds {max_bytes} bytes.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def html_text(body: bytes) -> str:
+    parser = ReadableHtmlParser()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    return parser.text()
+
+
+def valid_html(result: FetchResult) -> tuple[bool, str]:
+    if result.status != 200:
+        return False, result.error or f"HTTP {result.status}"
+    lowered = result.body[:200_000].lower()
+    content_type = result.content_type.lower()
+    if "text/html" not in content_type and b"<html" not in lowered and b"<article" not in lowered:
+        return False, "response is not HTML"
+    text = html_text(result.body)
+    if len(text) < 200:
+        return False, "HTML page did not contain enough readable text"
+    return True, text
+
+
+def valid_pdf(result: FetchResult) -> tuple[bool, str]:
+    if result.status != 200:
+        return False, result.error or f"HTTP {result.status}"
+    if len(result.body) < MIN_PDF_BYTES:
+        return False, "PDF response is unexpectedly small"
+    if not result.body.startswith(b"%PDF-"):
+        return False, "response is not a PDF"
+    return True, ""
+
+
+def safe_id(paper_id: str) -> str:
+    return paper_id.replace("/", "-")
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    partial.write_bytes(data)
+    partial.replace(path)
+
+
+def atomic_write_text(path: Path, value: str) -> None:
+    atomic_write(path, value.encode("utf-8"))
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def maybe_extract_pdf(pdf_path: Path, markdown_path: Path, timeout: float) -> str | None:
+    executable = shutil.which("pdftotext")
+    if executable is None:
+        return "pdftotext is not installed; retain the PDF for the local PDF reader."
+    try:
+        completed = subprocess.run(
+            [executable, "-layout", str(pdf_path), "-"],
+            capture_output=True,
+            timeout=max(10.0, timeout),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"PDF text extraction was unavailable: {error}"
+    if completed.returncode != 0 or not completed.stdout.strip():
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()[:300]
+        return f"PDF text extraction failed{': ' + detail if detail else ''}."
+    atomic_write_text(markdown_path, "# ArXiv paper\n\n" + completed.stdout.decode("utf-8", errors="replace").strip() + "\n")
+    return None
+
+
+def download(args: argparse.Namespace) -> dict[str, Any]:
+    paper_id = normalize_identifier(args.identifier)
+    urls = paper_urls(paper_id)
+    output_root = Path(args.output_dir).expanduser().resolve()
+    paper_dir = output_root / safe_id(paper_id)
+    metadata_path = paper_dir / "metadata.json"
+    if not args.force and metadata_path.exists():
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if cached.get("status") == "completed":
+                files = cached.get("files", {})
+                if all((paper_dir / relative).is_file() for relative in files.values() if isinstance(relative, str)):
+                    cached["cacheHit"] = True
+                    return cached
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    attempts: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    source = ""
+    files: dict[str, str] = {}
+    html_body: bytes | None = None
+    markdown: str | None = None
+
+    for candidate, source_name in ((urls["html"], "html"), (urls["ar5iv"], "ar5iv_html") if args.allow_ar5iv else (None, "")):
+        if candidate is None:
+            continue
+        result = fetch(candidate, args.timeout, MAX_HTML_BYTES)
+        available, detail = valid_html(result)
+        attempts.append({"source": source_name, "url": candidate, "status": result.status, "contentType": result.content_type, "transport": result.transport, "available": available, **({"detail": detail} if not available else {})})
+        if available:
+            source = source_name
+            html_body = result.body
+            markdown = html_text(result.body)
+            break
+        if detail:
+            warnings.append(f"{source_name} unavailable: {detail}")
+        if args.delay_seconds > 0:
+            time.sleep(args.delay_seconds)
+
+    pdf_result: FetchResult | None = None
+    if html_body is None:
+        pdf_result = fetch(urls["pdf"], args.timeout, MAX_PDF_BYTES)
+        available, detail = valid_pdf(pdf_result)
+        attempts.append({"source": "pdf", "url": urls["pdf"], "status": pdf_result.status, "contentType": pdf_result.content_type, "transport": pdf_result.transport, "available": available, **({"detail": detail} if not available else {})})
+        if not available:
+            raise RuntimeError(f"HTML was unavailable and PDF download failed: {detail}")
+        source = "pdf"
+
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    if html_body is not None and markdown is not None:
+        html_path = paper_dir / "paper.html"
+        markdown_path = paper_dir / "paper.md"
+        atomic_write(html_path, html_body)
+        atomic_write_text(markdown_path, f"# ArXiv {paper_id}\n\nSource: {urls['html'] if source == 'html' else urls['ar5iv']}\n\n{markdown}\n")
+        files.update({"html": "paper.html", "markdown": "paper.md"})
+    elif pdf_result is not None:
+        pdf_path = paper_dir / "paper.pdf"
+        markdown_path = paper_dir / "paper.md"
+        atomic_write(pdf_path, pdf_result.body)
+        files["pdf"] = "paper.pdf"
+        extraction_warning = maybe_extract_pdf(pdf_path, markdown_path, args.timeout)
+        if extraction_warning:
+            warnings.append(extraction_warning)
+        elif markdown_path.is_file():
+            files["markdown"] = "paper.md"
+
+    metadata: dict[str, Any] = {
+        "schemaVersion": 1,
+        "status": "completed",
+        "paperId": paper_id,
+        "source": source,
+        "retrievedAt": iso_now(),
+        "directory": str(paper_dir),
+        "files": files,
+        "urls": urls,
+        "attempts": attempts,
+        "warnings": warnings,
+        "contentHash": sha256(html_body if html_body is not None else pdf_result.body),
+    }
+    atomic_write_text(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
+    return metadata
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Download an arXiv paper: official HTML first, retained PDF fallback.")
+    parser.add_argument("identifier", help="arXiv ID or arxiv.org URL")
+    parser.add_argument("--output-dir", default="papers", help="Directory that will contain one folder per paper (default: papers)")
+    parser.add_argument("--allow-ar5iv", action="store_true", help="Try ar5iv HTML after official arXiv HTML and before PDF")
+    parser.add_argument("--force", action="store_true", help="Ignore a completed local cache")
+    parser.add_argument("--timeout", type=float, default=60.0, help="Network and local extraction timeout in seconds")
+    parser.add_argument("--delay-seconds", type=float, default=1.0, help="Delay between failed HTML attempts and the next request")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable metadata")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        result = download(args)
+    except (ValueError, RuntimeError, OSError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"Downloaded {result['paperId']} via {result['source']}: {result['directory']}")
+        for kind, relative in result["files"].items():
+            print(f"  {kind}: {Path(result['directory']) / relative}")
+        for warning in result["warnings"]:
+            print(f"  warning: {warning}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

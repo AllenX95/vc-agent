@@ -109,7 +109,7 @@ The bullets in this section are retained as dated implementation history. The fi
 
 **Primary work:**
 
-- 使用仓库外、用户提供的完整 Claude Office Skill 包完成一次真实 create/edit/diff/replace 流程。
+- 使用仓库外、用户提供的完整本地 Office Skill 包完成一次真实 create/edit/diff/replace 流程。
 - 使用已配置的 PaddleOCR 和 OvisOCR2 runtime 完成本地混合 PDF recovery；不提交模型权重。
 - 安装、锁定并校验真实 `pi-mcp-adapter`，用 fixture server 完成 lazy read/write/failure/restart。
 - 完成 Extension deterministic inspection、isolated audit、approval、enablement、revision 和 rollback 的桌面 E2E。

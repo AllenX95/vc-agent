@@ -40,16 +40,18 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, TextOutputStore } from "@vc-agent/capabilities";
+import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
+import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { ANTHROPIC_SKILLS_SOURCE, BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
+import { BundledArxivFulltextClient } from "./arxiv-fulltext-client.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
 import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
@@ -66,11 +68,13 @@ const AGENT_ACTOR = { actorType: "agent", actorId: "primary-agent" } as const;
 const AGENT_PROVENANCE = { producerType: "agent", producerId: "primary-agent" } as const;
 const configuredExecutionCapacity = Number.parseInt(process.env.VC_AGENT_EXECUTION_CAPACITY ?? "2", 10);
 const EXECUTION_CAPACITY = Number.isInteger(configuredExecutionCapacity) && configuredExecutionCapacity > 0 ? configuredExecutionCapacity : 2;
+const contextBudgetService = new ContextBudgetService();
 const ACADEMIC_CREDENTIAL_ENVIRONMENT: Readonly<Record<AcademicCredentialSource, string>> = {
   openalex: "OPENALEX_API_KEY",
   github: "GITHUB_TOKEN",
   huggingface: "HF_TOKEN"
 };
+
 const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "app.bootstrap",
   "state.recovery.export",
@@ -193,10 +197,10 @@ function runtimeSkillsForTask(task: string, scope: "project" | "unscoped"): Cont
 function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
   const inventory = skillsDirectory?.inventory() ?? [];
   const active = inventory.filter((item) => item.enabled && item.state === "active");
-  const office = active.filter((item) => (ANTHROPIC_SKILLS_SOURCE.skills as readonly { packageId: string }[]).some((definition) => definition.packageId === item.packageId));
+  const office = active.filter((item) => isUserOfficeSkillPackage(item.packageId));
   const academic = active.filter((item) => BUNDLED_ACADEMIC_SKILL_IDS.some((packageId) => packageId === item.packageId));
   if (inventory.length === 0) return { status: "attention", message: "No imported Skill package is configured; the app-owned directory remains dormant." };
-  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} Anthropic Office/Creator package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
+  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} user-supplied Office package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
 }
 
 function skillPackageProjection(item: SkillInventoryItem): ContractSkillInventoryItem {
@@ -238,13 +242,13 @@ function skillsStateEvent(correlationId: string, action: "listed" | "imported" |
 
 function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
   const inventory = skillsDirectory?.inventory() ?? [];
-  const imported = ANTHROPIC_SKILLS_SOURCE.skills.filter((definition) => inventory.some((item) => item.packageId === definition.packageId));
-  const active = imported.filter((definition) => inventory.some((item) => item.packageId === definition.packageId && item.enabled && item.state === "active"));
-  if (imported.length === 0) return { status: "attention", message: "Anthropic docx/pptx/xlsx/skill-creator packages are not imported; run the explicit provisioning command." };
+  const imported = inventory.filter((item) => isUserOfficeSkillPackage(item.packageId));
+  const active = imported.filter((item) => item.enabled && item.state === "active");
+  if (imported.length === 0) return { status: "attention", message: "No compatible user-supplied Office Skill package is imported; import a local package from Settings." };
   const runnerConfigured = (process.env.VC_AGENT_OFFICE_RUNNER?.trim() ?? "") !== "";
   const status = active.length === imported.length && runnerConfigured ? "ready" : "attention";
   const dependencyMessage = runnerConfigured ? "an explicit Office runner is configured" : "VC_AGENT_OFFICE_RUNNER is not configured";
-  return { status, message: `${active.length}/${imported.length} imported Anthropic package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
+  return { status, message: `${active.length}/${imported.length} imported user-supplied Office package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
 }
 
 function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
@@ -753,6 +757,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
           event: "app.bootstrap.completed",
           payload: {
             ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
+            piProviders: [...PI_BUILTIN_PROVIDER_IDS],
             executionScheduler: executionSchedulerTelemetry(),
             environmentDoctor: {
               pi: recovery ? { status: "unavailable", message: "Pi execution is disabled in Read-only Recovery." } : { status: "ready", message: "Bundled Pi SDK is available." },
@@ -1427,6 +1432,10 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
         try {
           dreamReviews.reviewScope(command.payload.batchId, command.payload.scopeId, command.payload.decision);
+          const reviewedBatch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
+          if (reviewedBatch?.status === "synthesis_pending" && reviewedBatch.synthesis === undefined) {
+            return startDreamGlobalSynthesis(command.correlationId, command.payload.batchId);
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream scope could not be reviewed.");
@@ -1440,7 +1449,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream proposal review requires explicit User action.");
         if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
         try {
-          dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
+          const reviewedBatch = dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
+          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
+            revalidateDreamSynthesis();
+            dreamCommits.prepare(command.payload.batchId, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposal could not be reviewed."); }
       }
@@ -1450,7 +1463,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const batch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
           if (batch?.synthesis === undefined) throw new Error("DREAM_SYNTHESIS_NOT_REVIEWABLE");
-          dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
+          const reviewedBatch = dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
+          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
+            revalidateDreamSynthesis();
+            dreamCommits.prepare(batch.id, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
+          }
           return dreamStateEvent(command.correlationId);
         } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposals could not be reviewed."); }
       }
@@ -1584,6 +1601,11 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const thread = stateStore.createProjectThread(command.payload.projectId, command.payload.title);
         return { ...eventMetadata(command.correlationId, thread.id), event: "thread.created", payload: { thread } };
       }
+      case "thread.rename": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Thread renaming requires explicit User action.");
+        const thread = stateStore.renameThread(command.payload.threadId, command.payload.title);
+        return { ...eventMetadata(command.correlationId, thread.id), event: "thread.renamed", payload: { thread } };
+      }
       case "thread.profile.select":
         return selectThreadProfile(command.correlationId, command.payload.threadId, command.payload.profileId);
       case "thread.profile.change.resolve":
@@ -1665,12 +1687,15 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "sub_agent.run.list": {
         if (subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent runtime is unavailable.");
-        const runs = subAgentRuntime.listRuns();
-        return { ...eventMetadata(command.correlationId), event: "sub_agent.runs.listed", payload: { projections: runs.flatMap((run) => { const projection = subAgentRuntime!.inspect(run.id); return projection === undefined ? [] : [projection]; }) } };
+        return { ...eventMetadata(command.correlationId), event: "sub_agent.runs.listed", payload: { projections: subAgentRuntime.listRunProjections() } };
       }
       case "sub_agent.run.inspect": {
         const projection = subAgentRuntime?.inspect(command.payload.runId);
         return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent run not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.run.inspected", payload: { projection } };
+      }
+      case "sub_agent.task.inspect": {
+        const projection = subAgentRuntime?.inspectTask(command.payload.runId, command.payload.taskId);
+        return projection === undefined ? diagnostic(command.correlationId, "HOST_FAILURE", "Sub-Agent task not found.") : { ...eventMetadata(command.correlationId, projection.run.parentThreadId), event: "sub_agent.task.inspected", payload: { projection } };
       }
       case "sub_agent.run.stop": {
         if (command.actor.actorType !== "user" || subAgentRuntime === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Stopping a Sub-Agent run requires explicit User action.");
@@ -2235,7 +2260,9 @@ function submitTurn(
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Turn");
   const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
-  const outputIntent = reflectionRun === undefined && detectOutputIntent(input.text);
+  const fileDownloadIntent = reflectionRun === undefined && detectFileDownloadIntent(input.text);
+  const arxivFulltextIntent = reflectionRun === undefined && detectArxivFulltextIntent(input.text);
+  const outputIntent = reflectionRun === undefined && (detectOutputIntent(input.text) || fileDownloadIntent || arxivFulltextIntent);
   const textEditIntent = reflectionRun === undefined && detectTextEditIntent(input.text);
   const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
@@ -2245,10 +2272,11 @@ function submitTurn(
   const runtimeSkills = runtimeSkillsForTask(input.text, thread.scope);
   const academicWorkflowLoaded = academicWorkflow !== undefined
     && runtimeSkills.decisions.some((decision) => decision.packageId === academicWorkflow.id);
-  const effectiveAppendSystemPrompt = options.appendSystemPrompt
+  const taskAppendSystemPrompt = options.appendSystemPrompt
     ?? (reflectionRun === undefined
       ? academicWorkflow === undefined || academicWorkflowLoaded ? [] : [academicWorkflow.instructions]
       : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS]);
+  const effectiveAppendSystemPrompt = [...taskAppendSystemPrompt, CITATION_OUTPUT_INSTRUCTIONS];
   const preloadHints = reflectionRun === undefined
     ? [
         ...capabilitiesForTurn({
@@ -2257,8 +2285,11 @@ function submitTurn(
         projectStateRecall: detectProjectStateRecallIntent(input.text),
         memoryRecall: memoryRecallMode !== "none",
         webResearch: detectWebResearchIntent(input.text),
-        outputWrite: outputIntent && !textEditIntent
+        outputWrite: outputIntent && !textEditIntent && !fileDownloadIntent && !arxivFulltextIntent
       }),
+        ...(fileDownloadIntent && !arxivFulltextIntent ? ["file_download"] : []),
+        ...(arxivFulltextIntent ? ["arxiv.fulltext"] : []),
+        ...(outputIntent && !textEditIntent ? ["workspace.write_batch"] : []),
         ...(textEditIntent ? ["output.edit_text"] : []),
         ...(detectAcademicResearchIntent(input.text) ? ["academic_research"] : []),
         ...(thread.scope === "project" && detectProjectCommandIntent(input.text) ? ["project.command"] : []),
@@ -2276,7 +2307,7 @@ function submitTurn(
     preloadHints,
     fixedCapabilityIds,
     outputRequested: outputIntent,
-    outputCreateRequested: outputIntent && !textEditIntent,
+    outputCreateRequested: outputIntent && !textEditIntent && !fileDownloadIntent && !arxivFulltextIntent,
     explicitMemoryRecall: memoryRecallMode === "explicit",
     availability: {
       materials: thread.scope === "project" && stateStore!.listMaterials(thread.projectId).length > 0,
@@ -2293,18 +2324,36 @@ function submitTurn(
   const crossesPromptBoundary = !loadedPromptByThread.has(input.threadId);
   const contextHistory = options.contextHistory ?? trajectoryStore!.contextHistory(input.threadId);
   const workerPrompt = options.workerPrompt ?? input.text;
+  const toolSchemaText = JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema));
+  const budget = contextBudgetService.telemetry({
+    systemPromptBytes: Buffer.byteLength(promptRevision.content, "utf8"),
+    toolSchemaBytes: Buffer.byteLength(toolSchemaText, "utf8"),
+    taskBytes: Buffer.byteLength(`${workerPrompt}\n${effectiveAppendSystemPrompt.join("\n")}\n${runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")}`, "utf8"),
+    retainedHistoryBytes: Buffer.byteLength(JSON.stringify(contextHistory), "utf8"),
+    retrievalBytes: 0,
+    contextWindowTokens: profile?.contextWindow ?? Number.MAX_SAFE_INTEGER,
+    reservedOutputTokens: profile?.maxOutputTokens ?? 2_048
+  });
+  const budgetTelemetry = {
+    estimatorRevision: contextBudgetService.estimatorRevision,
+    safetyMarginTokens: contextBudgetService.safetyMarginTokens,
+    usableContextTokens: budget.usableContextTokens,
+    estimatedInputTokens: budget.estimatedInputTokens,
+    action: budget.action
+  } as const;
   const promptTelemetry = {
     revisionId: promptRevision.id,
     hash: promptRevision.hash,
     contributions: {
       promptEstimatedTokens: estimateTokens(promptRevision.content),
-      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema))),
+      toolSchemaEstimatedTokens: activeCapabilities.length === 0 ? 0 : estimateTokens(toolSchemaText),
       taskEstimatedTokens: estimateTokens(workerPrompt) + estimateTokens(effectiveAppendSystemPrompt.join("\n")),
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
       skillEstimatedTokens: estimateTokens(runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")),
-      materialEstimatedTokens: 0
+      materialEstimatedTokens: 0,
+      contextBudget: budgetTelemetry
     },
     capabilitySurface: {
       revision: capabilitySurface.revision,
@@ -2404,6 +2453,7 @@ function submitTurn(
     activeCapabilities,
     executableCapabilityIds: [...capabilitySurface.executableCapabilityIds],
     capabilitySurface,
+    citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
@@ -2443,7 +2493,8 @@ function submitTurn(
     ...(physical?.sessionFile === undefined ? {} : { previousSessionFile: physical.sessionFile }),
     ...(trajectoryStore!.highWater(input.threadId) === undefined ? {} : { hostHighWater: trajectoryStore!.highWater(input.threadId)! }),
     contextHistory,
-    estimatedInputTokens: Object.values(promptTelemetry.contributions).reduce((sum, value) => sum + value, 0),
+    contextBudget: budgetTelemetry,
+    estimatedInputTokens: budget.estimatedInputTokens,
     currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
     capabilitySurface,
     activeCapabilities: [...context.activeCapabilities],
@@ -2570,6 +2621,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     activeCapabilities: [],
     executableCapabilityIds: [],
     capabilitySurface,
+    citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
@@ -2723,13 +2775,15 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   if (workerEvent.event === "turn.completed") {
     const latencyMs = Date.now() - context.submittedAtMs;
     const recalledStateEstimatedTokens = context.recalledStateEstimatedTokens;
+    const formattedMessage = context.citations.formatAssistantMessage(workerEvent.message);
     const record: TrajectoryEvent = {
       ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
       event: "turn.completed",
       payload: {
-        message: workerEvent.message,
+        message: formattedMessage.message,
         profile: toTrajectoryProfile(context.profile),
         usage: workerEvent.usage,
+        citations: formattedMessage.citations,
         ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }),
         latencyMs,
         recalledStateEstimatedTokens,
@@ -2744,7 +2798,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     }
     finishTurn(context);
     acknowledgeTrajectory(context, record);
-    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: formattedMessage.message, profile: context.profile, usage: workerEvent.usage, citations: formattedMessage.citations, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
     return;
   }
 
@@ -3134,11 +3188,17 @@ function finalizeCapability(
       if (thread?.scope === "project") {
         const project = stateStore!.getProject(thread.projectId);
         if (project === undefined) throw new Error("Project not found");
+        const sourceReferences = Array.isArray(request.arguments.sourceReferences)
+          ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string")
+          : [];
+        if (request.capabilityId === "file_download" && typeof request.arguments.url === "string" && !sourceReferences.includes(request.arguments.url)) {
+          sourceReferences.push(request.arguments.url);
+        }
         projectOutput = projectOutputs.record({
           projectId: project.id, projectPath: project.path, artifact: result.artifact,
           profile: { id: context.profile.id, provider: context.profile.provider, model: context.profile.model }, capabilityId: request.capabilityId,
           ...(typeof request.arguments.skillId === "string" ? { skillId: request.arguments.skillId } : {}),
-          sourceReferences: Array.isArray(request.arguments.sourceReferences) ? request.arguments.sourceReferences.filter((value): value is string => typeof value === "string") : [],
+          sourceReferences,
           warnings: Array.isArray(request.arguments.warnings) ? request.arguments.warnings.filter((value): value is string => typeof value === "string") : [],
           relatedArtifacts: Array.isArray(request.arguments.relatedArtifacts) ? request.arguments.relatedArtifacts.flatMap((value) => {
             const parsed = zRelatedArtifact(value); return parsed === undefined ? [] : [parsed];
@@ -3151,10 +3211,14 @@ function finalizeCapability(
         requestId: result.requestId,
         status: "unknown_outcome",
         code: "ARTIFACT_COMMIT_UNKNOWN",
-        content: "The file write completed but artifact registration could not be confirmed. Inspect the target before retrying."
+        content: "The file operation completed but artifact registration could not be confirmed. Inspect the target before retrying."
       };
     }
   }
+  result = context.citations.annotateCapabilityResult(result, {
+    capabilityId: request.capabilityId,
+    toolCallId: request.toolCallId
+  });
   const eventName = result.status === "completed"
     ? "tool.completed"
     : result.status === "unknown_outcome"
@@ -3546,7 +3610,7 @@ app.whenReady().then(() => {
         schemaVersion: 1,
         revisionId: revision?.id ?? "sub-agent-fallback-v1",
         systemPrompt: revision?.content ?? SHIPPED_MINIMAL_VC_SYSTEM_PROMPT,
-        appendSystemPrompt: []
+        appendSystemPrompt: [CITATION_OUTPUT_INSTRUCTIONS]
       };
     },
     extensions: () => extensionRuntimeSnapshot(),
@@ -3631,6 +3695,14 @@ app.whenReady().then(() => {
   const textOutputStore = new TextOutputStore();
   capabilityRegistry.register(createTextOutputCapability(textOutputStore));
   capabilityRegistry.register(createTextEditCapability(textOutputStore));
+  capabilityRegistry.register(createFileDownloadCapability(new BinaryOutputStore(), new FetchFileDownloadClient()));
+  capabilityRegistry.register(createWorkspaceWriteCapability(new WorkspaceWriteStore()));
+  if (bundledAcademicSkillsRoot !== null && utilityJobRunner !== null) {
+    capabilityRegistry.register(createArxivFulltextCapability(
+      new WorkspaceWriteStore(MAX_ARXIV_BUNDLE_BYTES, 4),
+      new BundledArxivFulltextClient({ skillRoot: bundledAcademicSkillsRoot, stagingRoot: join(app.getPath("userData"), "academic-research", "staging"), runner: utilityJobRunner })
+    ));
+  }
   capabilityRegistry.register(createProjectCommandCapability({
     run: async ({ projectRoot, invocation }) => {
       if (utilityJobRunner === null) throw new Error("Utility Worker is unavailable.");

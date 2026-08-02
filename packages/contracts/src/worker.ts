@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { contextUsageSchema, IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
+import { contextBudgetTelemetrySchema, contextUsageSchema, IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
 import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema, capabilitySurfaceSnapshotSchema } from "./capability.js";
 
@@ -82,6 +82,7 @@ const executeTurn = workerCommandBase.extend({
   contextHistory: z.array(physicalContextHistoryItemSchema),
   estimatedInputTokens: z.number().int().nonnegative(),
   currentInputTokens: z.number().int().nonnegative(),
+  contextBudget: contextBudgetTelemetrySchema.optional(),
   /** New surface contract; activeCapabilities remains for replay compatibility during migration. */
   capabilitySurface: capabilitySurfaceSnapshotSchema.optional(),
   activeCapabilities: z.array(z.string().min(1)),

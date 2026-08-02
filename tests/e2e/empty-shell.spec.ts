@@ -88,6 +88,31 @@ test("launches the empty shell without activating execution resources", async ()
   }
 });
 
+test("renames a Thread from the conversation header", async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-rename-thread-e2e-"));
+  const root = resolve(import.meta.dirname, "../..");
+  const application = await launchApplication(root, userDataDirectory);
+
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole("button", { name: "New thread", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "Thread 1", exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Rename thread", exact: true }).click();
+    await expect(window.getByRole("dialog", { name: "Rename thread" })).toBeVisible();
+    await window.getByLabel("Thread name").fill("Investment Thesis");
+    await window.getByRole("button", { name: "Save name", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "Investment Thesis", exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Investment Thesis", exact: true })).toBeVisible();
+    await expect(invokeRaw(window, "thread.list")).resolves.toMatchObject({
+      event: "threads.listed",
+      payload: { threads: [{ title: "Investment Thesis" }] }
+    });
+  } finally {
+    await application.close();
+    rmSync(userDataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("opens newer local state in visible read-only recovery without changing it", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-newer-state-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
@@ -712,7 +737,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
     await window.getByRole("button", { name: "Adjust profile" }).click();
     await window.getByRole("button", { name: "New profile" }).click();
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Invalid key fixture");
-    await window.getByLabel("Provider").fill("anthropic");
+    await window.getByLabel("Provider", { exact: true }).selectOption("anthropic");
     await window.getByLabel("Model").fill("claude-sonnet-4-5");
     await window.getByRole("textbox", { name: "API key", exact: true }).fill(apiKey);
     await window.getByRole("button", { name: "Save profile" }).click();
@@ -1372,7 +1397,13 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     await window.getByLabel("Active Model Profile").selectOption({ label: "Dogfood fixture" });
     await window.getByLabel("Message").fill("Search the current public web, use project materials, Context and Memory, and create an investment memo file with sources and uncertainty.");
     await window.getByRole("button", { name: "Send" }).click();
+    const outputConfirmation = window.getByRole("dialog", { name: "Capability confirmation" });
+    await expect(outputConfirmation).toContainText("Create text Output");
+    await outputConfirmation.getByRole("button", { name: "Approve" }).click();
     await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    const assistantOutput = window.locator(".assistant-output").last();
+    await expect(assistantOutput).toContainText("参考来源");
+    await expect(assistantOutput.locator('a[href="https://example.com/market"]')).toBeVisible();
     for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
       await expect(window.locator(".tool-activity").filter({ hasText: capability })).toHaveClass(/completed/u);
     }
@@ -1997,9 +2028,25 @@ Treat unusually polished references as a prompt for deeper triangulation, not as
 }
 
 async function createProfile(window: import("@playwright/test").Page, input: { name: string; provider: string; model: string; apiKey: string }) {
+  if (input.provider !== "anthropic" && input.provider !== "openai") {
+    const activeThread = window.locator(".thread-row.active").first();
+    const activeThreadName = await activeThread.count() > 0 ? (await activeThread.textContent())?.trim() : undefined;
+    await invokeRaw(window, "profile.create", { ...input, thinkingLevel: "off" });
+    await window.reload();
+    await expect(window.getByLabel("Navigation")).toBeVisible();
+    if (activeThreadName) {
+      await expect(window.getByRole("button", { name: activeThreadName, exact: true }).first()).toBeVisible();
+      await window.getByRole("button", { name: activeThreadName, exact: true }).first().click();
+    }
+    await window.getByRole("button", { name: "Settings" }).click();
+    await expect(window.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await expect(window.getByText(input.name, { exact: true })).toBeVisible();
+    return;
+  }
   await window.getByRole("button", { name: "New profile" }).click();
   await window.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
-  await window.getByRole("textbox", { name: "Provider", exact: true }).fill(input.provider);
+  await window.getByLabel("Provider mode", { exact: true }).selectOption("builtin");
+  await window.getByLabel("Provider", { exact: true }).selectOption(input.provider);
   await window.getByRole("textbox", { name: "Model", exact: true }).fill(input.model);
   await window.getByLabel("API key", { exact: true }).fill(input.apiKey);
   await window.getByRole("button", { name: "Save profile" }).click();

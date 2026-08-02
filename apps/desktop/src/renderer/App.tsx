@@ -7,11 +7,13 @@ import {
   type AcademicCredentialSource,
   type AcademicCredentialStatus,
   type ContextUsage,
+  type CitationSource,
   type DreamDueProposal,
   type DreamBatch,
   type DreamReviewState,
   type ExecutionQueueItem,
   type DreamSynthesisProposal,
+  projectDream,
   type HostCommand,
   type HostEvent,
   type JudgmentRecordDraft,
@@ -30,12 +32,15 @@ import {
   type PromptContribution,
   type ProviderFailure,
   type ReflectionRun,
+  projectReflectionWorkflow,
   type SystemPromptRevision,
   type SkillCompatibilityReport,
   type SkillInventoryItem,
   type IntegrationState,
   type IntegrationTaskContext,
   type SubAgentProjection,
+  type SubAgentRunProjection,
+  type SubAgentTaskDetailProjection,
   type TaskModelAssignment,
   type TaskModelType,
   type TrajectoryProfile,
@@ -57,6 +62,7 @@ import {
   Minimize2,
   Moon,
   PanelRight,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -112,6 +118,7 @@ type ConversationItem =
       status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
       profile?: TrajectoryProfile;
       usage?: TokenUsage;
+      citations?: readonly CitationSource[];
       latencyMs?: number;
       recalledStateEstimatedTokens?: number;
       prompt?: {
@@ -173,6 +180,8 @@ export function App() {
   const [lastSkillReport, setLastSkillReport] = useState<SkillCompatibilityReport | null>(null);
   const [integrationState, setIntegrationState] = useState<IntegrationState | null>(null);
   const [subAgentProjections, setSubAgentProjections] = useState<Record<string, SubAgentProjection>>({});
+  const [subAgentRunProjections, setSubAgentRunProjections] = useState<Record<string, SubAgentRunProjection>>({});
+  const [subAgentTaskDetails, setSubAgentTaskDetails] = useState<Record<string, SubAgentTaskDetailProjection>>({});
   const [reflectionRuns, setReflectionRuns] = useState<ReflectionRun[]>([]);
   const [reflectionOutcomes, setReflectionOutcomes] = useState<Record<string, { judgments: JudgmentRecordDraft[]; learningProposals: LongTermLearningProposal[] }>>({});
   const [reflectionLaunch, setReflectionLaunch] = useState<(({ scope: "project"; projectId: string } | { scope: "unscoped"; threadId: string }) & { focus: string; profileId: string }) | null>(null);
@@ -219,6 +228,7 @@ export function App() {
   const [dreamLaunchProfileId, setDreamLaunchProfileId] = useState<string | null>(null);
   const [dreamNoticeDismissed, setDreamNoticeDismissed] = useState(false);
   const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<{ threadId: string; title: string } | null>(null);
   const longTermMemoryDirty = useRef(false);
   const activeThreadIdRef = useRef<string | null>(null);
   const pendingProfileSelections = useRef<Record<string, Promise<unknown>>>({});
@@ -309,7 +319,10 @@ export function App() {
       case "integration.job.updated": setIntegrationState((current) => current === null ? current : { ...current, runtime: { ...current.runtime, runningJobs: event.payload.job.state === "running" ? current.runtime.runningJobs + 1 : current.runtime.runningJobs, queuedJobs: event.payload.job.state === "queued" ? current.runtime.queuedJobs + 1 : current.runtime.queuedJobs }, ...(event.payload.workflow === "office" ? { office: { ...current.office, jobs: [...current.office.jobs.filter((job) => job.id !== event.payload.job.id), event.payload.job] } } : {}), ...(event.payload.workflow === "page_recovery" ? { pageRecovery: { ...current.pageRecovery, parses: [...current.pageRecovery.parses.filter((job) => job.id !== event.payload.job.id), event.payload.job] } } : {}) }); break;
       case "integration.diagnostic": setDiagnostic(localDiagnostic(`${event.payload.workflow}: ${event.payload.code} · ${event.payload.message}`)); break;
       case "sub_agent.runs.listed":
-        setSubAgentProjections(Object.fromEntries(event.payload.projections.map((projection) => [projection.run.id, projection])));
+        setSubAgentRunProjections(Object.fromEntries(event.payload.projections.map((projection) => [projection.run.id, projection])));
+        break;
+      case "sub_agent.task.inspected":
+        setSubAgentTaskDetails((current) => ({ ...current, [event.payload.projection.task.id]: event.payload.projection }));
         break;
       case "sub_agent.run.authorized":
       case "sub_agent.run.inspected":
@@ -408,6 +421,7 @@ export function App() {
         setMemoryCandidates((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !event.payload.removedCandidateIds.includes(id))));
         setActiveThreadId((current) => current === event.payload.threadId ? null : current);
         setDeleteThreadId(null);
+        setRenameDraft((current) => current?.threadId === event.payload.threadId ? null : current);
         break;
       case "project.outputs.listed":
       case "project.outputs.updated": setOutputsByProject((current) => ({ ...current, [event.payload.projectId]: event.payload.outputs })); break;
@@ -442,6 +456,10 @@ export function App() {
         activeThreadIdRef.current = event.payload.thread.id;
         setActiveThreadId(event.payload.thread.id);
         setView("workspace");
+        break;
+      case "thread.renamed":
+        setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
+        setRenameDraft((current) => current?.threadId === event.payload.thread.id ? null : current);
         break;
       case "thread.profile.selected":
         setThreads((current) => current.map((item) => item.id === event.payload.thread.id ? event.payload.thread : item));
@@ -488,7 +506,7 @@ export function App() {
         setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage }));
         break;
       case "turn.completed":
-        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
+        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, ...(event.payload.citations === undefined ? {} : { citations: event.payload.citations }), latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
         if (event.payload.contextUsage !== undefined) setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage! }));
         break;
       case "turn.failed":
@@ -805,6 +823,19 @@ export function App() {
     void invoke(createCommand({ command: "turn.stop", payload: { threadId: activeThreadId, turnId: activeTurn.turnId } }));
   };
 
+  const openRenameThread = (thread: Thread) => {
+    if (readOnlyRecovery) return;
+    setRenameDraft({ threadId: thread.id, title: thread.title });
+  };
+
+  const submitRenameThread = async () => {
+    if (renameDraft === null) return;
+    const title = renameDraft.title.trim();
+    if (title.length === 0) return;
+    const event = await invoke(createCommand({ command: "thread.rename", payload: { threadId: renameDraft.threadId, title } }));
+    if (event?.event === "thread.renamed") setRenameDraft(null);
+  };
+
   const compact = () => {
     if (activeThreadId === null || hasActiveTurn) return;
     void invoke(createCommand({ command: "thread.compact", payload: { threadId: activeThreadId } }));
@@ -983,12 +1014,12 @@ export function App() {
         <DiagnosticBanner event={diagnostic} />
         {!dreamNoticeDismissed && (dreamDueProposal !== null || pendingDreamReminder !== null) && <div className="dream-notice" role="status"><Moon size={17} /><div><strong>{pendingDreamReminder?.kind === "resumable_run" ? "Dream run can resume" : pendingDreamReminder?.kind === "carryover" ? "Dream has unresolved carryover" : "Dream review is due"}</strong><span>{pendingDreamReminder !== null ? `${pendingDreamReminder.affectedScopeCount} scope(s) · oldest ${new Date(pendingDreamReminder.oldestUnresolvedAt).toLocaleDateString()}` : `${dreamDueProposal?.candidateCount ?? 0} captured candidate(s) · ${dreamDueProposal?.eligibleSessionCount ?? 0} eligible exchange(s)`}</span></div><div>{pendingDreamReminder?.kind === "resumable_run" && pendingDreamReminder.batchId !== undefined ? <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: pendingDreamReminder.batchId! } }))}>Resume</button> : <button className="primary-button" type="button" onClick={openDreamLaunch}>Review</button>}<button type="button" onClick={deferDreamNotice}>Tomorrow</button><button type="button" onClick={() => setDreamNoticeDismissed(true)}>Dismiss</button></div></div>}
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} academicCredentials={academicCredentials} taskAssignments={taskAssignments} projects={projects} materialsByProject={materialsByProject} skillPackages={skillPackages} skillsRoot={skillsRoot} lastSkillReport={lastSkillReport} integrationState={integrationState} subAgentProjections={subAgentProjections} activeThreadId={activeThreadId} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} personalCognitionNotice={personalCognitionNotice} learningTelemetry={learningTelemetry} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} academicCredentials={academicCredentials} taskAssignments={taskAssignments} projects={projects} materialsByProject={materialsByProject} skillPackages={skillPackages} skillsRoot={skillsRoot} lastSkillReport={lastSkillReport} integrationState={integrationState} subAgentProjections={subAgentProjections} subAgentRunProjections={subAgentRunProjections} subAgentTaskDetails={subAgentTaskDetails} activeThreadId={activeThreadId} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} personalCognitionNotice={personalCognitionNotice} learningTelemetry={learningTelemetry} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
           <section className="conversation" aria-label="Conversation">
-            <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
+             <header className="conversation-header"><div><span className="eyebrow">{activeThread.scope === "project" ? projects.find((project) => project.id === activeThread.projectId)?.displayName ?? "Project Thread" : "Unscoped Thread"}</span><h1>{activeThread.title}</h1></div><div className="conversation-header-actions"><ContextUsageIndicator usage={activeSessionContext} /><span className="header-model">{activeReflection === undefined ? activeProfile === undefined ? "No profile" : `${activeProfile.provider} / ${activeProfile.model}` : activeReflectionProfile === undefined ? reflectionStatusLabel(activeReflection.status) : `${activeReflectionProfile.provider} / ${activeReflectionProfile.model}`}</span><button className="icon-button" type="button" title="Rename thread" aria-label="Rename thread" onClick={() => openRenameThread(activeThread)} disabled={readOnlyRecovery}><Pencil size={15} /></button><button className="icon-button" type="button" title={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} aria-label={activeThread.archivedAt === undefined ? "Archive thread" : "Restore thread"} onClick={() => void invoke(createCommand({ command: "thread.archive.set", payload: { threadId: activeThread.id, archived: activeThread.archivedAt === undefined } }))} disabled={hasActiveTurn || readOnlyRecovery}><Archive size={15} /></button><button className="icon-button" type="button" title="Delete thread" aria-label="Delete thread" onClick={() => setDeleteThreadId(activeThread.id)} disabled={hasActiveTurn || readOnlyRecovery}><Trash2 size={15} /></button></div></header>
             <div className="message-list" onPointerUp={captureConversationSelection} onScroll={() => setConversationSelection(null)}>
               {activeReflection !== undefined && <ReflectionWorkspace run={activeReflection} outputLocation={activeThread.scope === "unscoped" ? activeThread.outputLocation : undefined} outcomes={reflectionOutcomes[activeReflection.id] ?? { judgments: [], learningProposals: [] }} profiles={profiles} taskAssignments={taskAssignments} start={startOrRetryReflection} startMemoryAware={startMemoryAwareReflection} stop={() => void invoke(createCommand({ command: "reflection.independent.stop", payload: { runId: activeReflection.id } }))} discard={() => void invoke(createCommand({ command: "reflection.discard", payload: { runId: activeReflection.id } }))} configure={() => setView("settings")} chooseOutput={chooseOutputLocation} prepareOutcomes={() => submit("Prepare a Judgment Record and one de-identified Long-term Learning Proposal from this Reflection.")} confirmJudgment={(draftId) => void invoke(createCommand({ command: "reflection.judgment.confirm", payload: { draftId } }))} discardOutcome={(draftId) => void invoke(createCommand({ command: "reflection.outcome.discard", payload: { draftId } }))} prepareLearningPatch={(proposalId, judgmentDraftId) => void invoke(createCommand({ command: "reflection.learning.prepare_patch", payload: { proposalId, judgmentDraftId } }))} />}
               {items.length === 0 ? activeReflection === undefined && <div className="thread-empty"><MessageSquare size={20} /><span>Ready for a new conversation</span></div> : groupConversationItems(items).map((turn) => (
@@ -996,7 +1027,7 @@ export function App() {
               ))}
               {Object.values(memoryCandidates).filter((candidate) => candidate.threadId === activeThreadId && candidate.status === "active").map((candidate) => <div className="memory-candidate" key={candidate.id}><div><strong>Memory candidate captured</strong><span>{candidate.sourceSnippet}</span></div><div>{candidate.scope === "project" && <button type="button" onClick={() => reviewCandidate(candidate)}>Review</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "memory.candidate.dismiss", payload: { candidateId: candidate.id } }))}>Dismiss</button></div></div>)}
               {Object.values(confirmations).filter((item) => item.payload.threadId === activeThreadId).map((item) => <div className="action-proposal" role="dialog" aria-label="Capability confirmation" key={item.payload.requestId}>
-                <strong>{item.payload.action}</strong><p>{item.payload.target}</p><span>{item.payload.reason} {item.payload.expectedEffect}</span>{item.payload.preview !== undefined && <details><summary>Review diff</summary><pre>{item.payload.preview}</pre></details>}<div><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, true)}>Approve</button><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, false)}>Deny</button></div>
+                <strong>{item.payload.action}</strong><span className={`decision-class ${item.payload.decisionClass}`}>{item.payload.decisionClass} decision</span><p>{item.payload.target}</p><span>{item.payload.reason} {item.payload.expectedEffect}</span>{item.payload.preview !== undefined && <details><summary>Review diff</summary><pre>{item.payload.preview}</pre></details>}<div><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, true)}>Approve</button><button type="button" onClick={() => resolveConfirmation(item.payload.requestId, false)}>Deny</button></div>
               </div>)}
               {profileChange && <div className="profile-change" role="dialog" aria-label="Cross-Provider continuation">
                 <strong>Change Provider for this conversation?</strong>
@@ -1026,6 +1057,7 @@ export function App() {
         {view === "workspace" && candidateDraft && <div className="workspace-dialog memory-draft-dialog" role="dialog" aria-label="Project Memory draft"><strong>Confirm Project Memory</strong><span>This appends a user-confirmed judgment, not source evidence.</span><label>Title<input aria-label="Memory title" value={candidateDraft.title} onChange={(event) => setCandidateDraft({ ...candidateDraft, title: event.target.value })} /></label><label>Tags<input aria-label="Memory tags" value={candidateDraft.tags} onChange={(event) => setCandidateDraft({ ...candidateDraft, tags: event.target.value })} placeholder="risk, diligence" /></label><label>Judgment<textarea aria-label="Memory judgment" value={candidateDraft.body} onChange={(event) => setCandidateDraft({ ...candidateDraft, body: event.target.value })} /></label><div><button className="primary-button" type="button" onClick={confirmCandidate} disabled={candidateDraft.title.trim() === "" || candidateDraft.body.trim() === "" || candidateDraft.candidate.projectId === undefined || memoryDocuments[candidateDraft.candidate.projectId] === undefined}>Confirm append</button><button type="button" onClick={() => setCandidateDraft(null)}>Cancel</button></div></div>}
         {view === "workspace" && reflectionLaunch && <div className="workspace-dialog reflection-launch" role="dialog" aria-label="Start Investment Reflection"><strong>Start Investment Reflection</strong><span>{reflectionLaunch.scope === "project" ? "The first pass is isolated from Project Memory and Long-term Memory." : "The first pass uses only frozen User inputs and public evidence. It cannot access Project State or Memory."}</span><label>Optional focus<textarea aria-label="Reflection focus" value={reflectionLaunch.focus} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, focus: event.target.value })} placeholder={reflectionLaunch.scope === "project" ? "Review this Project broadly" : "Review this investment question broadly"} /></label><label>Independent Evidence Profile<select aria-label="Reflection Model Profile" value={reflectionLaunch.profileId} onChange={(event) => setReflectionLaunch({ ...reflectionLaunch, profileId: event.target.value })}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setReflectionLaunch(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchReflection()}>Start Reflection</button></div></div>}
         {dreamLaunchProfileId !== null && <div className="workspace-dialog dream-launch" role="dialog" aria-label="Start Dream"><strong>Start Dream</strong><span>This creates one frozen cross-project review batch. It does not authorize any Memory write.</span><label>Dream Model Profile<select aria-label="Dream Model Profile" value={dreamLaunchProfileId} onChange={(event) => setDreamLaunchProfileId(event.target.value)}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label><div className="form-actions"><button type="button" onClick={() => setDreamLaunchProfileId(null)}>Cancel</button><button className="primary-button" type="button" onClick={() => void launchDream()} disabled={dreamLaunchProfileId === ""}>Create Dream Batch</button></div></div>}
+        {renameDraft !== null && <form className="workspace-dialog rename-thread-dialog" role="dialog" aria-label="Rename thread" onSubmit={(event) => { event.preventDefault(); void submitRenameThread(); }}><strong>Rename thread</strong><label>Thread name<input aria-label="Thread name" value={renameDraft.title} maxLength={120} autoFocus onChange={(event) => setRenameDraft({ ...renameDraft, title: event.target.value })} /></label><span>Use 1–120 characters.</span><div className="form-actions"><button type="button" onClick={() => setRenameDraft(null)}>Cancel</button><button className="primary-button" type="submit" disabled={renameDraft.title.trim().length === 0}>Save name</button></div></form>}
         {deleteThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread"><strong>Delete this thread?</strong><span>This removes the Thread from the project, together with its retained conversation, physical context, queued work, unapproved candidates, and Dream source text. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThread()}>Delete thread</button></div></div>}
         {view === "workspace" && preparedMemoryPatch && <div className="workspace-dialog reflection-memory-patch" role="dialog" aria-label="Reflection Memory patch preview"><strong>Confirm Long-term Memory change</strong><span>This is a separate confirmation after the Judgment Record. Review the lineage and file diffs before committing.</span><p>{preparedMemoryPatch.rationale}</p><pre>{preparedMemoryPatch.lineageDiff}</pre>{preparedMemoryPatch.files.map((file) => <details key={file.kind} open={file.changed}><summary>{file.kind.replaceAll("_", " ")} · {file.changed ? "changed" : "unchanged"}</summary><span title={file.path}>{file.path}</span><pre>{file.diff}</pre></details>)}<div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.discard", payload: { patchId: preparedMemoryPatch.id } }))}>Discard</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "long_term_memory.patch.commit", payload: { patchId: preparedMemoryPatch.id, confirmed: true } }))}>Confirm Memory change</button></div></div>}
 
@@ -1128,20 +1160,22 @@ export function App() {
 }
 
 function ReflectionWorkspace({ run, outputLocation, outcomes, profiles, taskAssignments, start, startMemoryAware, stop, discard, configure, chooseOutput, prepareOutcomes, confirmJudgment, discardOutcome, prepareLearningPatch }: { run: ReflectionRun; outputLocation?: string | undefined; outcomes: { judgments: JudgmentRecordDraft[]; learningProposals: LongTermLearningProposal[] }; profiles: ModelProfile[]; taskAssignments: TaskModelAssignment[]; start(run: ReflectionRun, profileId?: string): void; startMemoryAware(run: ReflectionRun, profileId?: string): void; stop(): void; discard(): void; configure(): void; chooseOutput(): void; prepareOutcomes(): void; confirmJudgment(draftId: string): void; discardOutcome(draftId: string): void; prepareLearningPatch(proposalId: string, judgmentDraftId: string): void }) {
-  const evidenceStage = ["awaiting_profile", "ready", "independent_running", "independent_failed", "independent_interrupted"].includes(run.status);
+  const assessment = run.assessment;
+  const workflow = projectReflectionWorkflow({ status: run.status, assessmentAvailable: assessment !== undefined, ...(run.failure === undefined ? {} : { failureCode: run.failure.code }) });
+  const evidenceStage = workflow.stage === "independent_evidence" || run.status === "awaiting_profile";
+  const dialogueActive = workflow.actions.includes("prepare_outcomes");
   const assignedMemoryProfile = taskAssignments.find((item) => item.taskType === "memory_aware_reflection")?.profileId;
   const [profileId, setProfileId] = useState(evidenceStage ? run.independentProfileId ?? "" : run.memoryAwareProfileId ?? assignedMemoryProfile ?? "");
   useEffect(() => setProfileId(evidenceStage ? run.independentProfileId ?? "" : run.memoryAwareProfileId ?? assignedMemoryProfile ?? ""), [run.id, run.independentProfileId, run.memoryAwareProfileId, assignedMemoryProfile, evidenceStage]);
-  const assessment = run.assessment;
   const confirmedJudgment = [...outcomes.judgments].reverse().find((draft) => draft.status === "confirmed");
   return <article className="reflection-workspace" data-testid="reflection-workspace">
-    <div className="reflection-summary"><div><span className={`reflection-status ${run.status}`}>{reflectionStatusLabel(run.status)}</span><h2>{run.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection"}</h2><p>{run.objective}</p>{run.focus && <p><strong>Focus:</strong> {run.focus}</p>}</div><dl><div><dt>Brief</dt><dd>{run.brief.scope === "project" ? `${run.brief.materialCards.length} materials` : `${run.brief.userInputs.length} inputs`} · {run.brief.recordReferences.length} records</dd></div><div><dt>Prompt</dt><dd>{run.promptSnapshot.hash.slice(0, 12)}</dd></div><div><dt>Frozen</dt><dd>{new Date(run.createdAt).toLocaleString()}</dd></div></dl></div>
+    <div className="reflection-summary"><div><span className={`reflection-status ${workflow.stage}-${workflow.executionState}`}>{workflow.label}</span><h2>{run.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection"}</h2><p>{run.objective}</p>{run.focus && <p><strong>Focus:</strong> {run.focus}</p>}</div><dl><div><dt>Brief</dt><dd>{run.brief.scope === "project" ? `${run.brief.materialCards.length} materials` : `${run.brief.userInputs.length} inputs`} · {run.brief.recordReferences.length} records</dd></div><div><dt>Stage</dt><dd>{workflow.stage.replace("_", " ")}</dd></div><div><dt>Prompt</dt><dd>{run.promptSnapshot.hash.slice(0, 12)}</dd></div><div><dt>Frozen</dt><dd>{new Date(run.createdAt).toLocaleString()}</dd></div></dl></div>
     {assessment !== undefined && <section className="assessment"><h3>Independent Assessment</h3><p className="assessment-conclusion">{assessment.conclusion}</p><AssessmentList title="Rationale" items={assessment.rationale} /><AssessmentList title="Uncertainties" items={assessment.uncertainties} /><AssessmentList title="Counterarguments" items={assessment.counterarguments} /><AssessmentList title="Decision-changing questions" items={assessment.decisionChangingQuestions} />{assessment.evidenceReferences.length > 0 && <div><h4>Evidence references</h4>{assessment.evidenceReferences.map((reference) => <p className="evidence-reference" key={`${reference.referenceId}-${reference.claim}`}><strong>{reference.support}</strong> {reference.claim}<span>{reference.referenceId}</span></p>)}</div>}</section>}
-    {run.failure !== undefined && <div className="reflection-failure" role="alert"><strong>{run.failure.code}</strong><p>{run.failure.message}</p>{run.failure.requestId && <span>Request {run.failure.requestId}</span>}</div>}
-    {outcomes.judgments.map((draft) => <section className="reflection-outcome" data-testid="judgment-record-draft" key={draft.id}><div><span>{draft.status === "draft" ? "Draft · not authoritative" : draft.status === "stale" ? "Stale · review again" : draft.status}</span><h3>Judgment Record</h3></div><p>{draft.view}</p><dl><div><dt>Decision</dt><dd>{draft.decisionState}</dd></div><div><dt>Sources</dt><dd>{draft.sourceAvailability}</dd></div></dl>{draft.status === "stale" && <p className="outcome-stale-reason">{staleOutcomeSummary(draft.staleReasons)}</p>}{["draft", "stale"].includes(draft.status) && run.status === "dialogue_active" && <div className="form-actions"><button type="button" onClick={() => discardOutcome(draft.id)}>Discard</button>{draft.status === "draft" && (run.scope === "unscoped" && outputLocation === undefined ? <button className="primary-button" type="button" onClick={chooseOutput}>Choose Output Location</button> : <button className="primary-button" type="button" onClick={() => confirmJudgment(draft.id)}>Confirm Judgment Record</button>)}</div>}</section>)}
-    {outcomes.learningProposals.map((proposal) => <section className="reflection-outcome learning-proposal" data-testid="learning-proposal-draft" key={proposal.id}><div><span>{proposal.status === "draft" ? "Draft · not in Memory" : proposal.status === "stale" ? "Stale · review again" : proposal.status.replace("_", " ")}</span><h3>Long-term Learning Proposal</h3></div><strong>{proposal.proposed.title}</strong><p>{proposal.proposed.content}</p><p>{proposal.comparisonSummary}</p>{proposal.status === "stale" && <p className="outcome-stale-reason">{staleOutcomeSummary(proposal.staleReasons)}</p>}{["draft", "stale"].includes(proposal.status) && run.status === "dialogue_active" && <div className="form-actions"><button type="button" onClick={() => discardOutcome(proposal.id)}>Discard</button>{proposal.status === "draft" && <button className="primary-button" type="button" disabled={confirmedJudgment === undefined} onClick={() => confirmedJudgment && prepareLearningPatch(proposal.id, confirmedJudgment.id)}>Preview Memory Patch</button>}</div>}</section>)}
-    {run.status !== "dialogue_active" && run.status !== "discarded" && <div className="reflection-controls"><select aria-label={evidenceStage ? "Independent Evidence Profile" : "Memory-Aware Reflection Profile"} value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={run.status === "independent_running" || run.status === "memory_aware_running"}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>{profiles.length === 0 ? <button type="button" onClick={configure}>Configure profiles</button> : run.status === "independent_running" ? <button type="button" onClick={stop}>Stop</button> : evidenceStage ? <button className="primary-button" type="button" onClick={() => start(run, profileId)} disabled={profileId === ""}>{run.status === "ready" || run.status === "awaiting_profile" ? "Start evidence pass" : "Retry evidence pass"}</button> : run.status === "memory_aware_running" ? <span>Starting dialogue...</span> : <><button type="button" onClick={discard}>Discard</button><button className="primary-button" type="button" onClick={() => startMemoryAware(run, profileId)} disabled={profileId === ""}>{run.status === "independent_completed" ? "Start critical dialogue" : "Retry critical dialogue"}</button></>}</div>}
-    {run.status === "dialogue_active" && <div className="reflection-dialogue-boundary"><span>Memory recalls and evidence drilldowns remain visible in this task.</span><div><button type="button" onClick={prepareOutcomes} disabled={outcomes.judgments.some((draft) => draft.status === "draft") || outcomes.learningProposals.some((draft) => draft.status === "draft")}>Prepare outcomes</button><button type="button" onClick={discard}>Discard Reflection</button></div></div>}
+    {run.failure !== undefined && <div className="reflection-failure" role="alert"><strong>{run.failure.code}</strong><p>{run.failure.message}</p>{run.failure.requestId && <span>Request {run.failure.requestId}</span>}{workflow.recoveryAction !== undefined && <span>Recovery: {workflow.recoveryAction.replace("_", " ")}</span>}</div>}
+    {outcomes.judgments.map((draft) => <section className="reflection-outcome" data-testid="judgment-record-draft" key={draft.id}><div><span>{draft.status === "draft" ? "Draft · not authoritative" : draft.status === "stale" ? "Stale · review again" : draft.status}</span><h3>Judgment Record</h3></div><p>{draft.view}</p><dl><div><dt>Decision</dt><dd>{draft.decisionState}</dd></div><div><dt>Sources</dt><dd>{draft.sourceAvailability}</dd></div></dl>{draft.status === "stale" && <p className="outcome-stale-reason">{staleOutcomeSummary(draft.staleReasons)}</p>}{["draft", "stale"].includes(draft.status) && dialogueActive && <div className="form-actions"><button type="button" onClick={() => discardOutcome(draft.id)}>Discard</button>{draft.status === "draft" && (run.scope === "unscoped" && outputLocation === undefined ? <button className="primary-button" type="button" onClick={chooseOutput}>Choose Output Location</button> : <button className="primary-button" type="button" onClick={() => confirmJudgment(draft.id)}>Confirm Judgment Record</button>)}</div>}</section>)}
+    {outcomes.learningProposals.map((proposal) => <section className="reflection-outcome learning-proposal" data-testid="learning-proposal-draft" key={proposal.id}><div><span>{proposal.status === "draft" ? "Draft · not in Memory" : proposal.status === "stale" ? "Stale · review again" : proposal.status.replace("_", " ")}</span><h3>Long-term Learning Proposal</h3></div><strong>{proposal.proposed.title}</strong><p>{proposal.proposed.content}</p><p>{proposal.comparisonSummary}</p>{proposal.status === "stale" && <p className="outcome-stale-reason">{staleOutcomeSummary(proposal.staleReasons)}</p>}{["draft", "stale"].includes(proposal.status) && dialogueActive && <div className="form-actions"><button type="button" onClick={() => discardOutcome(proposal.id)}>Discard</button>{proposal.status === "draft" && <button className="primary-button" type="button" disabled={confirmedJudgment === undefined} onClick={() => confirmedJudgment && prepareLearningPatch(proposal.id, confirmedJudgment.id)}>Preview Memory Patch</button>}</div>}</section>)}
+    {workflow.stage !== "discarded" && !dialogueActive && <div className="reflection-controls"><select aria-label={evidenceStage ? "Independent Evidence Profile" : "Memory-Aware Reflection Profile"} value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={workflow.executionState === "running"}><option value="">Not assigned</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>{profiles.length === 0 ? <button type="button" onClick={configure}>Configure profiles</button> : workflow.actions.includes("stop_evidence") ? <button type="button" onClick={stop}>Stop</button> : evidenceStage ? <button className="primary-button" type="button" onClick={() => start(run, profileId)} disabled={profileId === ""}>{workflow.actions.includes("start_evidence") ? "Start evidence pass" : workflow.actions.includes("resume_evidence") ? "Resume evidence pass" : "Retry evidence pass"}</button> : workflow.executionState === "running" ? <span>Starting dialogue...</span> : <><button type="button" onClick={discard}>Discard</button><button className="primary-button" type="button" onClick={() => startMemoryAware(run, profileId)} disabled={profileId === ""}>{workflow.actions.includes("start_dialogue") ? "Start critical dialogue" : workflow.actions.includes("resume_dialogue") ? "Resume critical dialogue" : "Retry critical dialogue"}</button></>}</div>}
+    {dialogueActive && <div className="reflection-dialogue-boundary"><span>Memory recalls and evidence drilldowns remain visible in this task.</span><div><button type="button" onClick={prepareOutcomes} disabled={outcomes.judgments.some((draft) => draft.status === "draft") || outcomes.learningProposals.some((draft) => draft.status === "draft")}>Prepare outcomes</button><button type="button" onClick={discard}>Discard Reflection</button></div></div>}
   </article>;
 }
 
@@ -1162,7 +1196,7 @@ function SkillsSettings({ packages, root, lastReport, invoke }: {
   lastReport: SkillCompatibilityReport | null;
   invoke(command: HostCommand): Promise<unknown>;
 }) {
-  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map"];
+  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map", "arxiv-fulltext-reader"];
   const activeAcademicSkillCount = academicSkillIds.filter((packageId) => packages.some((item) => item.packageId === packageId && item.enabled && item.state === "active")).length;
   return <div className="settings-section skills-settings" data-testid="skills-settings">
     <div className="settings-section-header"><div><h2>Skills Directory</h2><p>Complete packages are copied into an app-owned directory and remain disabled until explicit activation.</p></div><div className="form-actions"><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.academic.install" }))} disabled={activeAcademicSkillCount === academicSkillIds.length}>Install academic skills</button><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.import" }))}>Import Skill</button></div></div>
@@ -1175,10 +1209,41 @@ function SkillsSettings({ packages, root, lastReport, invoke }: {
   </div>;
 }
 
-function DelegationSettings({ projections, activeThread, activeProfile, invoke, readOnly }: { projections: Record<string, SubAgentProjection>; activeThread: Thread | undefined; activeProfile: ModelProfile | undefined; invoke(command: HostCommand): Promise<unknown>; readOnly: boolean }) {
+function DelegationSettings({ projections, runProjections, taskDetails, activeThread, activeProfile, invoke, readOnly }: { projections: Record<string, SubAgentProjection>; runProjections: Record<string, SubAgentRunProjection>; taskDetails: Record<string, SubAgentTaskDetailProjection>; activeThread: Thread | undefined; activeProfile: ModelProfile | undefined; invoke(command: HostCommand): Promise<unknown>; readOnly: boolean }) {
   const [objective, setObjective] = useState("Find independent evidence for the current bounded question.");
   const [role, setRole] = useState<"researcher" | "critic" | "synthesizer" | "writer">("researcher");
-  const runs = Object.values(projections).sort((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
+  type FullTask = SubAgentProjection["tasks"][number];
+  type SummaryTask = SubAgentRunProjection["tasks"][number];
+  type DelegationTask = {
+    id: string;
+    runId: string;
+    role: string;
+    status: string;
+    objective: string;
+    usage: { totalTokens: number };
+    handoff: FullTask["handoff"];
+    attemptCount: number;
+    resolvedProfile?: FullTask["resolvedProfile"];
+    capabilitySet?: FullTask["capabilitySet"];
+  };
+  type DelegationRun = { run: SubAgentRunProjection["run"]; tasks: DelegationTask[] };
+  const normalizeTask = (task: FullTask | SummaryTask): DelegationTask => {
+    const detail = taskDetails[task.id];
+    const full = detail?.task;
+    return {
+      id: task.id,
+      runId: task.runId,
+      role: task.role,
+      status: task.status,
+      objective: task.objective,
+      usage: task.usage,
+      handoff: full?.handoff ?? task.handoff,
+      attemptCount: full?.attemptIds.length ?? ("attemptCount" in task ? task.attemptCount : task.attemptIds.length),
+      ...(full === undefined ? {} : { resolvedProfile: full.resolvedProfile, capabilitySet: full.capabilitySet })
+    };
+  };
+  const summaryRuns = Object.values(runProjections);
+  const runs: DelegationRun[] = (summaryRuns.length > 0 ? summaryRuns : Object.values(projections)).map((projection) => ({ run: projection.run, tasks: projection.tasks.map(normalizeTask) })).sort((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
   const authorize = () => {
     const parentThread = activeThread;
     const profile = activeProfile;
@@ -1194,7 +1259,7 @@ function DelegationSettings({ projections, activeThread, activeProfile, invoke, 
   return <div className="settings-section delegation-settings" data-testid="delegation-settings">
     <div className="settings-section-header"><div><span className="eyebrow">D1 explicit runtime</span><h2>Sub-Agent Delegation</h2><p>Only this confirmed User action creates a flat, bounded, auditable child task. Ordinary Turns never create hidden children.</p></div><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.run.list" }))}>Refresh runs</button></div>
     <div className="delegation-form"><label>Role<select value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="researcher">Researcher</option><option value="critic">Critic</option><option value="synthesizer">Synthesizer</option><option value="writer">Writer</option></select></label><label>Bounded objective<textarea value={objective} onChange={(event) => setObjective(event.target.value)} maxLength={20_000} /></label>{activeThread === undefined && <span className="delegation-help">Select a parent Thread before authorizing delegation.</span>}{activeThread !== undefined && activeProfile === undefined && <span className="delegation-help">Select an Active Model Profile before authorizing delegation.</span>}{activeThread !== undefined && <span className="delegation-help">Scope: {activeThread.scope}{activeThread.scope === "project" ? ` · ${activeThread.projectId}` : ""} · Profile: {activeProfile?.name ?? "not selected"}</span>}<button className="primary-button" type="button" disabled={readOnly || activeThread === undefined || activeProfile === undefined || !objective.trim()} onClick={authorize}>Authorize current-task delegation</button></div>
-    {runs.length === 0 ? <p className="empty-setting">No explicit Sub-Agent runs.</p> : runs.map((projection) => <div className="delegation-run" key={projection.run.id}><header><div><strong>{projection.run.status}</strong><span>{projection.run.id.slice(0, 8)} · parent {projection.run.parentThreadId}</span></div><div className="form-actions">{!readOnly && ["authorized", "queued", "running"].includes(projection.run.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.run.stop", payload: { runId: projection.run.id } }))}>Stop run</button>}{!readOnly && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.record.delete", payload: { runId: projection.run.id, confirmed: true } }))}>Delete record</button>}</div></header><span>Budget {projection.run.usage.totalTokens}{projection.run.sharedTokenBudget === undefined ? "" : ` / ${projection.run.sharedTokenBudget}`} tokens · {projection.tasks.length} task(s)</span>{projection.tasks.map((task) => <div className="delegation-task" key={task.id}><div><strong>{task.role}</strong><span>{task.status} · {task.resolvedProfile.provider}/{task.resolvedProfile.model}</span><span title={task.objective}>{task.objective}</span><small>{task.capabilitySet.join(", ")} · {task.usage.totalTokens} tokens</small></div><div className="form-actions">{!readOnly && ["failed", "interrupted", "stopped"].includes(task.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.task.retry", payload: { taskId: task.id } }))}>Retry</button>}{!readOnly && ["created", "queued", "failed", "interrupted", "stopped"].includes(task.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.task.skip", payload: { taskId: task.id } }))}>Skip</button>}{!readOnly && task.handoff !== undefined && task.handoff.reviewStatus === undefined && <><button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.handoff.adopt", payload: { taskId: task.id } }))}>Adopt handoff</button><button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.handoff.reject", payload: { taskId: task.id } }))}>Reject handoff</button></>}</div>{task.handoff !== undefined && <span role="status">Handoff {task.handoff.reviewStatus === "adopted" ? "adopted" : task.handoff.reviewStatus === "rejected" ? "rejected" : "awaiting parent adoption"} · {task.handoff.provenance.map((item) => item.referenceId).join(", ")}</span>}</div>)}</div>)}
+     {runs.length === 0 ? <p className="empty-setting">No explicit Sub-Agent runs.</p> : runs.map((projection) => <div className="delegation-run" key={projection.run.id}><header><div><strong>{projection.run.status}</strong><span>{projection.run.id.slice(0, 8)} · parent {projection.run.parentThreadId}</span></div><div className="form-actions">{!readOnly && ["authorized", "queued", "running"].includes(projection.run.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.run.stop", payload: { runId: projection.run.id } }))}>Stop run</button>}{!readOnly && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.record.delete", payload: { runId: projection.run.id, confirmed: true } }))}>Delete record</button>}</div></header><span>Budget {projection.run.usage.totalTokens}{projection.run.sharedTokenBudget === undefined ? "" : ` / ${projection.run.sharedTokenBudget}`} tokens · {projection.tasks.length} task(s)</span>{projection.tasks.map((task) => { const detail = taskDetails[task.id]; return <div className="delegation-task" key={task.id}><div><strong>{task.role}</strong><span>{task.status} · {task.resolvedProfile === undefined ? "Profile details collapsed" : `${task.resolvedProfile.provider}/${task.resolvedProfile.model}`}</span><span title={task.objective}>{task.objective}</span><small>{task.capabilitySet?.join(", ") ?? "Capability set collapsed"} · {task.usage.totalTokens} tokens · {task.attemptCount} Attempt(s)</small></div><div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.task.inspect", payload: { runId: projection.run.id, taskId: task.id } }))}>{detail === undefined ? "Load Task details" : "Refresh Task details"}</button>{!readOnly && ["failed", "interrupted", "stopped"].includes(task.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.task.retry", payload: { taskId: task.id } }))}>Retry</button>}{!readOnly && ["created", "queued", "failed", "interrupted", "stopped"].includes(task.status) && <button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.task.skip", payload: { taskId: task.id } }))}>Skip</button>}{!readOnly && task.handoff !== undefined && task.handoff.reviewStatus === undefined && <><button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.handoff.adopt", payload: { taskId: task.id } }))}>Adopt handoff</button><button type="button" onClick={() => void invoke(createCommand({ command: "sub_agent.handoff.reject", payload: { taskId: task.id } }))}>Reject handoff</button></>}</div>{task.handoff !== undefined && <span role="status">Handoff {task.handoff.reviewStatus === "adopted" ? "adopted" : task.handoff.reviewStatus === "rejected" ? "rejected" : "awaiting parent adoption"} · {task.handoff.provenance.map((item) => item.referenceId).join(", ")}</span>}{detail !== undefined && <details className="delegation-attempts" open><summary>Task details · {detail.attempts.length} Attempt(s)</summary>{detail.attempts.map((attempt) => <span key={attempt.id}>{attempt.status} · {attempt.messages.length} message(s) · {attempt.toolEvents.length} tool event(s)</span>)}</details>}</div>; })}</div>)}
   </div>;
 }
 
@@ -1342,7 +1407,7 @@ function IntegrationCard({ title, status, message, children, className = "" }: {
 }
 
 function reflectionStatusLabel(status: ReflectionRun["status"]): string {
-  return ({ awaiting_profile: "Awaiting profile", ready: "Ready", independent_running: "Analyzing evidence", independent_completed: "Evidence pass complete", independent_failed: "Evidence pass failed", independent_interrupted: "Evidence pass interrupted", memory_aware_running: "Recalling prior judgment", dialogue_active: "Reflection dialogue", memory_aware_failed: "Reflection start failed", memory_aware_interrupted: "Reflection start interrupted", discarded: "Discarded" })[status];
+  return projectReflectionWorkflow({ status, assessmentAvailable: false }).label;
 }
 
 function ProjectContextPanel({ document, draft, onChange, onReload, onSave }: {
@@ -1381,7 +1446,7 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignments, projects, materialsByProject, skillPackages, skillsRoot, lastSkillReport, integrationState, subAgentProjections, activeThreadId, activeThread, activeProfile, integrationContext, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, personalCognitionNotice, learningTelemetry, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignments, projects, materialsByProject, skillPackages, skillsRoot, lastSkillReport, integrationState, subAgentProjections, subAgentRunProjections, subAgentTaskDetails, activeThreadId, activeThread, activeProfile, integrationContext, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, personalCognitionNotice, learningTelemetry, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   academicCredentials: AcademicCredentialStatus[];
@@ -1393,6 +1458,8 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
   lastSkillReport: SkillCompatibilityReport | null;
   integrationState: IntegrationState | null;
   subAgentProjections: Record<string, SubAgentProjection>;
+  subAgentRunProjections: Record<string, SubAgentRunProjection>;
+  subAgentTaskDetails: Record<string, SubAgentTaskDetailProjection>;
   activeThreadId: string | null;
   activeThread: Thread | undefined;
   activeProfile: ModelProfile | undefined;
@@ -1417,7 +1484,9 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
 }) {
   const [tab, setTab] = useState<"general" | "memory">("general");
   const [name, setName] = useState("");
-  const [provider, setProvider] = useState("");
+  const [providerMode, setProviderMode] = useState<"builtin" | "url">("builtin");
+  const [builtinProvider, setBuiltinProvider] = useState("");
+  const [providerUrl, setProviderUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [thinkingLevel, setThinkingLevel] = useState<ModelProfile["thinkingLevel"]>("off");
@@ -1428,21 +1497,31 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
   const [replacementCredential, setReplacementCredential] = useState("");
   const [academicCredentialDrafts, setAcademicCredentialDrafts] = useState<Record<AcademicCredentialSource, string>>({ openalex: "", github: "", huggingface: "" });
   const [academicCredentialNotice, setAcademicCredentialNotice] = useState<string | null>(null);
+  const builtinProviders = bootstrap?.piProviders ?? [];
+  const selectableBuiltinProviders = [...new Set([...(builtinProvider ? [builtinProvider] : []), ...builtinProviders])];
+  const provider = providerMode === "builtin" ? builtinProvider : providerUrl;
+  const providerValid = providerMode === "builtin" ? builtinProvider.trim().length > 0 : isProviderUrl(providerUrl);
   const parsedContextWindow = contextWindow === "" ? undefined : Number(contextWindow);
   const parsedMaxOutputTokens = maxOutputTokens === "" ? undefined : Number(maxOutputTokens);
   const limitsValid =
     (parsedContextWindow === undefined || (Number.isInteger(parsedContextWindow) && parsedContextWindow >= 1_024)) &&
     (parsedMaxOutputTokens === undefined || (Number.isInteger(parsedMaxOutputTokens) && parsedMaxOutputTokens >= 1)) &&
     (parsedContextWindow === undefined || parsedMaxOutputTokens === undefined || parsedMaxOutputTokens < parsedContextWindow);
-  const valid = Boolean(name.trim() && provider.trim() && model.trim() && (editingProfileId !== null || apiKey) && limitsValid);
+  const valid = Boolean(name.trim() && providerValid && model.trim() && (editingProfileId !== null || apiKey) && limitsValid);
   const resetProfileForm = () => {
     setEditingProfileId(null);
-    setName(""); setProvider(""); setModel(""); setApiKey(""); setThinkingLevel("off"); setContextWindow(""); setMaxOutputTokens("");
+    setName(""); setProviderMode("builtin"); setBuiltinProvider(builtinProviders[0] ?? ""); setProviderUrl(""); setModel(""); setApiKey(""); setThinkingLevel("off"); setContextWindow(""); setMaxOutputTokens("");
   };
   const editProfile = (profile: ModelProfile) => {
     setEditingProfileId(profile.id);
     setName(profile.name);
-    setProvider(profile.provider);
+    if (isProviderUrl(profile.provider)) {
+      setProviderMode("url");
+      setProviderUrl(profile.provider);
+    } else {
+      setProviderMode("builtin");
+      setBuiltinProvider(profile.provider);
+    }
     setModel(profile.model);
     setApiKey("");
     setThinkingLevel(profile.thinkingLevel);
@@ -1514,9 +1593,11 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
         <div className="settings-section-header"><div><h2>Model Profiles</h2><p>Credentials are protected by Windows and stored only by reference.</p></div><button className="compact-button" type="button" onClick={() => { resetProfileForm(); setFormOpen(!formOpen); }}><Plus size={15} /> New profile</button></div>
         {formOpen && <form className="profile-form" onSubmit={save}>
           <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
-          <label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="anthropic" /></label>
+          <label>Provider mode<select aria-label="Provider mode" value={providerMode} onChange={(event) => setProviderMode(event.target.value as "builtin" | "url")}><option value="builtin">Pi built-in provider</option><option value="url">Custom URL</option></select></label>
+          {providerMode === "builtin" ? <label>Provider<select aria-label="Provider" value={builtinProvider} onChange={(event) => setBuiltinProvider(event.target.value)}><option value="" disabled>Select a Pi provider</option>{selectableBuiltinProviders.map((item) => <option key={item} value={item}>{item}</option>)}</select></label> : <label>Provider URL<input aria-label="Provider URL" value={providerUrl} onChange={(event) => setProviderUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>}
           <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="model id" /></label>
           <label>API key<span className="secret-input"><KeyRound size={14} /><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" placeholder={editingProfileId === null ? "" : "Leave blank to keep current key"} /></span></label>
+          {providerMode === "url" && <span className="profile-provider-hint">URLs containing <code>anthropic</code> use the Anthropic API; other URLs use OpenAI-compatible API.</span>}
           <label>Reasoning<select value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value as ModelProfile["thinkingLevel"])}><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <label>Context window override<input aria-label="Context window override" type="number" min={1024} step={1} value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="Auto from pi catalog" /></label>
           <label>Max output tokens override<input aria-label="Max output tokens override" type="number" min={1} step={1} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="Auto from pi catalog" /></label>
@@ -1530,7 +1611,7 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
       </fieldset>
        <IntegrationsSettings state={integrationState} invoke={invoke} readOnly={readOnly} profiles={profiles} projects={projects} materialsByProject={materialsByProject} skillPackages={skillPackages} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} />
-      <DelegationSettings projections={subAgentProjections} activeThread={activeThread} activeProfile={activeProfile} invoke={invoke} readOnly={readOnly} />
+      <DelegationSettings projections={subAgentProjections} runProjections={subAgentRunProjections} taskDetails={subAgentTaskDetails} activeThread={activeThread} activeProfile={activeProfile} invoke={invoke} readOnly={readOnly} />
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>Storage mode</dt><dd>{bootstrap?.storageMode ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Supported schema</dt><dd>{bootstrap?.migration.supportedVersion ?? "Loading"}</dd></div><div><dt>Migration status</dt><dd>{bootstrap?.migration.status ?? "Loading"}</dd></div><div><dt>Rollback</dt><dd>{bootstrap?.migration.rollbackAvailable ? "Available" : "Unavailable"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div><div><dt>Execution capacity</dt><dd>{bootstrap === null ? "-" : `${bootstrap.executionScheduler.runningCount} / ${bootstrap.executionScheduler.capacity}`}</dd></div><div><dt>Queued / drafts</dt><dd>{bootstrap === null ? "-" : `${bootstrap.executionScheduler.queuedCount} / ${bootstrap.executionScheduler.draftCount}`}</dd></div><div><dt>Average queue delay</dt><dd>{bootstrap?.executionScheduler.averageQueueDelayMs ?? 0} ms</dd></div><div><dt>Longest running</dt><dd>{bootstrap?.executionScheduler.longestRunningMs ?? 0} ms</dd></div><div><dt>Execution failures</dt><dd>{bootstrap?.executionScheduler.failureCount ?? 0}</dd></div></dl></div>
       <div className="settings-section learning-telemetry"><h2>Learning telemetry</h2><p>Turn details expose prompt, tools, retained context, recall, output reserve, token contribution, and latency.</p><dl><div><dt>Dream scope coverage</dt><dd>{learningTelemetry.coveredScopes} / {learningTelemetry.totalScopes}</dd></div><div><dt>Visible workflow failures</dt><dd>{learningTelemetry.failureCount}</dd></div><div><dt>Remote content telemetry</dt><dd>Disabled</dd></div></dl></div>
@@ -1557,8 +1638,10 @@ function DreamSettings({ state, invoke, launch }: { state: DreamReviewState | nu
 }
 
 function DreamActiveBatch({ batch, invoke }: { batch: DreamBatch; invoke(command: HostCommand): Promise<unknown> }) {
-  const scopesCovered = batch.extractionScopes.every((scope) => scope.status === "approved" || scope.status === "skipped");
+  const projection = projectDream(batch);
+  const scopesCovered = projection.reviewedScopeCount === projection.scopeCount && batch.extractionScopes.every((scope) => scope.status === "approved" || scope.status === "skipped");
   return <><div className="dream-batch-summary"><div><strong>Frozen batch</strong><span>{batch.status.replace("_", " ")} · cutoff {new Date(batch.cutoff).toLocaleString()}</span><span>{batch.trajectoryInputs.length} exchanges · {batch.candidateInputs.length} candidates · {batch.carryoverInputs.length} carryover</span><span>{batch.profileSnapshot.name} · prompt {batch.promptSnapshot.hash.slice(0, 12)}</span></div><div>{batch.status === "resumable" && batch.currentStage !== "global_synthesis" && <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: batch.id } }))}>Resume</button>}<button type="button" onClick={() => void invoke(createCommand({ command: "dream.discard", payload: { batchId: batch.id } }))}>Discard</button></div></div>
+    <div className="dream-phase-strip" role="status"><strong>{projection.phase === "collect" ? "Collect" : projection.phase === "review" ? "Review" : "Commit"}</strong><span>{projection.reviewedScopeCount} / {projection.scopeCount} scopes reviewed</span>{projection.proposalCount > 0 && <span>{projection.reviewedProposalCount} / {projection.proposalCount} proposals reviewed</span>}{projection.unresolvedPriorPeriodCount > 0 && <span>{projection.unresolvedPriorPeriodCount} unresolved prior-period item(s)</span>}</div>
     {batch.partialCoverageScopeIds.length > 0 && <p className="dream-partial-coverage" role="status">Partial Dream Coverage: {batch.partialCoverageScopeIds.length} scope(s) explicitly skipped and retained as Carryover.</p>}
     <div className="dream-scope-list">{batch.extractionScopes.map((scope) => <article className="dream-scope-card" key={scope.id}><header><div><strong>{scope.kind === "project" ? "Project scope" : "Unscoped Thread"}</strong><span>{scope.kind === "project" ? scope.projectId?.slice(0, 8) : scope.threadId} · {scope.status.replace("_", " ")} · attempt {scope.attemptCount}</span></div><div>{(["pending", "stale"] as string[]).includes(scope.status) && <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.start", payload: { batchId: batch.id, scopeId: scope.id } }))}>Extract</button>}{scope.status === "failed" && <><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.start", payload: { batchId: batch.id, scopeId: scope.id } }))}>Retry</button><button type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.review", payload: { batchId: batch.id, scopeId: scope.id, decision: "skip" } }))}>Skip</button></>}{scope.status === "succeeded" && <><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.review", payload: { batchId: batch.id, scopeId: scope.id, decision: "approve" } }))}>Approve</button><button type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.start", payload: { batchId: batch.id, scopeId: scope.id } }))}>Retry</button><button type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.review", payload: { batchId: batch.id, scopeId: scope.id, decision: "keep_pending" } }))}>Keep Pending</button><button type="button" onClick={() => void invoke(createCommand({ command: "dream.scope.review", payload: { batchId: batch.id, scopeId: scope.id, decision: "skip" } }))}>Skip</button></>}</div></header>{scope.failure !== undefined && <p className="dream-scope-failure"><strong>{scope.failure.code}</strong> {scope.failure.message}</p>}{scope.result !== undefined && <div className="dream-scope-result"><p>{scope.result.summary}</p><span>Uncertainty: {scope.result.uncertainty || "Not stated"}</span><span>{scope.result.candidates.length} candidate(s) · {scope.result.sourceReferences.length} opaque source reference(s) · de-identified</span></div>}</article>)}</div>
     {scopesCovered && (batch.synthesis === undefined || batch.synthesis.status === "stale") && <div className="dream-synthesis-action"><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.synthesis.start", payload: { batchId: batch.id } }))}>{batch.synthesis?.status === "stale" ? "Regenerate Global Synthesis" : "Run Global Synthesis"}</button><span>Only approved de-identified summaries and bounded Long-term Memory cards will be sent.</span></div>}
@@ -1572,6 +1655,7 @@ function DreamSynthesisReview({ batch, invoke }: { batch: DreamBatch; invoke(com
   return <section className="dream-synthesis-review"><header><div><strong>Global Dream Synthesis</strong><span>{synthesis.status.replace("_", " ")} · {synthesis.partialCoverageScopeReferences.length > 0 ? "Partial Dream Coverage" : "Complete coverage"}</span></div>{synthesis.status === "review_pending" && <div><button type="button" onClick={() => void invoke(createCommand({ command: "dream.proposal.review_all", payload: { batchId: batch.id, decision: "reject" } }))}>Reject all</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.proposal.review_all", payload: { batchId: batch.id, decision: "approve" } }))}>Approve all</button></div>}</header><p>{synthesis.summary}</p><span>Uncertainty: {synthesis.uncertainty || "Not stated"}</span>
     <div className="dream-proposal-list">{synthesis.proposals.map((proposal) => <DreamProposalCard key={proposal.id} batch={batch} proposal={proposal} invoke={invoke} />)}</div>
     {synthesis.status === "reviewed" && batch.preparedPatch?.status !== "prepared" && <button className="primary-button dream-prepare-patch" type="button" onClick={() => void invoke(createCommand({ command: "dream.patch.prepare", payload: { batchId: batch.id } }))}>Prepare Markdown Patch Preview</button>}
+    {synthesis.status === "reviewed" && batch.preparedPatch?.status === "prepared" && <button className="compact-button dream-prepare-patch" type="button" title="The Host prepared this patch automatically after proposal review." onClick={() => document.querySelector(".dream-patch-preview")?.scrollIntoView({ behavior: "smooth", block: "center" })}>Prepare Markdown Patch Preview</button>}
     {batch.preparedPatch?.status === "prepared" && <div className="dream-patch-preview"><header><div><strong>Final Markdown Patch Preview</strong><span>{batch.preparedPatch.partialCoverageScopeReferences.length > 0 ? "Partial Dream Coverage" : "Complete coverage"} · confirmation required</span></div><div><button type="button" onClick={() => void invoke(createCommand({ command: "dream.patch.discard", payload: { batchId: batch.id, patchId: batch.preparedPatch!.id } }))}>Discard preview</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.patch.commit", payload: { batchId: batch.id, patchId: batch.preparedPatch!.id } }))}>Confirm Memory Commit</button></div></header>{batch.preparedPatch.files.filter((file) => file.changed && ["project_memory", "long_term_memory", "condensation_archive", "cognitive_evolution_history"].includes(file.kind)).map((file) => <details key={`${file.kind}-${file.path}`}><summary>{file.kind.replaceAll("_", " ")} · {file.path}</summary><pre>{file.diff}</pre></details>)}</div>}
   </section>;
 }
@@ -1801,6 +1885,15 @@ function formatExactTokenCount(tokens: number): string {
   return Math.round(tokens).toLocaleString();
 }
 
+function isProviderUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function academicCredentialLabel(source: AcademicCredentialSource): string {
   if (source === "openalex") return "OpenAlex API key";
   if (source === "github") return "GitHub token";
@@ -1870,6 +1963,7 @@ function projectTrajectory(
       status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
       ...(turn.profile === undefined ? {} : { profile: turn.profile }),
       ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      ...(turn.citations === undefined ? {} : { citations: turn.citations }),
       ...(turn.latencyMs === undefined ? {} : { latencyMs: turn.latencyMs }),
       ...(turn.recalledStateEstimatedTokens === undefined ? {} : { recalledStateEstimatedTokens: turn.recalledStateEstimatedTokens }),
       ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions, ...(turn.prompt.capabilitySurface === undefined ? {} : { capabilitySurface: turn.prompt.capabilitySurface }) } }),

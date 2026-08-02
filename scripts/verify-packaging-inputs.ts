@@ -21,6 +21,8 @@ const requiredFiles = [
   "skills/academic-research/technical-claim-verification/SKILL.md",
   "skills/academic-research/novelty-and-prior-art-map/SKILL.md",
   "skills/academic-research/research-to-company-map/SKILL.md",
+  "skills/academic-research/arxiv-fulltext-reader/SKILL.md",
+  "skills/academic-research/arxiv-fulltext-reader/scripts/arxiv_fulltext.txt",
   "packaging/parser-runtime/python.exe",
   "packaging/parser-runtime/runtime-manifest.json",
   "packaging/THIRD_PARTY_NOTICES.txt"

@@ -76,6 +76,7 @@ describe("ThreadTrajectoryStore", () => {
         message: "The company has an attractive wedge.",
         profile,
         usage: { input: 10, output: 8, cacheRead: 0, cacheWrite: 0, reasoning: 3, totalTokens: 18 },
+        citations: [{ id: "S1", url: "https://example.com/report", title: "Report", accessedAt: "2026-08-02T00:00:00.000Z", originatingTool: "web_fetch", toolCallId: "tool-1" }],
         contextUsage: { tokens: 12_500, contextWindow: 128_000, percent: 9.765625 }
       }
     });
@@ -86,6 +87,7 @@ describe("ThreadTrajectoryStore", () => {
         assistantText: "The company has an attractive wedge.",
         status: "completed",
         usage: { input: 10, reasoning: 3, output: 8 },
+        citations: [{ id: "S1", url: "https://example.com/report", title: "Report" }],
         contextUsage: { tokens: 12_500, contextWindow: 128_000 }
       }
     ]);

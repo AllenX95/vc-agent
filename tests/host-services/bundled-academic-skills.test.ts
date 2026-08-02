@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("bundled VC academic skills", () => {
-  it("explicitly installs all five packages once and exposes a task-scoped Pi runtime snapshot", async () => {
+  it("explicitly installs all bundled packages once and exposes a task-scoped Pi runtime snapshot", async () => {
     const root = mkdtempSync(join(tmpdir(), "vc-academic-skills-"));
     roots.push(root);
     const manager = new SkillPackageManager({ root: join(root, "skills") });
@@ -63,7 +63,8 @@ describe("bundled VC academic skills", () => {
     ["创始人学术尽调", "founder-academic-diligence"],
     ["验证BP中的全球首个", "technical-claim-verification"],
     ["制作技术原创性图谱", "novelty-and-prior-art-map"],
-    ["从论文到公司的产业化映射", "research-to-company-map"]
+    ["从论文到公司的产业化映射", "research-to-company-map"],
+    ["下载 ArXiv 全文", "arxiv-fulltext-reader"]
   ])("matches the Chinese trigger %s to %s", async (task, packageId) => {
     const root = mkdtempSync(join(tmpdir(), "vc-academic-trigger-"));
     roots.push(root);

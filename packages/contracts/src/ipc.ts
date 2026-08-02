@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { citationManifestSchema } from "./citation.js";
 import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
-import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
+import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunProjectionSchema, subAgentRunSchema, subAgentTaskDetailProjectionSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
 
 export const IPC_SCHEMA_VERSION = 1 as const;
 
@@ -283,9 +284,25 @@ export const promptContributionSchema = z.object({
   recalledStateEstimatedTokens: z.number().int().nonnegative(),
   outputReserveEstimatedTokens: z.number().int().nonnegative(),
   skillEstimatedTokens: z.number().int().nonnegative(),
-  materialEstimatedTokens: z.number().int().nonnegative()
+  materialEstimatedTokens: z.number().int().nonnegative(),
+  contextBudget: z.object({
+    estimatorRevision: z.string().min(1),
+    safetyMarginTokens: z.number().int().nonnegative(),
+    usableContextTokens: z.number().int().nonnegative(),
+    estimatedInputTokens: z.number().int().nonnegative(),
+    action: z.enum(["admit", "compact_then_admit", "reject_current_input", "reject_additional_retrieval"])
+  }).optional()
 });
 export type PromptContribution = z.infer<typeof promptContributionSchema>;
+
+export const contextBudgetTelemetrySchema = z.object({
+  estimatorRevision: z.string().min(1),
+  safetyMarginTokens: z.number().int().nonnegative(),
+  usableContextTokens: z.number().int().nonnegative(),
+  estimatedInputTokens: z.number().int().nonnegative(),
+  action: z.enum(["admit", "compact_then_admit", "reject_current_input", "reject_additional_retrieval"])
+});
+export type ContextBudgetTelemetry = z.infer<typeof contextBudgetTelemetrySchema>;
 
 export const capabilitySurfaceTelemetrySchema = z.object({
   revision: z.string().regex(/^[a-f0-9]{64}$/),
@@ -501,6 +518,7 @@ const ipcTrajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: ipcTrajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  citations: citationManifestSchema.optional(),
   contextUsage: contextUsageSchema.optional(),
   latencyMs: z.number().int().nonnegative().optional(),
   recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
@@ -617,7 +635,7 @@ const createProfileCommandSchema = commandMetadataSchema.extend({
   command: z.literal("profile.create"),
   payload: z.object({
     name: z.string().trim().min(1).max(80),
-    provider: z.string().trim().min(1).max(100),
+    provider: z.string().trim().min(1).max(2_048),
     model: z.string().trim().min(1).max(160),
     apiKey: z.string().min(1).max(8192),
     thinkingLevel: thinkingLevelSchema
@@ -628,7 +646,7 @@ const updateProfileCommandSchema = commandMetadataSchema.extend({
   payload: z.object({
     profileId: z.string().min(1),
     name: z.string().trim().min(1).max(80),
-    provider: z.string().trim().min(1).max(100),
+    provider: z.string().trim().min(1).max(2_048),
     model: z.string().trim().min(1).max(160),
     apiKey: z.string().min(1).max(8192).optional(),
     thinkingLevel: thinkingLevelSchema
@@ -741,6 +759,10 @@ const loadThreadTrajectoryCommandSchema = commandMetadataSchema.extend({
 const deleteThreadTrajectoryCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.trajectory.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
 const setThreadArchivedCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.archive.set"), payload: z.object({ threadId: z.string().min(1), archived: z.boolean() }) });
 const deleteThreadCommandSchema = commandMetadataSchema.extend({ command: z.literal("thread.delete"), payload: z.object({ threadId: z.string().min(1), confirmed: z.literal(true) }) });
+const renameThreadCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("thread.rename"),
+  payload: z.object({ threadId: z.string().min(1), title: z.string().trim().min(1).max(120) })
+});
 const createThreadCommandSchema = commandMetadataSchema.extend({
   command: z.literal("thread.create.unscoped"),
   payload: z.object({ title: z.string().trim().min(1).max(120) })
@@ -813,6 +835,7 @@ const authorizeSubAgentRunCommandSchema = commandMetadataSchema.extend({
 });
 const listSubAgentRunsCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.list") });
 const inspectSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.inspect"), payload: z.object({ runId: z.string().uuid() }) });
+const inspectSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.inspect"), payload: z.object({ runId: z.string().uuid(), taskId: z.string().uuid() }) });
 const stopSubAgentRunCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.run.stop"), payload: z.object({ runId: z.string().uuid(), reason: z.string().trim().max(200).optional() }) });
 const retrySubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.retry"), payload: z.object({ taskId: z.string().uuid() }) });
 const skipSubAgentTaskCommandSchema = commandMetadataSchema.extend({ command: z.literal("sub_agent.task.skip"), payload: z.object({ taskId: z.string().uuid() }) });
@@ -934,6 +957,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   deleteThreadTrajectoryCommandSchema,
   setThreadArchivedCommandSchema,
   deleteThreadCommandSchema,
+  renameThreadCommandSchema,
   createThreadCommandSchema,
   createProjectThreadCommandSchema,
   selectThreadProfileCommandSchema,
@@ -951,6 +975,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   authorizeSubAgentRunCommandSchema,
   listSubAgentRunsCommandSchema,
   inspectSubAgentRunCommandSchema,
+  inspectSubAgentTaskCommandSchema,
   stopSubAgentRunCommandSchema,
   retrySubAgentTaskCommandSchema,
   skipSubAgentTaskCommandSchema,
@@ -1007,6 +1032,7 @@ export const bootstrapStateSchema = z.object({
     providerRequests: z.number().int().nonnegative(),
     externalNetworkRequests: z.number().int().nonnegative()
   }),
+  piProviders: z.array(z.string().min(1)).optional(),
   executionScheduler: executionSchedulerTelemetrySchema,
   environmentDoctor: z.record(z.string().min(1).max(80), z.object({
     status: z.enum(["ready", "attention", "unavailable"]),
@@ -1175,6 +1201,10 @@ const threadCreatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.created"),
   payload: z.object({ thread: threadSchema })
 });
+const threadRenamedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("thread.renamed"),
+  payload: z.object({ thread: threadSchema })
+});
 const threadProfileSelectedEventSchema = eventMetadataSchema.extend({
   event: z.literal("thread.profile.selected"),
   payload: z.object({ thread: threadSchema })
@@ -1244,6 +1274,7 @@ const turnCompletedEventSchema = eventMetadataSchema.extend({
     message: z.string(),
     profile: modelProfileSchema,
     usage: usageSchema,
+    citations: citationManifestSchema.optional(),
     contextUsage: contextUsageSchema.optional(),
     latencyMs: z.number().int().nonnegative(),
     recalledStateEstimatedTokens: z.number().int().nonnegative(),
@@ -1344,6 +1375,7 @@ const capabilityConfirmationRequiredEventSchema = eventMetadataSchema.extend({
     turnId: z.string().min(1),
     requestId: z.string().min(1),
     capabilityId: z.string().min(1),
+    decisionClass: z.enum(["G1", "G2", "G3", "G4"]),
     action: z.string().min(1),
     target: z.string().min(1),
     reason: z.string().min(1),
@@ -1390,7 +1422,11 @@ const subAgentAttemptCreatedEventSchema = eventMetadataSchema.extend({
 });
 const subAgentRunsListedEventSchema = eventMetadataSchema.extend({
   event: z.literal("sub_agent.runs.listed"),
-  payload: z.object({ projections: z.array(subAgentProjectionSchema).max(32) })
+  payload: z.object({ projections: z.array(subAgentRunProjectionSchema).max(32) })
+});
+const subAgentTaskInspectedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("sub_agent.task.inspected"),
+  payload: z.object({ projection: subAgentTaskDetailProjectionSchema })
 });
 const subAgentBudgetExhaustedEventSchema = eventMetadataSchema.extend({
   event: z.literal("sub_agent.budget.exhausted"),
@@ -1437,6 +1473,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   threadsListedEventSchema,
   threadTrajectoryLoadedEventSchema,
   threadCreatedEventSchema,
+  threadRenamedEventSchema,
   threadProfileSelectedEventSchema,
   threadProfileChangeRequiredEventSchema,
   threadProfileChangeResolvedEventSchema,
@@ -1474,6 +1511,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   capabilityExecutionUpdatedEventSchema,
   subAgentProjectionEventSchema,
   subAgentRunsListedEventSchema,
+  subAgentTaskInspectedEventSchema,
   subAgentAttemptCreatedEventSchema,
   subAgentBudgetExhaustedEventSchema
 ]);

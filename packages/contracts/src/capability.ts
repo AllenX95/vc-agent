@@ -68,6 +68,9 @@ export const capabilitySurfaceSnapshotSchema = z.object({
 });
 export type CapabilitySurfaceSnapshot = z.infer<typeof capabilitySurfaceSnapshotSchema>;
 
+export const decisionClassSchema = z.enum(["G1", "G2", "G3", "G4"]);
+export type DecisionClass = z.infer<typeof decisionClassSchema>;
+
 export const capabilityActivationRejectionSchema = z.object({
   id: z.string().min(1),
   code: z.enum(["CAPABILITY_UNAVAILABLE", "SCOPE_REJECTED", "STALE_CATALOG", "USER_INTENT_REQUIRED", "WORKFLOW_REQUIRED"]),
@@ -175,6 +178,7 @@ export function normalizeCapabilityExecutionResult(value: unknown): CapabilityEx
 export const actionProposalSchema = z.object({
   requestId: z.string().min(1),
   capabilityId: z.string().min(1),
+  decisionClass: decisionClassSchema,
   action: z.string().min(1),
   target: z.string().min(1),
   reason: z.string().min(1),

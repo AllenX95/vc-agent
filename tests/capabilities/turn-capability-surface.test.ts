@@ -33,6 +33,9 @@ const inventory = [
   metadata("memory_recall", ["unscoped", "project"]),
   metadata("output.write_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("output.edit_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("file_download", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("workspace.write_batch", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("arxiv.fulltext", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("reflection_evidence_drilldown", ["project"])
 ];
 
@@ -50,11 +53,34 @@ describe("TurnCapabilitySurface", () => {
       "material_recall",
       "project_state_recall",
       "web_search",
-      "web_fetch"
+      "web_fetch",
+      "output.write_text",
+      "output.edit_text",
+      "workspace.write_batch"
     ]);
     expect(surface.revision).toMatch(/^[a-f0-9]{64}$/u);
     expect(surface.requestableCatalog.map((entry) => entry.id)).toEqual(["memory_recall"]);
     expect(capabilitySurfaceSnapshotSchema.parse(surface)).toMatchObject({ schemaVersion: 1, kind: "ordinary", scope: "project" });
+  });
+
+  it("keeps the complete Host-mediated text write/edit surface available when intent preload misses", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      preloadHints: []
+    });
+
+    expect(surface.visibleCapabilityIds).toEqual(expect.arrayContaining([
+      "output.write_text",
+      "output.edit_text",
+      "workspace.write_batch"
+    ]));
+    expect(surface.requestableCatalog).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "output.write_text" }),
+      expect.objectContaining({ id: "output.edit_text" }),
+      expect.objectContaining({ id: "workspace.write_batch" })
+    ]));
   });
 
   it("does not expose Project-only tools in an Unscoped Turn", () => {
@@ -64,7 +90,14 @@ describe("TurnCapabilitySurface", () => {
       inventory
     });
 
-    expect(surface.visibleCapabilityIds).toEqual(["capability_request", "web_search", "web_fetch"]);
+    expect(surface.visibleCapabilityIds).toEqual([
+      "capability_request",
+      "web_search",
+      "web_fetch",
+      "output.write_text",
+      "output.edit_text",
+      "workspace.write_batch"
+    ]);
     expect(surface.requestableCatalog.map((entry) => entry.id)).toEqual(["memory_recall"]);
   });
 
@@ -76,7 +109,12 @@ describe("TurnCapabilitySurface", () => {
       availability: { materials: false, projectContext: false, publicWeb: false }
     });
 
-    expect(surface.visibleCapabilityIds).toEqual(["capability_request"]);
+    expect(surface.visibleCapabilityIds).toEqual([
+      "capability_request",
+      "output.write_text",
+      "output.edit_text",
+      "workspace.write_batch"
+    ]);
     expect(surface.requestableCatalog.map((entry) => entry.id)).toEqual(["memory_recall"]);
   });
 
@@ -130,7 +168,7 @@ describe("TurnCapabilitySurface", () => {
     expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "output.write_text" }));
   });
 
-  it("exposes the diff edit capability without also exposing whole-file replacement for edit-only intent", () => {
+  it("keeps the complete text write/edit surface while honoring edit-only intent", () => {
     const surface = createTurnCapabilitySurface({
       kind: "ordinary",
       scope: "project",
@@ -141,7 +179,37 @@ describe("TurnCapabilitySurface", () => {
     });
 
     expect(surface.visibleCapabilityIds).toContain("output.edit_text");
-    expect(surface.visibleCapabilityIds).not.toContain("output.write_text");
+    expect(surface.visibleCapabilityIds).toContain("output.write_text");
+  });
+
+  it("exposes file_download only when the Turn has explicit write intent", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      outputRequested: true,
+      outputCreateRequested: false,
+      preloadHints: ["file_download"]
+    });
+
+    expect(surface.visibleCapabilityIds).toContain("file_download");
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "file_download" }));
+    expect(surface.visibleCapabilityIds).toContain("output.write_text");
+  });
+
+  it("exposes the ArXiv archive and batch writer on an explicit download intent", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      outputRequested: true,
+      outputCreateRequested: false,
+      preloadHints: ["arxiv.fulltext", "workspace.write_batch"]
+    });
+
+    expect(surface.visibleCapabilityIds).toEqual(expect.arrayContaining(["arxiv.fulltext", "workspace.write_batch"]));
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "arxiv.fulltext" }));
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "workspace.write_batch" }));
   });
 
   it("supports catalog discovery and multi-capability activation through the broker", async () => {

@@ -12,7 +12,7 @@ import type {
   SubAgentUsage,
   WorkerEvent
 } from "@vc-agent/contracts";
-import { estimateTokens, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentProviderExecutor } from "@vc-agent/host-services";
+import { CitationRegistry, estimateTokens, type SubAgentProviderExecutionInput, type SubAgentProviderExecutionResult, type SubAgentProviderExecutor } from "@vc-agent/host-services";
 import type { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 
 interface PendingExecution {
@@ -20,6 +20,7 @@ interface PendingExecution {
   readonly command: Extract<import("@vc-agent/contracts").WorkerCommand, { command: "turn.execute" }>;
   readonly resolve: (result: SubAgentProviderExecutionResult) => void;
   readonly reject: (error: Error) => void;
+  readonly citations: CitationRegistry;
   readonly toolEvents: Array<{ capability: string; status: "started" | "completed" | "failed" | "rejected"; summary: string }>;
   outputArtifact?: CapabilityExecutionResult["artifact"];
   settled: boolean;
@@ -116,7 +117,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
       extensions: this.#extensions()
     };
     return new Promise<SubAgentProviderExecutionResult>((resolve, reject) => {
-      const pending: PendingExecution = { input, command, resolve, reject, toolEvents: [], settled: false };
+      const pending: PendingExecution = { input, command, resolve, reject, citations: new CitationRegistry(), toolEvents: [], settled: false };
       this.#pending.set(input.attemptId, pending);
       const abort = () => {
         if (!this.#pending.has(input.attemptId)) return;
@@ -164,16 +165,17 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
     }
     if (event.event === "turn.completed") {
       try {
+        const formattedMessage = pending.citations.formatAssistantMessage(event.message);
         const outputPath = pending.input.outputTarget === undefined
           ? undefined
           : pending.outputArtifact?.destination
             ?? (this.#resolveCapability === undefined
-              ? writeBoundedOutput(pending.input.outputTarget, pending.input.contextBoundary.outputRoot, event.message)
+              ? writeBoundedOutput(pending.input.outputTarget, pending.input.contextBoundary.outputRoot, formattedMessage.message)
               : (() => { throw new Error("SUB_AGENT_OUTPUT_REGISTRY_REQUIRED"); })());
         const handoff = pending.input.outputTarget === undefined
           ? undefined
           : { outputPath, summary: "Provider-generated Sub-Agent output is ready for parent review.", provenance: pending.input.contextBoundary.sourceReferenceIds.map((referenceId) => ({ referenceId, source: "provider" })), adoptedByParent: false, reviewStatus: "pending_parent_review" as const };
-        this.#settle(event.turnId, { assistantMessage: event.message, usage: mapUsage(event.usage), ...(pending.toolEvents.length === 0 ? {} : { toolEvents: pending.toolEvents }), ...(handoff === undefined ? {} : { handoff }) });
+        this.#settle(event.turnId, { assistantMessage: formattedMessage.message, usage: mapUsage(event.usage), ...(pending.toolEvents.length === 0 ? {} : { toolEvents: pending.toolEvents }), ...(handoff === undefined ? {} : { handoff }) });
       } catch (error) {
         this.#settleFailure(event.turnId, error instanceof Error ? error : new Error("SUB_AGENT_OUTPUT_WRITE_FAILED"));
       }
@@ -210,12 +212,16 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
   }
 
   #resolveCapabilityResult(pending: PendingExecution, request: CapabilityExecutionRequest, result: CapabilityExecutionResult): void {
+    const annotatedResult = pending.citations.annotateCapabilityResult(result, {
+      capabilityId: request.capabilityId,
+      toolCallId: request.toolCallId
+    });
     const event = pending.toolEvents.findLast((item) => item.capability === request.capabilityId && item.status === "started");
     if (event !== undefined) {
-      event.status = result.status === "completed" ? "completed" : result.status === "rejected" ? "rejected" : "failed";
-      event.summary = result.content.slice(0, 1_200);
+      event.status = annotatedResult.status === "completed" ? "completed" : annotatedResult.status === "rejected" ? "rejected" : "failed";
+      event.summary = annotatedResult.content.slice(0, 1_200);
     }
-    if (result.artifact !== undefined && result.status === "completed") pending.outputArtifact = result.artifact;
+    if (annotatedResult.artifact !== undefined && annotatedResult.status === "completed") pending.outputArtifact = annotatedResult.artifact;
     this.#supervisor.resolveCapability({
       schemaVersion: 1,
       command: "capability.execution.resolve",
@@ -223,7 +229,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
       correlationId: pending.command.correlationId,
       threadId: pending.command.threadId,
       turnId: pending.command.turnId,
-      result
+      result: annotatedResult
     });
   }
 }

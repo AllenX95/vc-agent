@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { InMemoryCredentialStore, type AssistantMessage, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Api, type AssistantMessage, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   defineTool,
@@ -98,6 +98,27 @@ export type PiSessionReconciliation = "resumed" | "missing" | "host_ahead" | "pi
 export interface PiModelReference {
   readonly provider: string;
   readonly model: string;
+  readonly customUrl?: {
+    readonly baseUrl: string;
+    readonly api: "anthropic-messages" | "openai-completions";
+  };
+}
+
+const CUSTOM_URL_PROVIDER_PREFIX = "vc-agent-url-";
+
+function customUrlProviderId(baseUrl: string): string {
+  let hash = 2166136261;
+  for (const character of baseUrl) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return `${CUSTOM_URL_PROVIDER_PREFIX}${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function customUrlApi(baseUrl: string): "anthropic-messages" | "openai-completions" {
+  try {
+    const parsed = new URL(baseUrl);
+    return /anthropic/iu.test(`${parsed.hostname}${parsed.pathname}`) ? "anthropic-messages" : "openai-completions";
+  } catch {
+    return "openai-completions";
+  }
 }
 
 /**
@@ -113,6 +134,16 @@ export function resolvePiModelProfile(input: { readonly provider: string; readon
   const provider = input.provider.trim().replace(/\/+$/u, "");
   if (/^https:\/\/api\.xiaomimimo\.com\/anthropic$/iu.test(provider)) {
     return { provider: "xiaomi", model: input.model };
+  }
+  if (/^https:\/\/api\.deepseek\.com(?:\/anthropic)?$/iu.test(provider)) {
+    return { provider: "deepseek", model: input.model };
+  }
+  if (/^https?:\/\//iu.test(provider)) {
+    return {
+      provider: customUrlProviderId(provider),
+      model: input.model,
+      customUrl: { baseUrl: provider, api: customUrlApi(provider) }
+    };
   }
   return { provider, model: input.model };
 }
@@ -133,14 +164,45 @@ function assistantText(message: AssistantMessage): string {
     .join("");
 }
 
+const PROVIDER_TOOL_NAME_BY_CAPABILITY_ID: Readonly<Record<string, string>> = Object.freeze({
+  "output.write_text": "output_write_text",
+  "output.edit_text": "output_edit_text",
+  "workspace.write_batch": "workspace_write_batch",
+  "arxiv.fulltext": "arxiv_fulltext",
+  "project.command": "project_command"
+});
+
+/**
+ * Host capability IDs are namespaced product identifiers. Provider-facing
+ * function names use a stricter OpenAI-compatible identifier grammar, so the
+ * translation belongs at the Pi/provider boundary rather than in Host state.
+ */
+export function providerToolNameForCapability(capabilityId: string): string {
+  return PROVIDER_TOOL_NAME_BY_CAPABILITY_ID[capabilityId] ?? capabilityId;
+}
+
 function extensionToolNamesForCapabilities(capabilities: readonly string[]): string[] {
-  const names = new Set(capabilities);
+  const names = new Set(capabilities.map(providerToolNameForCapability));
   // pi-web-access stores full fetch/search results and exposes bounded slices
   // through this companion tool. Search results may reference it even when a
   // caller preloads only web_search, so keep it active for either web tool.
   if (names.has("web_search") || names.has("web_fetch")) names.add("web_fetch_content");
   return [...names];
 }
+
+/**
+ * Keep the Provider-facing root schema an object. The Host capability gateway
+ * remains authoritative for the branch-specific required fields.
+ */
+export const PROJECT_COMMAND_TOOL_PARAMETERS = Type.Object({
+  program: Type.Union([Type.Literal("rg"), Type.Literal("git"), Type.Literal("pdfinfo")]),
+  query: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String()),
+  glob: Type.Optional(Type.String()),
+  ignoreCase: Type.Optional(Type.Boolean()),
+  operation: Type.Optional(Type.Union([Type.Literal("status"), Type.Literal("diff"), Type.Literal("log")])),
+  maxCount: Type.Optional(Type.Number({ minimum: 1, maximum: 100 }))
+});
 
 export async function createPiSession(
   config: PiSessionConfig,
@@ -161,6 +223,26 @@ export async function createPiSessionUsingRuntime(
   modelRuntime: ModelRuntime
 ): Promise<PiSessionHandle> {
   const runtimeProfile = resolvePiModelProfile(config.profile);
+  if (runtimeProfile.customUrl !== undefined) {
+    const contextWindow = config.profile.contextWindow ?? Math.max(128_000, (config.profile.maxOutputTokens ?? 16_384) + 1);
+    const maxTokens = config.profile.maxOutputTokens ?? Math.min(16_384, contextWindow - 1);
+    modelRuntime.registerProvider(runtimeProfile.provider, {
+      name: runtimeProfile.customUrl.baseUrl,
+      api: runtimeProfile.customUrl.api as Api,
+      baseUrl: runtimeProfile.customUrl.baseUrl,
+      models: [{
+        id: runtimeProfile.model,
+        name: runtimeProfile.model,
+        api: runtimeProfile.customUrl.api as Api,
+        baseUrl: runtimeProfile.customUrl.baseUrl,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow,
+        maxTokens
+      }]
+    });
+  }
   await modelRuntime.setRuntimeApiKey(runtimeProfile.provider, config.profile.apiKey);
 
   const catalogModel = modelRuntime.getModel(runtimeProfile.provider, runtimeProfile.model);
@@ -498,6 +580,9 @@ function createCapabilityProxies(
     ...(webSearch === undefined ? [] : [webSearch]),
     ...(webFetch === undefined ? [] : [webFetch]),
     academicResearch,
+    createFileDownloadProxy(proxy),
+    createWorkspaceWriteProxy(proxy),
+    createArxivFulltextProxy(proxy),
     createTextOutputProxy(proxy),
     createTextEditProxy(proxy),
     createProjectCommandProxy(proxy)
@@ -515,9 +600,9 @@ function createTextOutputProxy(
   proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
 ) {
   return defineTool({
-    name: "output.write_text",
+    name: providerToolNameForCapability("output.write_text"),
     label: "Write text output",
-    description: "Create a new requested text deliverable in the current Thread's authorized Output Location. Use only when the User explicitly requested a new file; use output.edit_text for an existing Output.",
+    description: "Create a new requested text deliverable in the current Thread's authorized Output Location. Use only when the User explicitly requested a new file; use output_edit_text for an existing Output.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative output filename or path" }),
       content: Type.String({ description: "Complete UTF-8 text content" }),
@@ -536,11 +621,79 @@ function createTextOutputProxy(
   });
 }
 
+function createFileDownloadProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: "file_download",
+    label: "Download file",
+    description: "Download one public HTTP(S) file into the authorized Output Location. The Host shows the source and destination and requires User confirmation in Standard Access.",
+    parameters: Type.Object({
+      url: Type.String({ description: "Unauthenticated public HTTP(S) URL" }),
+      path: Type.String({ description: "Relative path inside the authorized Output Location" }),
+      mediaType: Type.Optional(Type.String()),
+      replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" })),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String()))
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => {
+      const result = await proxy(toolCallId, "file_download", params, signal);
+      return toolResult(result);
+    }
+  });
+}
+
+function createWorkspaceWriteProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: providerToolNameForCapability("workspace.write_batch"),
+    label: "Write files to Output",
+    description: "Create or replace a bounded batch of text files below the authorized Output Location. Standard Access shows the folder and manifest and requires User confirmation.",
+    parameters: Type.Object({
+      directory: Type.Optional(Type.String({ description: "Relative directory inside the authorized Output Location" })),
+      operations: Type.Array(Type.Object({
+        path: Type.String({ description: "Relative file path inside directory" }),
+        content: Type.String({ description: "Complete UTF-8 file content" }),
+        mediaType: Type.Optional(Type.String()),
+        replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" }))
+      }), { minItems: 1, maxItems: 100 }),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String())),
+      skillId: Type.Optional(Type.String())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "workspace.write_batch", params, signal))
+  });
+}
+
+function createArxivFulltextProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: providerToolNameForCapability("arxiv.fulltext"),
+    label: "Archive ArXiv full text",
+    description: "Use the Host-owned HTML-first ArXiv workflow to save paper.html or paper.pdf, paper.md, and metadata.json below the authorized Output Location. Standard Access requires one scoped approval before network and writes.",
+    parameters: Type.Object({
+      identifier: Type.String({ description: "ArXiv ID or arxiv.org URL; preserve an explicit version" }),
+      path: Type.Optional(Type.String({ description: "Relative directory inside the authorized Output Location" })),
+      allowAr5iv: Type.Optional(Type.Boolean()),
+      force: Type.Optional(Type.Boolean({ description: "Explicitly replace an existing bundle" })),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String())),
+      skillId: Type.Optional(Type.String())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "arxiv.fulltext", params, signal))
+  });
+}
+
 function createTextEditProxy(
   proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
 ) {
   return defineTool({
-    name: "output.edit_text",
+    name: providerToolNameForCapability("output.edit_text"),
     label: "Propose text Output edit",
     description: "Propose exact replacements in an existing text or Markdown Output. The Host presents a diff and applies it only after User confirmation.",
     parameters: Type.Object({
@@ -564,28 +717,10 @@ function createProjectCommandProxy(
   proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
 ) {
   return defineTool({
-    name: "project.command",
+    name: providerToolNameForCapability("project.command"),
     label: "Run read-only Project command",
     description: "Run one structured read-only rg, git status/diff/log, or pdfinfo operation in the active Project. Never use this to replace OCR, PDF parsing, Office integrations, or file writes.",
-    parameters: Type.Union([
-      Type.Object({
-        program: Type.Literal("rg"),
-        query: Type.String(),
-        path: Type.Optional(Type.String()),
-        glob: Type.Optional(Type.String()),
-        ignoreCase: Type.Optional(Type.Boolean())
-      }),
-      Type.Object({
-        program: Type.Literal("git"),
-        operation: Type.Union([Type.Literal("status"), Type.Literal("diff"), Type.Literal("log")]),
-        path: Type.Optional(Type.String()),
-        maxCount: Type.Optional(Type.Number({ minimum: 1, maximum: 100 }))
-      }),
-      Type.Object({
-        program: Type.Literal("pdfinfo"),
-        path: Type.String()
-      })
-    ]),
+    parameters: PROJECT_COMMAND_TOOL_PARAMETERS,
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) =>
       toolResult(await proxy(toolCallId, "project.command", params, signal))

@@ -126,4 +126,21 @@ describe("SubAgentRuntime", () => {
     const saved = JSON.parse(await readFile(path, "utf8")) as { runs: { status: string }[] };
     expect(saved.runs[0]?.status).toBe("interrupted");
   });
+
+  it("lists Run and Task summaries and expands only one Task's attempts", async () => {
+    const runtimeInstance = await runtime({ delayMs: 5 });
+    const projection = runtimeInstance.authorize({ parentThreadId: "thread-lazy", parentTurnId: "turn-lazy", explicitIntentEvidence: intent, tasks: [
+      { role: "researcher", objective: "Load details lazily.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] },
+      { role: "critic", objective: "Keep this task collapsed.", contextBoundary: { scope: "unscoped", sourceReferenceIds: [], maxChars: 1_000 }, capabilitySet: ["read_context"] }
+    ] });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const summaries = runtimeInstance.listRunProjections();
+    expect(summaries[0]?.tasks[0]).not.toHaveProperty("resolvedProfile");
+    expect(summaries[0]?.tasks[0]).not.toHaveProperty("contextBoundary");
+    expect(summaries[0]?.attemptCount).toBe(2);
+    const detail = runtimeInstance.inspectTask(projection.run.id, projection.tasks[0]!.id)!;
+    expect(detail.task.id).toBe(projection.tasks[0]!.id);
+    expect(detail.attempts).toHaveLength(1);
+  });
 });

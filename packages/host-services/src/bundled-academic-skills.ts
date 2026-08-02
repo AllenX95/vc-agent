@@ -7,7 +7,8 @@ export const BUNDLED_ACADEMIC_SKILL_IDS = [
   "founder-academic-diligence",
   "technical-claim-verification",
   "novelty-and-prior-art-map",
-  "research-to-company-map"
+  "research-to-company-map",
+  "arxiv-fulltext-reader"
 ] as const;
 
 export type BundledAcademicSkillId = typeof BUNDLED_ACADEMIC_SKILL_IDS[number];

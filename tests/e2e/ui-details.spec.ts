@@ -19,17 +19,19 @@ test("edits saved profiles, scrolls long conversations, and sends with Enter", a
     await window.getByRole("button", { name: "Settings" }).click();
     await window.getByRole("button", { name: "New profile" }).click();
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Editable profile");
-    await window.getByLabel("Provider").fill("provider-before");
+    await expect(window.getByLabel("Provider").locator("option[value=\"deepseek\"]")).toHaveCount(1);
+    await window.getByLabel("Provider mode").selectOption("url");
+    await window.getByLabel("Provider URL").fill("https://provider.example/v1");
     await window.getByLabel("Model").fill("model-before");
     await window.getByRole("textbox", { name: "API key", exact: true }).fill("fixture-secret");
     await window.getByRole("button", { name: "Save profile" }).click();
     await window.getByRole("button", { name: "Edit Editable profile" }).click();
-    await window.getByLabel("Provider").fill("provider-after");
+    await window.getByLabel("Provider URL").fill("https://provider.example/v2");
     await window.getByLabel("Model").fill("model-after");
     await window.getByLabel("Context window override").fill("200000");
     await window.getByLabel("Max output tokens override").fill("32000");
     await window.getByRole("button", { name: "Save profile" }).click();
-    await expect(window.getByText("provider-after / model-after", { exact: true })).toBeVisible();
+    await expect(window.getByText("https://provider.example/v2 / model-after", { exact: true })).toBeVisible();
     await expect(window.getByText("Context 200,000 · Output 32,000", { exact: true })).toBeVisible();
 
     await window.getByRole("button", { name: "Settings" }).click();
