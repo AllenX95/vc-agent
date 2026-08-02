@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { citationManifestSchema } from "./citation.js";
 import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
 import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunProjectionSchema, subAgentRunSchema, subAgentTaskDetailProjectionSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
 
@@ -517,6 +518,7 @@ const ipcTrajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: ipcTrajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  citations: citationManifestSchema.optional(),
   contextUsage: contextUsageSchema.optional(),
   latencyMs: z.number().int().nonnegative().optional(),
   recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
@@ -1272,6 +1274,7 @@ const turnCompletedEventSchema = eventMetadataSchema.extend({
     message: z.string(),
     profile: modelProfileSchema,
     usage: usageSchema,
+    citations: citationManifestSchema.optional(),
     contextUsage: contextUsageSchema.optional(),
     latencyMs: z.number().int().nonnegative(),
     recalledStateEstimatedTokens: z.number().int().nonnegative(),

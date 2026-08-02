@@ -613,7 +613,14 @@ export function createWebFetchCapability(
 function webOutputSchema(): Record<string, unknown> {
   return {
     type: "object",
-    properties: { sourceClass: { const: "web" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } },
+    properties: {
+      sourceClass: { const: "web" },
+      items: { type: "array", items: { type: "object", properties: { url: { type: "string" }, title: { type: "string" }, accessedAt: { type: "string" }, content: { type: "string" }, citationId: { type: "string", pattern: "^S[1-9][0-9]*$" } } } },
+      complete: { type: "boolean" },
+      omittedItems: { type: "integer" },
+      warnings: { type: "array" },
+      contextReference: { type: "object" }
+    },
     required: ["sourceClass", "items", "complete", "omittedItems", "warnings", "contextReference"]
   };
 }

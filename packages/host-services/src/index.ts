@@ -14,7 +14,8 @@ import {
   type CapabilityExecutionContext
 } from "@vc-agent/capabilities";
 export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
-export { SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
+export { CITATION_OUTPUT_INSTRUCTIONS, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
+export { CitationRegistry } from "./citations.js";
 export { CONTEXT_BUDGET_ESTIMATOR_REVISION, DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS, ESTIMATED_BYTES_PER_TOKEN, ContextBudgetService, estimateTextTokens, estimateUtf8Tokens, type ContextBudgetDecision, type ContextBudgetInput, type ContextBudgetTelemetry } from "./context-budget.js";
 export { inventoryProjectFiles, type MaterialInventoryRecord, type PreviousMaterialFingerprint } from "./material-inventory.js";
 export { BASELINE_PARSER_ADAPTERS, expectedParserIdentity, getParserAdapter, type ParserAdapterRegistration } from "./parser-identity.js";
@@ -306,7 +307,13 @@ export class CapabilityGateway {
     if (request.scope.kind !== authorization.scope || !definition.metadata.allowedScopes.includes(authorization.scope)) return { result: failure(request.requestId, "SCOPE_REJECTED", "Capability is outside the authorized scope.") };
     if (request.scope.kind === "unscoped" && request.scope.threadId !== request.threadId) return { result: failure(request.requestId, "SCOPE_REJECTED", "Unscoped capability Thread does not match.") };
     if (request.expectedStateVersion !== authorization.stateVersion) return { result: failure(request.requestId, "STALE_CAPABILITY_STATE", "Capability state changed before execution.") };
-    if (definition.metadata.activationClass === "preconditioned_execution" && !authorization.outputIntent) return { result: failure(request.requestId, "OUTPUT_INTENT_REQUIRED", "Output Intent is required for this capability.") };
+    // In Standard Access, the scoped Action Proposal is itself an explicit
+    // User-intent boundary. Do not make a brittle natural-language preload
+    // hint a correctness gate; Full Access still requires host-confirmed
+    // Output Intent because it has no interactive approval fallback.
+    if (definition.metadata.activationClass === "preconditioned_execution" && !authorization.outputIntent && authorization.accessMode === "full") {
+      return { result: failure(request.requestId, "OUTPUT_INTENT_REQUIRED", "Output Intent is required for this capability in Full Access.") };
+    }
     const parsed = definition.inputSchema.safeParse(request.arguments);
     if (!parsed.success) return { result: failure(request.requestId, "INVALID_CAPABILITY_ARGUMENTS", "Capability arguments are invalid.") };
     const context: CapabilityExecutionContext = {

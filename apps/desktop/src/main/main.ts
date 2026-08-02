@@ -43,7 +43,7 @@ import {
 import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
@@ -2272,10 +2272,11 @@ function submitTurn(
   const runtimeSkills = runtimeSkillsForTask(input.text, thread.scope);
   const academicWorkflowLoaded = academicWorkflow !== undefined
     && runtimeSkills.decisions.some((decision) => decision.packageId === academicWorkflow.id);
-  const effectiveAppendSystemPrompt = options.appendSystemPrompt
+  const taskAppendSystemPrompt = options.appendSystemPrompt
     ?? (reflectionRun === undefined
       ? academicWorkflow === undefined || academicWorkflowLoaded ? [] : [academicWorkflow.instructions]
       : [MEMORY_AWARE_REFLECTION_INSTRUCTIONS]);
+  const effectiveAppendSystemPrompt = [...taskAppendSystemPrompt, CITATION_OUTPUT_INSTRUCTIONS];
   const preloadHints = reflectionRun === undefined
     ? [
         ...capabilitiesForTurn({
@@ -2452,6 +2453,7 @@ function submitTurn(
     activeCapabilities,
     executableCapabilityIds: [...capabilitySurface.executableCapabilityIds],
     capabilitySurface,
+    citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
@@ -2619,6 +2621,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     activeCapabilities: [],
     executableCapabilityIds: [],
     capabilitySurface,
+    citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
     submittedAtMs: Date.now(),
@@ -2772,13 +2775,15 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   if (workerEvent.event === "turn.completed") {
     const latencyMs = Date.now() - context.submittedAtMs;
     const recalledStateEstimatedTokens = context.recalledStateEstimatedTokens;
+    const formattedMessage = context.citations.formatAssistantMessage(workerEvent.message);
     const record: TrajectoryEvent = {
       ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
       event: "turn.completed",
       payload: {
-        message: workerEvent.message,
+        message: formattedMessage.message,
         profile: toTrajectoryProfile(context.profile),
         usage: workerEvent.usage,
+        citations: formattedMessage.citations,
         ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }),
         latencyMs,
         recalledStateEstimatedTokens,
@@ -2793,7 +2798,7 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     }
     finishTurn(context);
     acknowledgeTrajectory(context, record);
-    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: workerEvent.message, profile: context.profile, usage: workerEvent.usage, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: formattedMessage.message, profile: context.profile, usage: workerEvent.usage, citations: formattedMessage.citations, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
     return;
   }
 
@@ -3210,6 +3215,10 @@ function finalizeCapability(
       };
     }
   }
+  result = context.citations.annotateCapabilityResult(result, {
+    capabilityId: request.capabilityId,
+    toolCallId: request.toolCallId
+  });
   const eventName = result.status === "completed"
     ? "tool.completed"
     : result.status === "unknown_outcome"
@@ -3601,7 +3610,7 @@ app.whenReady().then(() => {
         schemaVersion: 1,
         revisionId: revision?.id ?? "sub-agent-fallback-v1",
         systemPrompt: revision?.content ?? SHIPPED_MINIMAL_VC_SYSTEM_PROMPT,
-        appendSystemPrompt: []
+        appendSystemPrompt: [CITATION_OUTPUT_INSTRUCTIONS]
       };
     },
     extensions: () => extensionRuntimeSnapshot(),

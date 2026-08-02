@@ -32,7 +32,7 @@ export class ProjectOutputRegistry {
     const path = this.path(projectPath);
     if (!existsSync(path)) return [];
     const outputRoot = resolve(projectPath, "outputs");
-    return readFileSync(path, "utf8").split("\n").filter(Boolean).flatMap((line) => {
+    const records = readFileSync(path, "utf8").split("\n").filter(Boolean).flatMap((line) => {
       try {
         const raw = JSON.parse(line) as { type?: unknown };
         if (raw.type !== "user_output") return [];
@@ -44,6 +44,18 @@ export class ProjectOutputRegistry {
         return [{ ...parsed.data, destination }];
       } catch { return []; }
     });
+
+    // The registry is append-only so it can retain provenance across replacements,
+    // but the Project Outputs view represents the current file at each destination.
+    // Read from the end so a later write/edit supersedes earlier records for the
+    // same path without changing the on-disk audit trail.
+    const currentByDestination = new Map<string, ProjectOutputArtifact>();
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index]!;
+      const key = process.platform === "win32" ? record.destination.toLowerCase() : record.destination;
+      if (!currentByDestination.has(key)) currentByDestination.set(key, record);
+    }
+    return [...currentByDestination.values()].reverse();
   }
 
   path(projectPath: string): string { return join(projectPath, "outputs", "system", "artifacts.jsonl"); }

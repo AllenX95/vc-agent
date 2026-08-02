@@ -7,6 +7,7 @@ import {
   type AcademicCredentialSource,
   type AcademicCredentialStatus,
   type ContextUsage,
+  type CitationSource,
   type DreamDueProposal,
   type DreamBatch,
   type DreamReviewState,
@@ -117,6 +118,7 @@ type ConversationItem =
       status: "queued" | "streaming" | "completed" | "failed" | "interrupted";
       profile?: TrajectoryProfile;
       usage?: TokenUsage;
+      citations?: readonly CitationSource[];
       latencyMs?: number;
       recalledStateEstimatedTokens?: number;
       prompt?: {
@@ -504,7 +506,7 @@ export function App() {
         setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage }));
         break;
       case "turn.completed":
-        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
+        setConversations((current) => updateAssistant(current, event.payload.threadId, event.payload.turnId, (item) => ({ ...item, text: event.payload.message, status: "completed", profile: event.payload.profile, usage: event.payload.usage, ...(event.payload.citations === undefined ? {} : { citations: event.payload.citations }), latencyMs: event.payload.latencyMs, recalledStateEstimatedTokens: event.payload.recalledStateEstimatedTokens })));
         if (event.payload.contextUsage !== undefined) setSessionContextByThread((current) => ({ ...current, [event.payload.threadId]: event.payload.contextUsage! }));
         break;
       case "turn.failed":
@@ -1961,6 +1963,7 @@ function projectTrajectory(
       status: turn.status === "active" || turn.status === "submitted" ? "interrupted" : turn.status,
       ...(turn.profile === undefined ? {} : { profile: turn.profile }),
       ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+      ...(turn.citations === undefined ? {} : { citations: turn.citations }),
       ...(turn.latencyMs === undefined ? {} : { latencyMs: turn.latencyMs }),
       ...(turn.recalledStateEstimatedTokens === undefined ? {} : { recalledStateEstimatedTokens: turn.recalledStateEstimatedTokens }),
       ...(turn.prompt === undefined ? {} : { prompt: { revisionId: turn.prompt.revisionId, contributions: turn.prompt.contributions, ...(turn.prompt.capabilitySurface === undefined ? {} : { capabilitySurface: turn.prompt.capabilitySurface }) } }),

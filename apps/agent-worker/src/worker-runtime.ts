@@ -142,6 +142,9 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
         contextHistory: command.contextHistory,
         resources: command.resources,
         extensions: command.extensions,
+        // Route public web reads through the Host capability adapter so the
+        // Turn-scoped citation registry observes every source consistently.
+        usePiWebAccess: false,
         capabilityProxy: (toolCallId: string, capabilityId: string, arguments_: Record<string, unknown>, signal?: AbortSignal) => requestCapability(runtime, toolCallId, capabilityId, arguments_, signal)
       };
       const onSessionEvent = (event: PiSessionEvent) => {

@@ -9,3 +9,4 @@ export * from "./integration.js";
 export * from "./academic-research.js";
 export * from "./reflection-workflow.js";
 export * from "./dream-workflow.js";
+export * from "./citation.js";

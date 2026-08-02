@@ -11,6 +11,7 @@ import {
   usageSchema
 } from "./ipc.js";
 import { contextReferenceSchema } from "./capability.js";
+import { citationManifestSchema } from "./citation.js";
 
 export const trajectoryProfileSchema = modelProfileSchema.pick({
   id: true,
@@ -64,6 +65,7 @@ const turnCompleted = trajectoryEventBase.extend({
     message: z.string(),
     profile: trajectoryProfileSchema,
     usage: usageSchema,
+    citations: citationManifestSchema.optional(),
     contextUsage: contextUsageSchema.optional(),
     latencyMs: z.number().int().nonnegative().optional(),
     recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),
@@ -168,6 +170,7 @@ export const trajectoryTurnSchema = z.object({
   status: z.enum(["submitted", "active", "completed", "failed", "interrupted"]),
   profile: trajectoryProfileSchema.optional(),
   usage: usageSchema.optional(),
+  citations: citationManifestSchema.optional(),
   contextUsage: contextUsageSchema.optional(),
   latencyMs: z.number().int().nonnegative().optional(),
   recalledStateEstimatedTokens: z.number().int().nonnegative().optional(),

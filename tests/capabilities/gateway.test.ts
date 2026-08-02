@@ -93,7 +93,7 @@ describe("Capability Gateway", () => {
 
   it.each([
     ["CAPABILITY_INACTIVE", { activeCapabilityIds: [] }],
-    ["OUTPUT_INTENT_REQUIRED", { outputIntent: false }],
+    ["OUTPUT_INTENT_REQUIRED", { outputIntent: false, accessMode: "full" as const }],
     ["STALE_CAPABILITY_STATE", { stateVersion: 3 }],
     ["SCOPE_REJECTED", { scope: "project" as const }]
   ])("rejects %s before side effects", async (code, override) => {
@@ -102,6 +102,20 @@ describe("Capability Gateway", () => {
     const decision = await gateway.request(request(), authorization(directory, override));
     expect(decision).toMatchObject({ type: "result", result: { status: "failed", code } });
     expect(readdirSync(directory)).toEqual([]);
+  });
+
+  it("uses Standard Access approval as the intent boundary when the preload hint misses", async () => {
+    const directory = outputDirectory();
+    const { gateway } = createGatewayFixture();
+    const executionRequest = request();
+    const decision = await gateway.request(executionRequest, authorization(directory, { outputIntent: false }));
+
+    expect(decision).toMatchObject({ type: "confirmation_required", proposal: { action: "Create text Output", decisionClass: "G3" } });
+    expect(readdirSync(directory)).toEqual([]);
+
+    const result = await gateway.resolve(executionRequest.requestId, true, authorization(directory, { outputIntent: false }));
+    expect(result).toMatchObject({ status: "completed", artifact: { destination: join(directory, "memo.txt") } });
+    expect(readFileSync(join(directory, "memo.txt"), "utf8")).toBe("Investment view");
   });
 
   it("requires approval before creating a format-neutral Artifact", async () => {

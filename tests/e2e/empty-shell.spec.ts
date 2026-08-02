@@ -1401,6 +1401,9 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     await expect(outputConfirmation).toContainText("Create text Output");
     await outputConfirmation.getByRole("button", { name: "Approve" }).click();
     await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
+    const assistantOutput = window.locator(".assistant-output").last();
+    await expect(assistantOutput).toContainText("参考来源");
+    await expect(assistantOutput.locator('a[href="https://example.com/market"]')).toBeVisible();
     for (const capability of ["material_recall", "project_state_recall", "memory_recall", "web_search", "output.write_text"]) {
       await expect(window.locator(".tool-activity").filter({ hasText: capability })).toHaveClass(/completed/u);
     }
