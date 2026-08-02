@@ -40,10 +40,10 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { BinaryOutputStore, CapabilityRegistry, capabilitiesForTurn, createAcademicResearchCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
+import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
@@ -51,6 +51,7 @@ import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
+import { BundledArxivFulltextClient } from "./arxiv-fulltext-client.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
 import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
@@ -2260,7 +2261,8 @@ function submitTurn(
   const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
   const fileDownloadIntent = reflectionRun === undefined && detectFileDownloadIntent(input.text);
-  const outputIntent = reflectionRun === undefined && (detectOutputIntent(input.text) || fileDownloadIntent);
+  const arxivFulltextIntent = reflectionRun === undefined && detectArxivFulltextIntent(input.text);
+  const outputIntent = reflectionRun === undefined && (detectOutputIntent(input.text) || fileDownloadIntent || arxivFulltextIntent);
   const textEditIntent = reflectionRun === undefined && detectTextEditIntent(input.text);
   const memoryRecallMode = reflectionRun !== undefined ? detectExplicitMemoryRecallIntent(input.text) ? "explicit" : "automatic" : detectExplicitMemoryRecallIntent(input.text) ? "explicit" : detectJudgmentHeavyIntent(input.text) ? "automatic" : "none";
   const effectiveProfileId = reflectionRun?.memoryAwareProfileId ?? thread.activeProfileId;
@@ -2282,9 +2284,11 @@ function submitTurn(
         projectStateRecall: detectProjectStateRecallIntent(input.text),
         memoryRecall: memoryRecallMode !== "none",
         webResearch: detectWebResearchIntent(input.text),
-        outputWrite: outputIntent && !textEditIntent && !fileDownloadIntent
+        outputWrite: outputIntent && !textEditIntent && !fileDownloadIntent && !arxivFulltextIntent
       }),
-        ...(fileDownloadIntent ? ["file_download"] : []),
+        ...(fileDownloadIntent && !arxivFulltextIntent ? ["file_download"] : []),
+        ...(arxivFulltextIntent ? ["arxiv.fulltext"] : []),
+        ...(outputIntent && !textEditIntent ? ["workspace.write_batch"] : []),
         ...(textEditIntent ? ["output.edit_text"] : []),
         ...(detectAcademicResearchIntent(input.text) ? ["academic_research"] : []),
         ...(thread.scope === "project" && detectProjectCommandIntent(input.text) ? ["project.command"] : []),
@@ -2302,7 +2306,7 @@ function submitTurn(
     preloadHints,
     fixedCapabilityIds,
     outputRequested: outputIntent,
-    outputCreateRequested: outputIntent && !textEditIntent && !fileDownloadIntent,
+    outputCreateRequested: outputIntent && !textEditIntent && !fileDownloadIntent && !arxivFulltextIntent,
     explicitMemoryRecall: memoryRecallMode === "explicit",
     availability: {
       materials: thread.scope === "project" && stateStore!.listMaterials(thread.projectId).length > 0,
@@ -3683,6 +3687,13 @@ app.whenReady().then(() => {
   capabilityRegistry.register(createTextOutputCapability(textOutputStore));
   capabilityRegistry.register(createTextEditCapability(textOutputStore));
   capabilityRegistry.register(createFileDownloadCapability(new BinaryOutputStore(), new FetchFileDownloadClient()));
+  capabilityRegistry.register(createWorkspaceWriteCapability(new WorkspaceWriteStore()));
+  if (bundledAcademicSkillsRoot !== null && utilityJobRunner !== null) {
+    capabilityRegistry.register(createArxivFulltextCapability(
+      new WorkspaceWriteStore(MAX_ARXIV_BUNDLE_BYTES, 4),
+      new BundledArxivFulltextClient({ skillRoot: bundledAcademicSkillsRoot, stagingRoot: join(app.getPath("userData"), "academic-research", "staging"), runner: utilityJobRunner })
+    ));
+  }
   capabilityRegistry.register(createProjectCommandCapability({
     run: async ({ projectRoot, invocation }) => {
       if (utilityJobRunner === null) throw new Error("Utility Worker is unavailable.");

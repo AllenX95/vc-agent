@@ -167,6 +167,8 @@ function assistantText(message: AssistantMessage): string {
 const PROVIDER_TOOL_NAME_BY_CAPABILITY_ID: Readonly<Record<string, string>> = Object.freeze({
   "output.write_text": "output_write_text",
   "output.edit_text": "output_edit_text",
+  "workspace.write_batch": "workspace_write_batch",
+  "arxiv.fulltext": "arxiv_fulltext",
   "project.command": "project_command"
 });
 
@@ -579,6 +581,8 @@ function createCapabilityProxies(
     ...(webFetch === undefined ? [] : [webFetch]),
     academicResearch,
     createFileDownloadProxy(proxy),
+    createWorkspaceWriteProxy(proxy),
+    createArxivFulltextProxy(proxy),
     createTextOutputProxy(proxy),
     createTextEditProxy(proxy),
     createProjectCommandProxy(proxy)
@@ -637,6 +641,51 @@ function createFileDownloadProxy(
       const result = await proxy(toolCallId, "file_download", params, signal);
       return toolResult(result);
     }
+  });
+}
+
+function createWorkspaceWriteProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: providerToolNameForCapability("workspace.write_batch"),
+    label: "Write files to Output",
+    description: "Create or replace a bounded batch of text files below the authorized Output Location. Standard Access shows the folder and manifest and requires User confirmation.",
+    parameters: Type.Object({
+      directory: Type.Optional(Type.String({ description: "Relative directory inside the authorized Output Location" })),
+      operations: Type.Array(Type.Object({
+        path: Type.String({ description: "Relative file path inside directory" }),
+        content: Type.String({ description: "Complete UTF-8 file content" }),
+        mediaType: Type.Optional(Type.String()),
+        replaceExisting: Type.Optional(Type.Boolean({ description: "Whether replacement is explicitly requested" }))
+      }), { minItems: 1, maxItems: 100 }),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String())),
+      skillId: Type.Optional(Type.String())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "workspace.write_batch", params, signal))
+  });
+}
+
+function createArxivFulltextProxy(
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return defineTool({
+    name: providerToolNameForCapability("arxiv.fulltext"),
+    label: "Archive ArXiv full text",
+    description: "Use the Host-owned HTML-first ArXiv workflow to save paper.html or paper.pdf, paper.md, and metadata.json below the authorized Output Location. Standard Access requires one scoped approval before network and writes.",
+    parameters: Type.Object({
+      identifier: Type.String({ description: "ArXiv ID or arxiv.org URL; preserve an explicit version" }),
+      path: Type.Optional(Type.String({ description: "Relative directory inside the authorized Output Location" })),
+      allowAr5iv: Type.Optional(Type.Boolean()),
+      force: Type.Optional(Type.Boolean({ description: "Explicitly replace an existing bundle" })),
+      sourceReferences: Type.Optional(Type.Array(Type.String())),
+      warnings: Type.Optional(Type.Array(Type.String())),
+      skillId: Type.Optional(Type.String())
+    }),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, "arxiv.fulltext", params, signal))
   });
 }
 

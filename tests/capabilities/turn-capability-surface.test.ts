@@ -34,6 +34,8 @@ const inventory = [
   metadata("output.write_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("output.edit_text", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("file_download", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("workspace.write_batch", ["unscoped", "project"], "preconditioned_execution", "local_write"),
+  metadata("arxiv.fulltext", ["unscoped", "project"], "preconditioned_execution", "local_write"),
   metadata("reflection_evidence_drilldown", ["project"])
 ];
 
@@ -158,6 +160,21 @@ describe("TurnCapabilitySurface", () => {
     expect(surface.visibleCapabilityIds).toContain("file_download");
     expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "file_download" }));
     expect(surface.visibleCapabilityIds).not.toContain("output.write_text");
+  });
+
+  it("exposes the ArXiv archive and batch writer on an explicit download intent", () => {
+    const surface = createTurnCapabilitySurface({
+      kind: "ordinary",
+      scope: "project",
+      inventory,
+      outputRequested: true,
+      outputCreateRequested: false,
+      preloadHints: ["arxiv.fulltext", "workspace.write_batch"]
+    });
+
+    expect(surface.visibleCapabilityIds).toEqual(expect.arrayContaining(["arxiv.fulltext", "workspace.write_batch"]));
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "arxiv.fulltext" }));
+    expect(surface.requestableCatalog).not.toContainEqual(expect.objectContaining({ id: "workspace.write_batch" }));
   });
 
   it("supports catalog discovery and multi-capability activation through the broker", async () => {

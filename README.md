@@ -20,7 +20,7 @@ VC Agent 是一个面向单人风险投资工作的本地优先桌面 Agent。�
 | --- | --- |
 | Project 与 Thread | 打开本地 Project，创建 Project / Unscoped Thread，独立维护对话上下文，并支持在会话标题栏重命名 Thread。 |
 | 项目材料与证据 | 盘点项目文件，按需解析 PDF、DOCX、PPTX、XLSX 和文本，生成带来源引用的 Canonical Parse 与受控检索结果。 |
-| 文件下载与输出 | 可将用户明确指定的公共 HTTP(S) 文件下载到授权 Output Location；下载和新建文本 Output 在 Standard Access 下都会先显示目标、来源和 G3 审批。 |
+| 文件下载与输出 | 可将用户明确指定的公共 HTTP(S) 文件下载到授权 Output Location；完整 ArXiv 论文由 Host-owned HTML-first 流程归档为 HTML/PDF、Markdown 和 metadata；文件夹内的批量文本写入在 Standard Access 下统一显示清单并请求一次 G3 审批。 |
 | 模型执行 | 基于 Pi SDK 的流式对话、Model Profile、Provider 切换、上下文预算、Thread Compaction、执行队列和可见失败状态。 |
 | 投资工作流 | 支持普通 VC 对话、公共资料研究、Investment Reflection、Investment Retrospective，以及显式授权的 Sub-Agent 工作。 |
 | 记忆与复盘 | Project Context、Project Memory、Long-term Memory、Memory Evolution 和 Dream 两阶段复盘；持久化写入需要单独的用户确认。 |
@@ -108,6 +108,8 @@ integrations/   # Office、MCP、Extension 等集成状态
 可以通过 `VC_AGENT_USER_DATA_DIR` 指定其他用户数据目录。Project 文件、Context、Memory、Outputs 和解析产物保持为普通本地文件，便于检查、备份和恢复；Provider 凭据通过操作系统保护机制保存，应用状态只保存引用和非敏感元数据。
 
 应用提供 **Standard Access** 和 **Full Access** 两种访问模式。Full Access 会减少后续工具确认，但不会跳过 Reflection、Dream、Memory 提交或 Thread 范围变更等产品级复核。保护用户数据仍需要依赖操作系统账户、设备和备份位置的安全设置。
+
+在 Standard Access 下，下载、ArXiv 本地归档和文件夹批量写入都会先展示限定的来源、目标和文件清单，得到用户许可后才执行；`project.command` 仍只用于只读检查，不负责运行 Python 下载脚本或写文件。
 
 ## 项目结构
 

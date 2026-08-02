@@ -9,7 +9,7 @@ import {
   UnknownOutcomeError,
   createTextOutputCapability
 } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectFileDownloadIntent, detectOutputIntent, detectProjectCommandIntent, detectTextEditIntent } from "@vc-agent/host-services";
+import { CapabilityGateway, detectArxivFulltextIntent, detectFileDownloadIntent, detectOutputIntent, detectProjectCommandIntent, detectTextEditIntent } from "@vc-agent/host-services";
 
 const temporaryDirectories: string[] = [];
 
@@ -79,6 +79,10 @@ describe("Capability Gateway", () => {
     expect(detectOutputIntent("请生成一个投资 memo")).toBe(true);
     expect(detectOutputIntent("下载 PDF 到当前文件夹")).toBe(true);
     expect(detectFileDownloadIntent("下载 PDF 到当前文件夹")).toBe(true);
+    expect(detectFileDownloadIntent("下载 Arxiv paper")).toBe(true);
+    expect(detectArxivFulltextIntent("下载 Arxiv paper")).toBe(true);
+    expect(detectArxivFulltextIntent("Archive the arXiv full text locally")).toBe(true);
+    expect(detectArxivFulltextIntent("下载普通论文")).toBe(false);
     expect(detectFileDownloadIntent("Download the PDF file locally")).toBe(true);
     expect(detectOutputIntent("Analyze the company and discuss the risks")).toBe(false);
     expect(detectTextEditIntent("请修改已有的投资报告文件")).toBe(true);

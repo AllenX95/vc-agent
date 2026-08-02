@@ -12,13 +12,7 @@ Use the bundled downloader to make paper acquisition deterministic and local. It
 ## Workflow
 
 1. Normalize the supplied arXiv ID, abstract URL, PDF URL, or HTML URL.
-2. When the User asks only to retain a raw HTML or PDF artifact, use the Host `file_download` capability with the exact public URL and a relative path under the authorized Output Location. Standard Access pauses for User approval before the network request or local write. Do not use the read-only `project.command` capability to run the downloader script. If the complete metadata/HTML-first bundle is required and a separately configured local runtime is available, the bundled script may still be run manually with an explicit output directory:
-
-   ```text
-   python "<skill-root>/scripts/arxiv_fulltext.txt" "<arXiv ID or URL>" --output-dir "<target directory>" --json
-   ```
-
-   If the User says “current folder”, pass the current project directory as `--output-dir`; the script creates a safe per-paper subdirectory.
+2. If the User asks only to retain one raw HTML or PDF artifact, use the Host `file_download` capability with the exact public URL and a relative path under the authorized Output Location. If the User asks to download, archive, or retain the complete paper bundle, use the Host `arxiv.fulltext` capability with the ArXiv ID or URL and a relative Output directory. Standard Access pauses once for a scoped approval showing the destination and bundle manifest before the network request or local writes. Use `workspace.write_batch` only for an explicit bounded set of additional text files. Never use `project.command`, a shell, a browser session, or a direct Python/terminal instruction to run the bundled downloader; the Host-owned ArXiv capability runs the approved workflow in its isolated utility process. If `arxiv.fulltext` is unavailable, offer the raw `file_download` path or explain that the complete bundle is unavailable—do not tell the User to run a terminal command.
 3. Read `metadata.json` before interpreting the paper. Use its `source` field to report whether the result came from official HTML, optional ar5iv HTML, or PDF.
 4. For `source = html` or `ar5iv_html`, read `paper.md` for the main text and consult `paper.html` for equations, links, figures, and table structure.
 5. For `source = pdf`, read `paper.pdf`; use `paper.md` only as a text convenience and return to the PDF when layout, equations, tables, or figures matter.
@@ -28,9 +22,9 @@ Use the bundled downloader to make paper acquisition deterministic and local. It
 
 Use the official `https://arxiv.org/html/<id>` endpoint first. Treat non-200 responses, non-HTML responses, and pages without meaningful paper text as unavailable. Only use `--allow-ar5iv` when the user explicitly wants an alternate HTML conversion; ar5iv is not the canonical arXiv artifact. Otherwise fetch `https://arxiv.org/pdf/<id>.pdf` and retain the PDF.
 
-If Python's HTTPS stack cannot reach arXiv on Windows because Schannel revocation lookup is offline, the downloader retries the same HTTPS request with the system `curl.exe` transport and `--ssl-no-revoke`; certificate validation remains enabled and the transport is recorded in `metadata.json`.
+If Python's HTTPS stack cannot reach arXiv on Windows because Schannel revocation lookup is offline, the Host-owned downloader retries the same HTTPS request with the system `curl.exe` transport and `--ssl-no-revoke`; certificate validation remains enabled and the transport is recorded in `metadata.json`.
 
-If an `arxiv-mcp-server` is connected, it may still be used for search, metadata, citation graphs, or bounded analysis. When raw local files are requested, run the bundled script as well: upstream `download_paper` implementations may convert a fallback PDF and delete the temporary PDF.
+If an `arxiv-mcp-server` is connected, it may still be used for search, metadata, citation graphs, or bounded analysis. When raw local files or a complete local bundle are requested, use the Host `file_download` or `arxiv.fulltext` capability respectively; do not substitute an MCP download implementation that may delete the retained PDF.
 
 ## Safety and reproducibility
 

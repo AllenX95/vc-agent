@@ -146,6 +146,18 @@ const projectCommandJobCommandSchema = utilityJobBaseSchema.extend({
   maxOutputBytes: z.number().int().min(1_024).max(20_000)
 });
 
+const arxivFulltextJobCommandSchema = utilityJobBaseSchema.extend({
+  command: z.literal("arxiv.fulltext"),
+  skillRoot: z.string().min(1),
+  stagingDirectory: z.string().min(1),
+  identifier: z.string().min(1).max(500),
+  allowAr5iv: z.boolean().default(false),
+  force: z.boolean().default(false),
+  timeoutMs: z.number().int().min(1_000).max(300_000),
+  maxOutputBytes: z.number().int().min(1_024).max(200_000),
+  maxBytes: z.number().int().min(1_000_000).max(150 * 1024 * 1024)
+});
+
 const academicPdfExtractJobCommandSchema = utilityJobBaseSchema.extend({
   command: z.literal("academic.pdf.extract"),
   absolutePath: z.string().min(1),
@@ -155,7 +167,7 @@ const academicPdfExtractJobCommandSchema = utilityJobBaseSchema.extend({
   maxOutputBytes: z.number().int().min(1_024).max(5_000_000)
 });
 
-export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema, officeSkillJobCommandSchema, projectCommandJobCommandSchema, academicPdfExtractJobCommandSchema]);
+export const utilityJobCommandSchema = z.discriminatedUnion("command", [materialParseJobCommandSchema, pageRecoveryOcrJobCommandSchema, officeSkillJobCommandSchema, projectCommandJobCommandSchema, arxivFulltextJobCommandSchema, academicPdfExtractJobCommandSchema]);
 export type UtilityJobCommand = z.infer<typeof utilityJobCommandSchema>;
 export type OfficeSkillJobCommand = z.infer<typeof officeSkillJobCommandSchema>;
 
@@ -179,6 +191,16 @@ export const utilityJobEventSchema = z.discriminatedUnion("event", [
   utilityJobBaseSchema.extend({ event: z.literal("office.skill.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
   utilityJobBaseSchema.extend({ event: z.literal("project.command.completed"), exitCode: z.number().int(), stdout: z.string().max(20_000), stderr: z.string().max(20_000) }),
   utilityJobBaseSchema.extend({ event: z.literal("project.command.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
+  utilityJobBaseSchema.extend({
+    event: z.literal("arxiv.fulltext.completed"),
+    paperId: z.string().min(1),
+    source: z.enum(["html", "ar5iv_html", "pdf"]),
+    sourceUrl: z.string().url(),
+    paperDirectory: z.string().min(1),
+    files: z.array(z.object({ path: z.string().min(1), bytes: z.number().int().nonnegative(), mediaType: z.string().min(1) })).min(1).max(4),
+    warnings: z.array(z.string().min(1)).max(50)
+  }),
+  utilityJobBaseSchema.extend({ event: z.literal("arxiv.fulltext.failed"), code: z.string().min(1), message: z.string().min(1), stderr: z.string().max(20_000) }),
   utilityJobBaseSchema.extend({
     event: z.literal("academic.pdf.extract.completed"),
     contentHash: z.string().regex(/^[a-f0-9]{64}$/),

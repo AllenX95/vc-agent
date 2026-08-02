@@ -24,6 +24,8 @@ const ACTIVE_CAPABILITIES = [
   "web_fetch",
   "academic_research",
   "file_download",
+  "workspace.write_batch",
+  "arxiv.fulltext",
   "output.write_text",
   "output.edit_text",
   "project.command"
@@ -40,6 +42,8 @@ const EXPECTED_PROVIDER_TOOL_NAMES = [
   "web_fetch",
   "academic_research",
   "file_download",
+  "workspace_write_batch",
+  "arxiv_fulltext",
   "output_write_text",
   "output_edit_text",
   "project_command"

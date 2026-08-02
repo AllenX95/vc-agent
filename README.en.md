@@ -20,7 +20,7 @@ The current project is a Personal Build for one User. It is not a multi-user Saa
 | --- | --- |
 | Projects and Threads | Open local Projects, create Project / Unscoped Threads, maintain independent context, and rename a Thread from the conversation header. |
 | Materials and evidence | Inventory project files and, on demand, parse PDF, DOCX, PPTX, XLSX, and text into source-referenced Canonical Parse and bounded retrieval results. |
-| File downloads and Outputs | Save an explicitly requested public HTTP(S) file into the authorized Output Location; Standard Access shows the source, destination, and a G3 approval before downloads and new text Outputs. |
+| File downloads and Outputs | Save an explicitly requested public HTTP(S) file into the authorized Output Location; a complete ArXiv paper uses the Host-owned HTML-first archive for HTML/PDF, Markdown, and metadata; bounded batch text writes inside the folder use one G3 approval in Standard Access. |
 | Model execution | Pi SDK-based streaming conversations, Model Profiles, Provider changes, context budgets, Thread Compaction, execution queues, and visible failure states. |
 | Investment workflows | Ordinary VC dialogue, public research, Investment Reflection, Investment Retrospective, and explicitly authorized Sub-Agent work. |
 | Memory and review | Project Context, Project Memory, Long-term Memory, Memory Evolution, and two-stage Dream review; durable writes require separate User confirmation. |
@@ -108,6 +108,8 @@ integrations/   # Office, MCP, Extension, and related integration state
 `VC_AGENT_USER_DATA_DIR` can override the User data location. Project files, Context, Memory, Outputs, and parse artifacts remain ordinary local files for inspection, backup, and recovery. Provider credentials are stored through operating-system protection; application state keeps references and non-sensitive metadata rather than raw credentials.
 
 The application provides **Standard Access** and **Full Access** modes. Full Access reduces subsequent tool confirmations, but it does not bypass product-level review for Reflection, Dream, Memory commits, or Thread scope changes. The User remains responsible for securing the operating-system account, device, and backup destinations.
+
+In Standard Access, downloads, local ArXiv archiving, and bounded folder writes show their scoped source, destination, and file manifest before execution. `project.command` remains read-only inspection; it does not run Python download scripts or write files.
 
 ## Repository structure
 

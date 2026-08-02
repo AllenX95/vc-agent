@@ -70,6 +70,21 @@ export {
   type FileDownloadResponse
 } from "./file-tools.js";
 export {
+  MAX_WORKSPACE_WRITE_BYTES,
+  MAX_WORKSPACE_WRITE_FILES,
+  WorkspaceWriteStore,
+  createWorkspaceWriteCapability,
+  type WorkspaceWriteFile
+} from "./workspace-tools.js";
+export {
+  ARXIV_BUNDLE_FILES,
+  MAX_ARXIV_BUNDLE_BYTES,
+  createArxivFulltextCapability,
+  type ArxivFulltextArchiveFile,
+  type ArxivFulltextArchiveResult,
+  type ArxivFulltextClient
+} from "./arxiv-tools.js";
+export {
   createAcademicResearchCapability,
   type AcademicResearchExecutor
 } from "./academic-research.js";
