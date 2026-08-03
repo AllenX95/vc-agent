@@ -126,7 +126,9 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       command.profile.model,
       command.profile.thinkingLevel,
       command.profile.contextWindow ?? "catalog",
-      command.profile.maxOutputTokens ?? "catalog"
+      command.profile.maxOutputTokens ?? "catalog",
+      command.mcpActivation?.activationId ?? "no-mcp",
+      command.mcpActivation?.schemaRevision ?? "no-mcp"
     ].join("\u0000");
     if (runtime.session !== null && runtime.sessionProfileKey !== profileKey) {
       runtime.session.dispose();
@@ -142,9 +144,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
         contextHistory: command.contextHistory,
         resources: command.resources,
         extensions: command.extensions,
-        // Route public web reads through the Host capability adapter so the
-        // Turn-scoped citation registry observes every source consistently.
-        usePiWebAccess: false,
+        ...(command.mcpActivation === undefined ? {} : { mcpActivation: command.mcpActivation }),
         capabilityProxy: (toolCallId: string, capabilityId: string, arguments_: Record<string, unknown>, signal?: AbortSignal) => requestCapability(runtime, toolCallId, capabilityId, arguments_, signal)
       };
       const onSessionEvent = (event: PiSessionEvent) => {
@@ -173,6 +173,30 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
             toolName: event.toolName,
             content: event.content,
             isError: event.isError
+          });
+        } else if (event.type === "runtime_tool_started") {
+          send(runtime, {
+            ...workerMetadata(activeCommand),
+            event: "runtime_tool.started",
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            source: event.source,
+            sourceId: event.sourceId,
+            sourceRevision: event.sourceRevision,
+            arguments: event.arguments
+          });
+        } else if (event.type === "runtime_tool_completed") {
+          send(runtime, {
+            ...workerMetadata(activeCommand),
+            event: "runtime_tool.completed",
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            source: event.source,
+            sourceId: event.sourceId,
+            sourceRevision: event.sourceRevision,
+            content: event.content,
+            isError: event.isError,
+            durationMs: event.durationMs
           });
         } else if (event.type === "completed") {
           send(runtime, {

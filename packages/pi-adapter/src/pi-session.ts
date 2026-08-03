@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { InMemoryCredentialStore, type Api, type AssistantMessage, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
@@ -10,7 +11,7 @@ import {
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CAPABILITY_INPUT_LIMITS, CAPABILITY_RESULT_CONTENT_MAX_CHARS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
+import { CAPABILITY_INPUT_LIMITS, CAPABILITY_RESULT_CONTENT_MAX_CHARS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type FrozenMcpActivation, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
 import {
   SnapshotResourceLoader,
   type ExtensionInventorySnapshot,
@@ -20,6 +21,15 @@ import {
   createProjectReadToolDefinitions
 } from "./project-read-tools.js";
 import { isProjectReadToolName, type ProjectReadToolName } from "./project-read-tool-metadata.js";
+import {
+  mcpCapabilityId,
+  providerToolNameForCapability,
+  providerToolNameForMcp,
+  RuntimeCapabilityAssembler,
+  type RuntimeCapabilityAssembly,
+  type RuntimeExtensionToolInput
+} from "./runtime-capability-assembler.js";
+import { runtimeExtensionTools } from "./snapshot-resource-loader.js";
 
 export interface PiSessionProfile {
   readonly provider: string;
@@ -54,6 +64,8 @@ export interface PiSessionConfig {
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
   readonly extensions: ExtensionInventorySnapshot;
+  /** Frozen schemas for the explicitly activated MCP server owned by this Turn. */
+  readonly mcpActivation?: FrozenMcpActivation;
   /** Enabled by default; test-only callers may disable the bundled web extension. */
   readonly usePiWebAccess?: boolean;
   readonly turnIdleTimeoutMs?: number;
@@ -70,6 +82,8 @@ export type PiSessionEvent =
   | { readonly type: "thinking_delta"; readonly delta: string }
   | { readonly type: "tool_started"; readonly toolCallId: string; readonly toolName: ProjectReadToolName; readonly arguments: Record<string, unknown> }
   | { readonly type: "tool_completed"; readonly toolCallId: string; readonly toolName: ProjectReadToolName; readonly content: string; readonly isError: boolean }
+  | { readonly type: "runtime_tool_started"; readonly toolCallId: string; readonly toolName: string; readonly source: RuntimeExtensionToolInput["source"]; readonly sourceId: string; readonly sourceRevision: string; readonly arguments: Record<string, unknown> }
+  | { readonly type: "runtime_tool_completed"; readonly toolCallId: string; readonly toolName: string; readonly source: RuntimeExtensionToolInput["source"]; readonly sourceId: string; readonly sourceRevision: string; readonly content: string; readonly isError: boolean; readonly durationMs: number }
   | { readonly type: "completed"; readonly message: string; readonly usage: Usage; readonly contextUsage?: PiContextUsage; readonly responseId?: string; readonly piEntryId?: string }
   | { readonly type: "compaction_started"; readonly reason: "manual" | "threshold" | "overflow" }
   | { readonly type: "compaction_completed"; readonly reason: "manual" | "threshold" | "overflow"; readonly tokensBefore: number; readonly estimatedTokensAfter?: number }
@@ -164,46 +178,6 @@ function assistantText(message: AssistantMessage): string {
     .join("");
 }
 
-const PROVIDER_TOOL_NAME_BY_CAPABILITY_ID: Readonly<Record<string, string>> = Object.freeze({
-  "output.write_text": "output_write_text",
-  "output.edit_text": "output_edit_text",
-  "workspace.write_batch": "workspace_write_batch",
-  "arxiv.fulltext": "arxiv_fulltext",
-  "project.command": "project_command"
-});
-
-/**
- * Host capability IDs are namespaced product identifiers. Provider-facing
- * function names use a stricter OpenAI-compatible identifier grammar, so the
- * translation belongs at the Pi/provider boundary rather than in Host state.
- */
-export function providerToolNameForCapability(capabilityId: string): string {
-  return PROVIDER_TOOL_NAME_BY_CAPABILITY_ID[capabilityId] ?? capabilityId;
-}
-
-function extensionToolNamesForCapabilities(capabilities: readonly string[]): string[] {
-  const names = new Set(capabilities.map(providerToolNameForCapability));
-  // pi-web-access stores full fetch/search results and exposes bounded slices
-  // through this companion tool. Search results may reference it even when a
-  // caller preloads only web_search, so keep it active for either web tool.
-  if (names.has("web_search") || names.has("web_fetch")) names.add("web_fetch_content");
-  return [...names];
-}
-
-/**
- * Keep the Provider-facing root schema an object. The Host capability gateway
- * remains authoritative for the branch-specific required fields.
- */
-export const PROJECT_COMMAND_TOOL_PARAMETERS = Type.Object({
-  program: Type.Union([Type.Literal("rg"), Type.Literal("git"), Type.Literal("pdfinfo")]),
-  query: Type.Optional(Type.String()),
-  path: Type.Optional(Type.String()),
-  glob: Type.Optional(Type.String()),
-  ignoreCase: Type.Optional(Type.Boolean()),
-  operation: Type.Optional(Type.Union([Type.Literal("status"), Type.Literal("diff"), Type.Literal("log")])),
-  maxCount: Type.Optional(Type.Number({ minimum: 1, maximum: 100 }))
-});
-
 export async function createPiSession(
   config: PiSessionConfig,
   onEvent: (event: PiSessionEvent) => void
@@ -265,6 +239,9 @@ export async function createPiSessionUsingRuntime(
     loadBundledExtensions: config.usePiWebAccess !== false
   });
   await resourceLoader.reload();
+  const extensionTools = runtimeExtensionTools(resourceLoader);
+  const extensionToolByName = new Map(extensionTools.map((tool) => [tool.name, tool]));
+  const capabilityAssembler = new RuntimeCapabilityAssembler();
 
   const settingsManager = SettingsManager.inMemory(
     {
@@ -287,9 +264,19 @@ export async function createPiSessionUsingRuntime(
           refreshTurnIdleTimeout();
         }
       };
+  let activeAssembly: RuntimeCapabilityAssembly | undefined;
+  const activateAssembledCapabilities = (capabilityIds: readonly string[]): void => {
+    if (activeAssembly === undefined || sessionRef === undefined) return;
+    sessionRef.setActiveToolsByName([...capabilityAssembler.activate(activeAssembly, capabilityIds)]);
+  };
+  const mcpToolNames = new Set((config.mcpActivation?.toolSchemas ?? []).map((schema) => providerToolNameForMcp(config.mcpActivation!.serverId, schema.name)));
   const customTools = [
     ...(config.projectReadRoot === undefined ? [] : createProjectReadToolDefinitions(config.projectReadRoot)),
-    ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, () => sessionRef, { includeHostWebFallback: config.usePiWebAccess === false }))
+    ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, {
+      includeHostWebFallback: config.usePiWebAccess === false,
+      onCapabilitiesActivated: activateAssembledCapabilities
+    })),
+    ...(capabilityProxy === undefined || config.mcpActivation === undefined ? [] : createMcpToolDefinitions(config.mcpActivation, capabilityProxy))
   ];
   const { session } = await createAgentSession({
     cwd: config.cwd,
@@ -309,6 +296,24 @@ export async function createPiSessionUsingRuntime(
   // creation time.
   session.setActiveToolsByName([]);
 
+  const hostToolNames = customTools
+    .map((tool) => tool.name)
+    .filter((name) => !mcpToolNames.has(name) && !isProjectReadToolName(name));
+  const assembleForTurn = (surface: CapabilitySurfaceSnapshot): RuntimeCapabilityAssembly => {
+    const assembly = capabilityAssembler.assemble({
+      hostSurface: surface,
+      extensionRevision: config.extensions,
+      ...(config.mcpActivation === undefined ? {} : { mcpActivation: config.mcpActivation }),
+      ...(config.projectReadRoot === undefined ? {} : { projectReadRoot: config.projectReadRoot }),
+      skills: config.resources.skills,
+      hostToolNames,
+      extensionTools
+    });
+    activeAssembly = assembly;
+    session.setActiveToolsByName([...assembly.initialActiveToolNames]);
+    return assembly;
+  };
+
   let failureEmitted = false;
   let activeTimeoutError: Error | undefined;
   let compactionReasonOverride: "manual" | "threshold" | undefined;
@@ -324,7 +329,7 @@ export async function createPiSessionUsingRuntime(
     ) {
       onEvent({ ...effectiveEvent, reason: compactionReasonOverride });
     } else onEvent(effectiveEvent);
-  });
+  }, extensionToolByName);
   return {
     provider: model.provider,
     model: model.id,
@@ -337,7 +342,8 @@ export async function createPiSessionUsingRuntime(
     getContextUsage: () => session.getContextUsage(),
     submit: async (prompt, options) => {
       const activeCapabilities = options?.capabilitySurface?.visibleCapabilityIds ?? options?.activeCapabilities ?? [];
-      session.setActiveToolsByName(extensionToolNamesForCapabilities(activeCapabilities));
+      const capabilitySurface = options?.capabilitySurface ?? fallbackCapabilitySurface(activeCapabilities, config.projectReadRoot === undefined ? "unscoped" : "project");
+      assembleForTurn(capabilitySurface);
       resetTurnUsage();
       failureEmitted = false;
       activeTimeoutError = undefined;
@@ -380,8 +386,10 @@ export async function createPiSessionUsingRuntime(
 
 function createCapabilityProxies(
   proxy: NonNullable<PiSessionConfig["capabilityProxy"]>,
-  session: () => AgentSession | undefined,
-  options: { readonly includeHostWebFallback: boolean }
+  options: {
+    readonly includeHostWebFallback: boolean;
+    readonly onCapabilitiesActivated: (capabilityIds: readonly string[]) => void;
+  }
 ) {
   const capabilityRequest = defineTool({
     name: "capability_request",
@@ -398,8 +406,7 @@ function createCapabilityProxies(
     execute: async (toolCallId, params, signal) => {
       const result = await proxy(toolCallId, "capability_request", params, signal);
       if (result.activatedCapabilities !== undefined) {
-        const active = session()?.getActiveToolNames() ?? [];
-        session()?.setActiveToolsByName(extensionToolNamesForCapabilities([...new Set([...active, ...result.activatedCapabilities])]));
+        options.onCapabilitiesActivated(result.activatedCapabilities);
       }
       return toolResult(result);
     }
@@ -584,9 +591,36 @@ function createCapabilityProxies(
     createWorkspaceWriteProxy(proxy),
     createArxivFulltextProxy(proxy),
     createTextOutputProxy(proxy),
-    createTextEditProxy(proxy),
-    createProjectCommandProxy(proxy)
+    createTextEditProxy(proxy)
   ];
+}
+
+function createMcpToolDefinitions(
+  activation: FrozenMcpActivation,
+  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
+) {
+  return activation.toolSchemas.map((schema) => defineTool({
+    name: providerToolNameForMcp(activation.serverId, schema.name),
+    label: `MCP ${schema.name}`,
+    description: schema.description ?? `Call the explicitly activated MCP tool '${schema.name}'. Results remain bounded and Host-mediated.`,
+    parameters: Type.Unsafe<Record<string, unknown>>(schema.inputSchema as any ?? Type.Record(Type.String(), Type.Unknown())),
+    executionMode: "sequential",
+    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, mcpCapabilityId(activation.serverId, schema.name), asToolArguments(params), signal))
+  }));
+}
+
+function fallbackCapabilitySurface(visibleCapabilityIds: readonly string[], scope: "project" | "unscoped"): CapabilitySurfaceSnapshot {
+  const revision = createHash("sha256").update(JSON.stringify({ scope, visibleCapabilityIds })).digest("hex");
+  return {
+    schemaVersion: 1,
+    revision,
+    kind: "ordinary",
+    scope,
+    visibleCapabilityIds: [...visibleCapabilityIds],
+    executableCapabilityIds: [...visibleCapabilityIds],
+    requestableCatalog: [],
+    initialToolSchemaEstimatedTokens: 0
+  };
 }
 
 function toolResult(result: CapabilityExecutionResult) {
@@ -713,20 +747,6 @@ function createTextEditProxy(
   });
 }
 
-function createProjectCommandProxy(
-  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
-) {
-  return defineTool({
-    name: providerToolNameForCapability("project.command"),
-    label: "Run read-only Project command",
-    description: "Run one structured read-only rg, git status/diff/log, or pdfinfo operation in the active Project. Never use this to replace OCR, PDF parsing, Office integrations, or file writes.",
-    parameters: PROJECT_COMMAND_TOOL_PARAMETERS,
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) =>
-      toolResult(await proxy(toolCallId, "project.command", params, signal))
-  });
-}
-
 function reconcilePhysicalContext(config: PiSessionConfig, activeModel: Model<any>): {
   sessionManager: SessionManager;
   reconciliation: PiSessionReconciliation;
@@ -826,8 +846,13 @@ function emptyUsage(): Usage {
   };
 }
 
-function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEvent) => void): () => void {
+function subscribeToSession(
+  session: AgentSession,
+  onEvent: (event: PiSessionEvent) => void,
+  extensionTools: ReadonlyMap<string, RuntimeExtensionToolInput>
+): () => void {
   let turnUsage = emptyUsage();
+  const runtimeToolStartedAt = new Map<string, number>();
   session.subscribe((event) => {
     if (event.type === "tool_execution_start" && isProjectReadToolName(event.toolName)) {
       onEvent({
@@ -835,6 +860,38 @@ function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEve
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         arguments: asToolArguments(event.args)
+      });
+      return;
+    }
+    const extensionTool = event.type === "tool_execution_start" || event.type === "tool_execution_end"
+      ? extensionTools.get(event.toolName)
+      : undefined;
+    if (event.type === "tool_execution_start" && extensionTool !== undefined) {
+      runtimeToolStartedAt.set(event.toolCallId, Date.now());
+      onEvent({
+        type: "runtime_tool_started",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        source: extensionTool.source,
+        sourceId: extensionTool.sourceId,
+        sourceRevision: extensionTool.sourceRevision,
+        arguments: asToolArguments(event.args)
+      });
+      return;
+    }
+    if (event.type === "tool_execution_end" && extensionTool !== undefined) {
+      const startedAt = runtimeToolStartedAt.get(event.toolCallId);
+      runtimeToolStartedAt.delete(event.toolCallId);
+      onEvent({
+        type: "runtime_tool_completed",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        source: extensionTool.source,
+        sourceId: extensionTool.sourceId,
+        sourceRevision: extensionTool.sourceRevision,
+        content: summarizeToolResult(event.result),
+        isError: event.isError,
+        durationMs: startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt)
       });
       return;
     }
@@ -891,7 +948,10 @@ function subscribeToSession(session: AgentSession, onEvent: (event: PiSessionEve
       onEvent(completed);
     }
   });
-  return () => { turnUsage = emptyUsage(); };
+  return () => {
+    turnUsage = emptyUsage();
+    runtimeToolStartedAt.clear();
+  };
 }
 
 function asToolArguments(value: unknown): Record<string, unknown> {

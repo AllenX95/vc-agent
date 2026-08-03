@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,8 +55,8 @@ describe("bundled VC academic skills", () => {
       extensions: { schemaVersion: 1, revisionId: "extensions-empty", enabled: [] }
     });
     expect(loader.getSkills().skills.map((skill) => skill.name)).toEqual(["paper-technical-diligence"]);
-    expect(loader.getAppendSystemPrompt().join("\n")).toContain("<skill name=\"paper-technical-diligence\"");
-    expect(loader.getAppendSystemPrompt().join("\n")).toContain("experimental validity");
+    expect(loader.getAppendSystemPrompt()).toEqual([]);
+    expect(readFileSync(loader.getSkills().skills[0]!.filePath, "utf8")).toContain("experimental validity");
   });
 
   it.each([

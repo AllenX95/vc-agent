@@ -11,6 +11,8 @@ export type McpActionClass = "read" | "write" | "external_submission" | "samplin
 export interface McpToolSchema {
   readonly name: string;
   readonly description?: string;
+  /** JSON Schema projected by the adapter; old cached schemas may omit it. */
+  readonly inputSchema?: Readonly<Record<string, unknown>>;
   readonly actionClass: McpActionClass;
   readonly allowedScopes: readonly ("project" | "unscoped")[];
   readonly inputBytes: number;
@@ -377,6 +379,7 @@ function hashSchemas(schemas: readonly McpToolSchema[]): string {
     .map((schema) => ({
       name: schema.name,
       description: schema.description ?? null,
+      inputSchema: schema.inputSchema ?? null,
       actionClass: schema.actionClass,
       allowedScopes: [...schema.allowedScopes].sort(),
       inputBytes: schema.inputBytes,

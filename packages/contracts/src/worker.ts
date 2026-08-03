@@ -2,6 +2,7 @@ import { z } from "zod";
 import { contextBudgetTelemetrySchema, contextUsageSchema, IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
 import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema, capabilitySurfaceSnapshotSchema } from "./capability.js";
+import { frozenMcpActivationSchema } from "./runtime-capability.js";
 
 const runtimeSkillDecisionSchema = z.object({
   packageId: z.string().min(1),
@@ -18,7 +19,8 @@ const runtimeSkillInstructionSchema = z.object({
   description: z.string().min(1),
   filePath: z.string().min(1),
   baseDir: z.string().min(1),
-  content: z.string()
+  /** Compatibility field for replayed pre-progressive-disclosure snapshots. New Turns omit it. */
+  content: z.string().optional()
 });
 
 const runtimeSkillResourceSchema = z.object({
@@ -85,6 +87,8 @@ const executeTurn = workerCommandBase.extend({
   contextBudget: contextBudgetTelemetrySchema.optional(),
   /** New surface contract; activeCapabilities remains for replay compatibility during migration. */
   capabilitySurface: capabilitySurfaceSnapshotSchema.optional(),
+  /** Frozen, task-owned MCP schemas. No MCP server metadata is implied when omitted. */
+  mcpActivation: frozenMcpActivationSchema.optional(),
   activeCapabilities: z.array(z.string().min(1)),
   expectedStateVersion: z.number().int().positive(),
   executionScope: z.discriminatedUnion("kind", [
@@ -165,6 +169,26 @@ const nativeToolCompleted = workerEventBase.extend({
   content: z.string().max(20_000),
   isError: z.boolean()
 });
+const runtimeToolStarted = workerEventBase.extend({
+  event: z.literal("runtime_tool.started"),
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  source: z.enum(["bundled_extension", "approved_extension"]),
+  sourceId: z.string().min(1),
+  sourceRevision: z.string().min(1),
+  arguments: z.record(z.string(), z.unknown())
+});
+const runtimeToolCompleted = workerEventBase.extend({
+  event: z.literal("runtime_tool.completed"),
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  source: z.enum(["bundled_extension", "approved_extension"]),
+  sourceId: z.string().min(1),
+  sourceRevision: z.string().min(1),
+  content: z.string().max(20_000),
+  isError: z.boolean(),
+  durationMs: z.number().int().nonnegative()
+});
 const compactionStarted = workerEventBase.extend({
   event: z.literal("thread.compaction.started"),
   reason: z.enum(["manual", "threshold", "overflow"])
@@ -181,5 +205,5 @@ const compactionFailed = workerEventBase.extend({
   failure: providerFailureSchema
 });
 
-export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, thinkingDelta, completed, failed, interrupted, acknowledged, capabilityRequested, nativeToolStarted, nativeToolCompleted, compactionStarted, compactionCompleted, compactionFailed]);
+export const workerEventSchema = z.discriminatedUnion("event", [contextReady, started, delta, thinkingDelta, completed, failed, interrupted, acknowledged, capabilityRequested, nativeToolStarted, nativeToolCompleted, runtimeToolStarted, runtimeToolCompleted, compactionStarted, compactionCompleted, compactionFailed]);
 export type WorkerEvent = z.infer<typeof workerEventSchema>;

@@ -177,7 +177,7 @@ function buildRequestableCatalog(
 function availableForOrdinaryCapability(id: string, input: TurnCapabilitySurfaceInput, availability: TurnCapabilityAvailability): boolean {
   if (id === "material_recall") return input.scope === "project" ? availability.materials : availability.directAttachments;
   if (id === "project_state_recall") return input.scope === "project" && availability.projectContext;
-  if (id === "web_search" || id === "web_fetch") return availability.publicWeb;
+  if (id === "web_search" || id === "web_fetch" || id === "source_check") return availability.publicWeb;
   if (id === "output.write_text") return (input.outputCreateRequested ?? input.outputRequested) === true;
   return true;
 }

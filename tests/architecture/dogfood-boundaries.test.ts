@@ -61,6 +61,25 @@ describe("Dogfood adapter boundaries", () => {
     expect(dogfoodSources).not.toMatch(/from ["'][^"']*(dream|reflection|long-term-memory|sub-agent|office|ocr|mcp|extension-audit)/iu);
   });
 
+  it("routes production web tools through the bundled Pi web access extension", async () => {
+    const worker = readFileSync(join(root, "apps/agent-worker/src/worker-runtime.ts"), "utf8");
+    expect(worker).not.toContain("usePiWebAccess: false");
+
+    const project = mkdtempSync(join(tmpdir(), "vc-agent-pi-web-routing-"));
+    temporaryDirectories.push(project);
+    const loader = new SnapshotResourceLoader({
+      cwd: project,
+      resources: { schemaVersion: 1, revisionId: "pi-web-routing", systemPrompt: "Fixture VC prompt", appendSystemPrompt: [] },
+      extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] },
+      loadBundledExtensions: true
+    });
+    await loader.reload();
+
+    const extension = loader.getExtensions().extensions.find((item) => item.path === "pi-web-access@0.17.0");
+    expect(extension).toBeDefined();
+    expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining(["web_search", "web_fetch", "web_fetch_content"]));
+  });
+
   it("keeps fixture adapters behind test-only entry points", () => {
     const productionWorker = [
       readFileSync(join(root, "apps/agent-worker/src/index.ts"), "utf8"),

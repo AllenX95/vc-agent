@@ -37,13 +37,14 @@ import {
   type SubAgentProfileSnapshot,
   type SubAgentRole,
   type RuntimeResourceSnapshot,
+  type FrozenMcpActivation,
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
-import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectCommandCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWebFetchCapability, createWebSearchCapability, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore } from "@vc-agent/capabilities";
+import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createRuntimeExtensionCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore, type CapabilityExecutionContext } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectCommandIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, PublicWebRecallSource, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
@@ -159,7 +160,17 @@ let shutdownPromise: Promise<void> | null = null;
 let allowQuitAfterShutdown = false;
 const sequenceByThread = new Map<string, number>();
 const integrationJobs = new Map<string, IntegrationJobSummary>();
-const mcpActivations = new Map<string, { readonly activationId: string; readonly serverId: string; readonly schemaRevision: string; readonly toolIds: readonly string[]; readonly scope: "project" | "unscoped" }>();
+type PendingMcpActivation = {
+  readonly activationId: string;
+  readonly serverId: string;
+  readonly schemaRevision: string;
+  readonly toolIds: readonly string[];
+  readonly toolSchemas: McpActivationDecision["toolSchemas"];
+  readonly scope: "project" | "unscoped";
+  readonly reason: McpActivationDecision["reason"];
+  readonly threadId?: string;
+};
+const mcpActivations = new Map<string, PendingMcpActivation>();
 let integrationJobsPath: string | undefined;
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
@@ -189,9 +200,23 @@ function runtimeSkillsForTask(task: string, scope: "project" | "unscoped"): Cont
     schemaVersion: 1,
     revisionId: snapshot.revisionId,
     decisions: snapshot.decisions.map((decision) => ({ ...decision, resources: [...decision.resources], capabilities: [...decision.capabilities] })),
-    instructions: snapshot.instructions.map((instruction) => ({ ...instruction })),
-    resources: snapshot.resources.map((resource) => ({ ...resource }))
+    // Pi's ResourceLoader receives only bounded Skill metadata. It reads the
+    // exact revision's SKILL.md through the registered Skill resource when
+    // the model invokes /skill, so a new Turn never carries a second body copy.
+    instructions: snapshot.instructions.map((instruction) => {
+      const { content: _content, ...metadata } = instruction;
+      return metadata;
+    }),
+    resources: []
   };
+}
+
+function runtimeSkillMetadataText(skills: ContractRuntimeSkillSnapshot): string {
+  return JSON.stringify({
+    revisionId: skills.revisionId,
+    decisions: skills.decisions,
+    instructions: skills.instructions.map(({ content: _content, ...metadata }) => metadata)
+  });
 }
 
 function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
@@ -253,6 +278,33 @@ function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; 
 
 function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
   return globalExtensionRevisions?.runtimeSnapshot() ?? { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] };
+}
+
+function takeMcpActivationForTurn(scope: "project" | "unscoped", threadId: string): FrozenMcpActivation | undefined {
+  for (const [serverId, activation] of mcpActivations) {
+    if (activation.scope !== scope) continue;
+    if (activation.threadId !== undefined && activation.threadId !== threadId) continue;
+    mcpActivations.delete(serverId);
+    return {
+      schemaVersion: 1,
+      activationId: activation.activationId,
+      serverId: activation.serverId,
+      schemaRevision: activation.schemaRevision,
+      scope: activation.scope,
+      reason: activation.reason,
+      toolSchemas: activation.toolSchemas.map((schema) => ({
+        name: schema.name,
+        ...(schema.description === undefined ? {} : { description: schema.description }),
+        actionClass: schema.actionClass,
+        allowedScopes: [...schema.allowedScopes],
+        inputBytes: schema.inputBytes,
+        outputBytes: schema.outputBytes,
+        schemaHash: schema.schemaHash,
+        ...(schema.inputSchema === undefined ? {} : { inputSchema: { ...schema.inputSchema } })
+      }))
+    };
+  }
+  return undefined;
 }
 
 function integrationStateSnapshot(): IntegrationState {
@@ -1009,7 +1061,21 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "mcp.activate": {
         if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        try { const activation = await mcpIntegration.resolveActivation({ serverId: command.payload.serverId, toolIds: command.payload.toolIds, scope: command.payload.scope, reason: "task_preactivation", ...(command.payload.connect === undefined ? {} : { connect: command.payload.connect }) }); mcpActivations.set(activation.serverId, { activationId: activation.activationId, serverId: activation.serverId, schemaRevision: activation.schemaRevision, toolIds: activation.toolSchemas.map((schema) => schema.name), scope: command.payload.scope }); emit(integrationJobEvent(command.correlationId, "mcp", { id: activation.activationId, kind: "mcp:activation", state: "completed", message: `MCP activation admitted ${activation.toolSchemas.length} tool schema(s); provenance is pinned to ${activation.schemaRevision}.`, updatedAt: new Date().toISOString(), resultId: activation.activationId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
+        try {
+          const activation = await mcpIntegration.resolveActivation({ serverId: command.payload.serverId, toolIds: command.payload.toolIds, scope: command.payload.scope, reason: "task_preactivation", ...(command.payload.connect === undefined ? {} : { connect: command.payload.connect }) });
+          mcpActivations.set(activation.serverId, {
+            activationId: activation.activationId,
+            serverId: activation.serverId,
+            schemaRevision: activation.schemaRevision,
+            toolIds: activation.toolSchemas.map((schema) => schema.name),
+            toolSchemas: activation.toolSchemas,
+            scope: command.payload.scope,
+            reason: activation.reason,
+            ...(command.payload.threadId === undefined ? {} : { threadId: command.payload.threadId })
+          });
+          emit(integrationJobEvent(command.correlationId, "mcp", { id: activation.activationId, kind: "mcp:activation", state: "completed", message: `MCP activation admitted ${activation.toolSchemas.length} tool schema(s); provenance is pinned to ${activation.schemaRevision}. It will be attached to the next matching Turn only.`, updatedAt: new Date().toISOString(), resultId: activation.activationId }));
+          return integrationStateEvent(command.correlationId, "changed");
+        } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
       }
       case "mcp.disconnect": {
         if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
@@ -2292,7 +2358,6 @@ function submitTurn(
         ...(outputIntent && !textEditIntent ? ["workspace.write_batch"] : []),
         ...(textEditIntent ? ["output.edit_text"] : []),
         ...(detectAcademicResearchIntent(input.text) ? ["academic_research"] : []),
-        ...(thread.scope === "project" && detectProjectCommandIntent(input.text) ? ["project.command"] : []),
         ...(thread.scope === "project" ? PROJECT_READ_TOOL_NAMES : [])
       ]
     : [];
@@ -2324,11 +2389,12 @@ function submitTurn(
   const crossesPromptBoundary = !loadedPromptByThread.has(input.threadId);
   const contextHistory = options.contextHistory ?? trajectoryStore!.contextHistory(input.threadId);
   const workerPrompt = options.workerPrompt ?? input.text;
+  const skillMetadataText = runtimeSkillMetadataText(runtimeSkills);
   const toolSchemaText = JSON.stringify(capabilityInventory.filter((item) => activeCapabilities.includes(item.id)).map((item) => item.inputSchema));
   const budget = contextBudgetService.telemetry({
     systemPromptBytes: Buffer.byteLength(promptRevision.content, "utf8"),
     toolSchemaBytes: Buffer.byteLength(toolSchemaText, "utf8"),
-    taskBytes: Buffer.byteLength(`${workerPrompt}\n${effectiveAppendSystemPrompt.join("\n")}\n${runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")}`, "utf8"),
+    taskBytes: Buffer.byteLength(`${workerPrompt}\n${effectiveAppendSystemPrompt.join("\n")}\n${skillMetadataText}`, "utf8"),
     retainedHistoryBytes: Buffer.byteLength(JSON.stringify(contextHistory), "utf8"),
     retrievalBytes: 0,
     contextWindowTokens: profile?.contextWindow ?? Number.MAX_SAFE_INTEGER,
@@ -2351,7 +2417,7 @@ function submitTurn(
       contextEstimatedTokens: contextHistory.length === 0 ? 0 : estimateTokens(JSON.stringify(contextHistory)),
       recalledStateEstimatedTokens: 0,
       outputReserveEstimatedTokens: 2_048,
-      skillEstimatedTokens: estimateTokens(runtimeSkills.instructions.map((instruction) => instruction.content).join("\n")),
+      skillEstimatedTokens: estimateTokens(skillMetadataText),
       materialEstimatedTokens: 0,
       contextBudget: budgetTelemetry
     },
@@ -2440,6 +2506,9 @@ function submitTurn(
 
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
+  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
+  const mcpActivation = takeMcpActivationForTurn(thread.scope, input.threadId);
   const context: TurnContext = {
     correlationId,
     threadId: input.threadId,
@@ -2453,6 +2522,7 @@ function submitTurn(
     activeCapabilities,
     executableCapabilityIds: [...capabilitySurface.executableCapabilityIds],
     capabilitySurface,
+    ...(mcpActivation === undefined ? {} : { mcpActivation }),
     citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
@@ -2464,8 +2534,6 @@ function submitTurn(
     ...(effectiveAppendSystemPrompt.length === 0 ? {} : { appendSystemPrompt: effectiveAppendSystemPrompt }),
     ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId })
   };
-  const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
-  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
   inflight!.begin({
     schemaVersion: 1,
     checkpointId: randomUUID(),
@@ -2497,6 +2565,7 @@ function submitTurn(
     estimatedInputTokens: budget.estimatedInputTokens,
     currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
     capabilitySurface,
+    ...(mcpActivation === undefined ? {} : { mcpActivation }),
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
     executionScope: thread.scope === "project"
@@ -2698,6 +2767,10 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   }
   if (workerEvent.event === "native_tool.started" || workerEvent.event === "native_tool.completed") {
     processNativeProjectToolEvent(context, workerEvent);
+    return;
+  }
+  if (workerEvent.event === "runtime_tool.started" || workerEvent.event === "runtime_tool.completed") {
+    processRuntimeToolObservation(context, workerEvent);
     return;
   }
 
@@ -3101,6 +3174,75 @@ function processNativeProjectToolEvent(
   });
 }
 
+function processRuntimeToolObservation(
+  context: TurnContext,
+  workerEvent: Extract<WorkerEvent, { event: "runtime_tool.started" | "runtime_tool.completed" }>
+): void {
+  const requestId = `runtime:${workerEvent.toolCallId}`;
+  if (workerEvent.event === "runtime_tool.started") {
+    const started: TrajectoryEvent = {
+      ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+      event: "tool.started",
+      payload: {
+        toolCallId: workerEvent.toolCallId,
+        capabilityId: workerEvent.toolName,
+        arguments: summarizeCapabilityArguments(workerEvent.arguments),
+        expectedStateVersion: context.expectedStateVersion
+      }
+    };
+    trajectoryStore!.append(started);
+    inflight!.startTool(context.turnId, { toolCallId: workerEvent.toolCallId, capabilityId: workerEvent.toolName }, workerEvent.workerSequence, started.sequence);
+    emit({
+      ...ipcMetadata(started),
+      event: "capability.execution.updated",
+      payload: {
+        threadId: context.threadId,
+        turnId: context.turnId,
+        requestId,
+        capabilityId: workerEvent.toolName,
+        status: "started",
+        content: `Runtime Extension '${workerEvent.toolName}' started.`
+      }
+    });
+    return;
+  }
+
+  const observedResult: CapabilityExecutionResult = {
+    schemaVersion: 1,
+    requestId,
+    status: workerEvent.isError ? "failed" : "completed",
+    content: workerEvent.content
+  };
+  const result = context.citations.annotateCapabilityResult(observedResult, {
+    capabilityId: workerEvent.toolName,
+    toolCallId: workerEvent.toolCallId
+  });
+  const terminal: TrajectoryEvent = {
+    ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
+    event: result.status === "completed" ? "tool.completed" : "tool.failed",
+    payload: {
+      toolCallId: workerEvent.toolCallId,
+      capabilityId: workerEvent.toolName,
+      summary: result.content,
+      artifactIds: []
+    }
+  };
+  trajectoryStore!.append(terminal);
+  inflight!.finishTool(context.turnId, workerEvent.toolCallId, terminal.sequence);
+  emit({
+    ...ipcMetadata(terminal),
+    event: "capability.execution.updated",
+    payload: {
+      threadId: context.threadId,
+      turnId: context.turnId,
+      requestId,
+      capabilityId: workerEvent.toolName,
+      status: result.status,
+      content: result.content
+    }
+  });
+}
+
 async function processCapabilityRequest(
   context: TurnContext,
   workerEvent: Extract<WorkerEvent, { event: "capability.execution.requested" }>
@@ -3132,12 +3274,39 @@ async function processCapabilityRequest(
   };
   trajectoryStore!.append(started);
   inflight!.startTool(context.turnId, { toolCallId: request.toolCallId, capabilityId: request.capabilityId }, workerEvent.workerSequence, started.sequence);
-  capabilityRequests.set(request.requestId, { context, request });
   emit({
     ...ipcMetadata(started),
     event: "capability.execution.updated",
     payload: { threadId: context.threadId, turnId: context.turnId, requestId: request.requestId, capabilityId: request.capabilityId, status: "started", content: "Capability execution requested." }
   });
+
+  const mcpTarget = parseMcpCapabilityId(request.capabilityId);
+  if (mcpTarget !== undefined) {
+    const activation = context.mcpActivation;
+    const schema = activation?.serverId === mcpTarget.serverId
+      ? activation.toolSchemas.find((item) => item.name === mcpTarget.toolName)
+      : undefined;
+    const scopeMatches = activation !== undefined
+      && ((request.scope.kind === "project" && activation.scope === "project") || (request.scope.kind === "unscoped" && activation.scope === "unscoped"));
+    const result = activation === undefined || mcpIntegration === null || schema === undefined || !scopeMatches
+      ? { schemaVersion: 1 as const, requestId: request.requestId, status: "rejected" as const, code: "MCP_TOOL_INACTIVE", content: "The MCP tool is not active for this Turn." }
+      : await mcpIntegration.execute({
+          requestId: request.requestId,
+          activationId: activation.activationId,
+          serverId: activation.serverId,
+          toolName: mcpTarget.toolName,
+          arguments: request.arguments,
+          threadId: context.threadId,
+          turnId: context.turnId,
+          scope: activation.scope,
+          accessMode: stateStore!.getAccessMode(),
+          expectedSchemaRevision: activation.schemaRevision
+        });
+    finalizeCapability(context, request, result, true);
+    return;
+  }
+
+  capabilityRequests.set(request.requestId, { context, request });
 
   const decision = await capabilityGateway!.request(request, capabilityAuthorization(context));
   if (decision.type === "confirmation_required") {
@@ -3149,6 +3318,15 @@ async function processCapabilityRequest(
     return;
   }
   finalizeCapability(context, request, decision.result, true);
+}
+
+function parseMcpCapabilityId(capabilityId: string): { readonly serverId: string; readonly toolName: string } | undefined {
+  if (!capabilityId.startsWith("mcp:")) return undefined;
+  const separator = capabilityId.indexOf(":", 4);
+  if (separator <= 4 || separator === capabilityId.length - 1) return undefined;
+  const serverId = capabilityId.slice(4, separator);
+  const toolName = capabilityId.slice(separator + 1);
+  return serverId.length === 0 || toolName.length === 0 ? undefined : { serverId, toolName };
 }
 
 async function resolveCapabilityConfirmation(correlationId: string, requestId: string, approved: boolean): Promise<HostEvent> {
@@ -3412,6 +3590,7 @@ function interruptTurn(
 }
 
 function finishTurn(context: TurnContext): void {
+  if (context.mcpActivation !== undefined) mcpIntegration?.retireTurn(context.turnId);
   for (const [requestId, pending] of capabilityRequests) {
     if (pending.context.turnId !== context.turnId) continue;
     const result = capabilityGateway?.cancel(requestId);
@@ -3541,6 +3720,55 @@ function recalledReflectionMemoryIds(threadId: string): { projectMemory: string[
     for (const id of reference.sourceRange.split(",").map((value) => value.trim()).filter(Boolean)) target.add(id);
   }
   return { projectMemory: [...projectMemory], longTermMemory: [...longTermMemory] };
+}
+
+function testWebExtensionOptions(toolName: "web_search" | "web_fetch" | "source_check"): {
+  readonly testExecutor?: (input: Record<string, unknown>, context: CapabilityExecutionContext) => Promise<CapabilityExecutionResult>;
+} {
+  if (process.env.NODE_ENV !== "test" || process.env.VC_AGENT_TEST_WEB_FIXTURE !== "1") return {};
+  return {
+    testExecutor: async (input, context) => {
+      const retrievedAt = new Date().toISOString();
+      const isSearch = toolName === "web_search";
+      const url = isSearch
+        ? "https://example.com/market"
+        : typeof input.url === "string" ? input.url : "https://example.com/market";
+      const item = {
+        url,
+        title: "Fixture market evidence",
+        accessedAt: retrievedAt,
+        content: "Public evidence for the bounded dogfood workflow."
+      };
+      const envelope = {
+        schemaVersion: 1 as const,
+        sourceClass: "web" as const,
+        disclosureLevel: isSearch ? "search" : "fetch",
+        items: [item],
+        complete: true,
+        omittedItems: 0,
+        warnings: [],
+        contextReference: {
+          schemaVersion: 1 as const,
+          sourceClass: "web" as const,
+          sourceId: isSearch ? "search:fixture-market" : url,
+          label: item.title,
+          sourceRange: isSearch ? "search-results" : "document",
+          originatingTool: toolName,
+          originatingTurnId: context.request.turnId,
+          retrievedAt,
+          status: "active" as const
+        }
+      };
+      const serialized = serializeBoundedRetrieval(envelope);
+      return {
+        schemaVersion: 1,
+        requestId: context.request.requestId,
+        status: "completed",
+        content: serialized.body,
+        retrieval: serialized.retrieval
+      };
+    }
+  };
 }
 
 function createMainWindow(): BrowserWindow {
@@ -3703,24 +3931,6 @@ app.whenReady().then(() => {
       new BundledArxivFulltextClient({ skillRoot: bundledAcademicSkillsRoot, stagingRoot: join(app.getPath("userData"), "academic-research", "staging"), runner: utilityJobRunner })
     ));
   }
-  capabilityRegistry.register(createProjectCommandCapability({
-    run: async ({ projectRoot, invocation }) => {
-      if (utilityJobRunner === null) throw new Error("Utility Worker is unavailable.");
-      const event = await utilityJobRunner.run({
-        schemaVersion: 1,
-        command: "project.command",
-        jobId: randomUUID(),
-        projectRoot,
-        invocation,
-        timeoutMs: 10_000,
-        maxOutputBytes: 20_000
-      });
-      if (event.event === "project.command.failed") {
-        return { exitCode: -1, stdout: "", stderr: `${event.code}: ${event.message}${event.stderr === "" ? "" : `\n${event.stderr}`}` };
-      }
-      return { exitCode: event.exitCode, stdout: event.stdout, stderr: event.stderr };
-    }
-  }));
   const academicHttp = new DefaultAcademicHttpAccess();
   const academicStagingRoot = join(app.getPath("userData"), "academic-research", "staging");
   const configuredArxivIntervalMs = Number.parseInt(process.env.VC_AGENT_ARXIV_INTERVAL_MS ?? "3000", 10);
@@ -3944,26 +4154,51 @@ app.whenReady().then(() => {
     emit(reflectionOutcomesEvent(context.request.correlationId, run.id, run.threadId));
     return JSON.stringify({ status: "drafted", judgmentCount: created.judgments.length, learningProposalCount: created.learningProposals.length });
   }));
-  const publicWeb = process.env.VC_AGENT_TEST_WEB_FIXTURE === "1"
-    ? new PublicWebRecallSource({
-        resolve: async () => ["93.184.216.34"],
-        fetch: async () => new Response('<html><body><li class="b_algo"><h2><a href="https://example.com/market">Fixture market evidence</a></h2><div class="b_caption"><p>Public evidence for the bounded dogfood workflow.</p></div></li></body></html>', { status: 200, headers: { "content-type": "text/html" } })
-      })
-    : new PublicWebRecallSource();
-  capabilityRegistry.register(createWebSearchCapability(async (input, context) => {
-    const envelope = await publicWeb.recall(
-      { kind: "search", query: input.query },
-      { turnId: context.request.turnId, maxItems: input.maxResults, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
-    );
-    return serializeBoundedRetrieval(envelope);
-  }));
-  capabilityRegistry.register(createWebFetchCapability(async (input, context) => {
-    const envelope = await publicWeb.recall(
-      { kind: "fetch", url: input.url },
-      { turnId: context.request.turnId, maxItems: 1, maxChars: input.maxChars, retrievedAt: new Date().toISOString() }
-    );
-    return serializeBoundedRetrieval(envelope);
-  }));
+  capabilityRegistry.register(createRuntimeExtensionCapability({
+    id: "web_search",
+    version: "pi-web-access@0.17.0",
+    label: "Search public web",
+    description: "Search the current public web through the pinned pi-web-access Extension without login, browser state, writes, or durable snapshots.",
+    useWhen: "Use when current external facts or public-source verification materially affect the answer.",
+    tier: "common_read",
+    activationClass: "ordinary_task",
+    sideEffectClass: "network_read",
+    allowedScopes: ["unscoped", "project"],
+    executor: "host",
+    modelCallable: true,
+    inputSchema: { type: "object", properties: { query: { type: "string", maxLength: 500 }, maxResults: { type: "integer", minimum: 1, maximum: 6 }, maxChars: { type: "integer", minimum: 500, maximum: 8_000 } }, required: ["query"] },
+    outputSchema: { type: "object", properties: { sourceClass: { const: "web" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } } }
+  }, testWebExtensionOptions("web_search")));
+  capabilityRegistry.register(createRuntimeExtensionCapability({
+    id: "web_fetch",
+    version: "pi-web-access@0.17.0",
+    label: "Fetch public URL",
+    description: "Fetch and extract a bounded public page or PDF through the pinned pi-web-access Extension without login, browser state, writes, or durable snapshots.",
+    useWhen: "Use after search, or when the User supplies a public URL that must be verified.",
+    tier: "common_read",
+    activationClass: "ordinary_task",
+    sideEffectClass: "network_read",
+    allowedScopes: ["unscoped", "project"],
+    executor: "host",
+    modelCallable: true,
+    inputSchema: { type: "object", properties: { url: { type: "string", maxLength: 2_000 }, maxChars: { type: "integer", minimum: 500, maximum: 8_000 } }, required: ["url"] },
+    outputSchema: { type: "object", properties: { sourceClass: { const: "web" }, items: { type: "array" }, complete: { type: "boolean" }, omittedItems: { type: "integer" }, warnings: { type: "array" }, contextReference: { type: "object" } } }
+  }, testWebExtensionOptions("web_fetch")));
+  capabilityRegistry.register(createRuntimeExtensionCapability({
+    id: "source_check",
+    version: "pi-web-access@0.17.0",
+    label: "Check public source",
+    description: "Check a public source through the pinned pi-web-access Extension and return bounded source-reference evidence.",
+    useWhen: "Use when a public URL or search result needs an explicit source check before making a claim.",
+    tier: "on_demand",
+    activationClass: "ordinary_task",
+    sideEffectClass: "network_read",
+    allowedScopes: ["unscoped", "project"],
+    executor: "host",
+    modelCallable: true,
+    inputSchema: { type: "object", properties: { url: { type: "string", maxLength: 2_000 }, query: { type: "string", maxLength: 500 } } },
+    outputSchema: { type: "object", properties: { sourceClass: { const: "web" }, items: { type: "array" }, warnings: { type: "array" } } }
+  }, testWebExtensionOptions("source_check")));
   capabilityGateway = new CapabilityGateway(capabilityRegistry);
   if (!readOnlyRecovery) {
     for (const project of stateStore.listProjects()) {

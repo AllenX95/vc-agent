@@ -27,8 +27,7 @@ const ACTIVE_CAPABILITIES = [
   "workspace.write_batch",
   "arxiv.fulltext",
   "output.write_text",
-  "output.edit_text",
-  "project.command"
+  "output.edit_text"
 ] as const;
 
 const EXPECTED_PROVIDER_TOOL_NAMES = [
@@ -45,8 +44,7 @@ const EXPECTED_PROVIDER_TOOL_NAMES = [
   "workspace_write_batch",
   "arxiv_fulltext",
   "output_write_text",
-  "output_edit_text",
-  "project_command"
+  "output_edit_text"
 ] as const;
 
 const temporaryDirectories: string[] = [];

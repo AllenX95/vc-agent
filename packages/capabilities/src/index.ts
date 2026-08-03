@@ -610,6 +610,42 @@ export function createWebFetchCapability(
   };
 }
 
+/**
+ * Registers Host catalog/policy metadata for a capability implemented by a
+ * reviewed runtime Extension. The definition deliberately refuses direct
+ * Host execution; the normal activation broker exposes the Pi Extension tool
+ * after the runtime source has been admitted for the Turn.
+ */
+export interface RuntimeExtensionCapabilityOptions {
+  /**
+   * Test-only fixture executor. Production composition roots must omit this so
+   * the Host cannot become a competing implementation of the Extension.
+   */
+  readonly testExecutor?: (input: Record<string, unknown>, context: CapabilityExecutionContext) => Promise<CapabilityExecutionResult>;
+}
+
+export function createRuntimeExtensionCapability(
+  metadata: CapabilityMetadata,
+  options: RuntimeExtensionCapabilityOptions = {}
+): CapabilityDefinition {
+  return {
+    metadata,
+    inputSchema: z.record(z.string(), z.unknown()),
+    inspect: () => undefined,
+    async execute(input, context) {
+      if (options.testExecutor !== undefined) return options.testExecutor(input, context);
+      void input;
+      return {
+        schemaVersion: 1,
+        requestId: context.request.requestId,
+        status: "failed",
+        code: "RUNTIME_EXTENSION_DIRECT_EXECUTION",
+        content: `Capability '${metadata.id}' is executed by its admitted runtime Extension, not by a competing Host implementation.`
+      };
+    }
+  };
+}
+
 function webOutputSchema(): Record<string, unknown> {
   return {
     type: "object",

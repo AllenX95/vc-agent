@@ -1,21 +1,25 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import {
   createEventBus,
   createSyntheticSourceInfo,
   createExtensionRuntime,
+  discoverAndLoadExtensions,
   type Extension,
   type ExtensionAPI,
   type ExtensionFactory,
   type ExtensionRuntime,
+  type ExecOptions,
+  type ExecResult,
   type LoadExtensionsResult,
   type ResourceLoader,
   type Skill
 } from "@earendil-works/pi-coding-agent";
-import type { ExecOptions, ExecResult } from "@earendil-works/pi-coding-agent";
 import type { ExtensionInventorySnapshot, RuntimeResourceSnapshot } from "@vc-agent/contracts";
+import type { RuntimeExtensionToolInput } from "./runtime-capability-assembler.js";
 
 const PI_WEB_ACCESS_VERSION = "0.17.0";
 const PI_WEB_ACCESS_CONFIG_FILE = "web-search.json";
@@ -47,6 +51,12 @@ export interface SnapshotResourceLoaderInput {
   readonly extensions: FrozenExtensionInventorySnapshot;
   /** Load the reviewed, app-bundled Pi web extension for a real Agent session. */
   readonly loadBundledExtensions?: boolean;
+}
+
+export interface ExtensionLoadPreflight {
+  readonly revisionId: string;
+  readonly accepted: readonly Readonly<ExtensionInventorySnapshot["enabled"][number]>[];
+  readonly rejected: readonly { readonly id: string; readonly code: string; readonly message: string }[];
 }
 
 export function freezeRuntimeSnapshots(input: SnapshotResourceLoaderInput): SnapshotResourceLoaderInput {
@@ -81,13 +91,9 @@ export class SnapshotResourceLoader implements ResourceLoader {
 
   constructor(input: SnapshotResourceLoaderInput) {
     this.#input = freezeRuntimeSnapshots(input);
-    for (const entry of this.#input.extensions.enabled) {
-      if (entry.trust !== "bundled-reviewed" || entry.version.length === 0 || entry.integrity.length === 0) {
-        throw new Error(`Extension inventory rejected entry: ${entry.id}`);
-      }
-    }
-    if (this.#input.extensions.enabled.length > 0) {
-      throw new Error("Bundled Extension loading is not enabled before the Integration Build");
+    const preflight = this.inspect();
+    if (preflight.rejected.length > 0) {
+      throw new Error(`EXTENSION_LOAD_PREFLIGHT_FAILED: ${preflight.rejected.map((item) => item.id).join(", ")}`);
     }
   }
 
@@ -99,44 +105,43 @@ export class SnapshotResourceLoader implements ResourceLoader {
     return this.#extensions;
   }
 
+  inspect(): ExtensionLoadPreflight {
+    const accepted: Readonly<ExtensionInventorySnapshot["enabled"][number]>[] = [];
+    const rejected: { id: string; code: string; message: string }[] = [];
+    for (const entry of this.#input.extensions.enabled) {
+      const rejection = inspectExtensionEntry(entry);
+      if (rejection === undefined) accepted.push(entry);
+      else rejected.push({ id: entry.id, ...rejection });
+    }
+    return { revisionId: this.#input.extensions.revisionId, accepted, rejected };
+  }
+
   getSkills() {
-    const skills: Skill[] = (this.#input.resources.skills?.instructions ?? []).map((instruction) => ({
-      // Pi parses the command name up to the first space. Package ids are
-      // normalized, stable command identifiers; metadata names are display
-      // labels and may contain whitespace.
-      name: instruction.packageId,
-      description: instruction.description,
-      filePath: instruction.filePath,
-      baseDir: instruction.baseDir,
-      sourceInfo: createSyntheticSourceInfo(instruction.filePath, { source: "vc-agent-skills", scope: "user", baseDir: instruction.baseDir }),
-      disableModelInvocation: false
-    }));
+    const skills: Skill[] = (this.#input.resources.skills?.instructions ?? []).flatMap((instruction) => {
+      if (!isSafeSkillPath(instruction.filePath, instruction.baseDir)) return [];
+      return [{
+        // Package ids are stable command identifiers; display names may contain whitespace.
+        name: instruction.packageId,
+        description: instruction.description,
+        filePath: instruction.filePath,
+        baseDir: instruction.baseDir,
+        sourceInfo: createSyntheticSourceInfo(instruction.filePath, { source: "vc-agent-skills", scope: "user", baseDir: instruction.baseDir }),
+        disableModelInvocation: false
+      }];
+    });
     return { skills, diagnostics: [] };
   }
 
-  getPrompts() {
-    return { prompts: [], diagnostics: [] };
-  }
-
-  getThemes() {
-    return { themes: [], diagnostics: [] };
-  }
-
-  getAgentsFiles() {
-    return { agentsFiles: [] };
-  }
-
-  getSystemPrompt(): string {
-    return this.#input.resources.systemPrompt;
-  }
+  getPrompts() { return { prompts: [], diagnostics: [] }; }
+  getThemes() { return { themes: [], diagnostics: [] }; }
+  getAgentsFiles() { return { agentsFiles: [] }; }
+  getSystemPrompt(): string { return this.#input.resources.systemPrompt; }
 
   getAppendSystemPrompt(): string[] {
-    const skillInstructions = this.#input.resources.skills?.instructions ?? [];
-    const skillText = skillInstructions.length === 0 ? undefined : skillInstructions.map((instruction) => {
-      const body = stripFrontmatter(instruction.content).trim();
-      return `<skill name="${escapeXml(instruction.name)}" location="${escapeXml(instruction.filePath)}">\nReferences are relative to ${instruction.baseDir}.\n\n${body}\n</skill>`;
-    }).join("\n\n");
-    return [...this.#input.resources.appendSystemPrompt, ...(skillText === undefined ? [] : [skillText])];
+    // Pi's own Skill resource path is the progressive-disclosure seam. It
+    // puts bounded metadata in the system prompt and reads SKILL.md only when
+    // /skill:<name> is invoked. Never append the complete body here.
+    return [...this.#input.resources.appendSystemPrompt];
   }
 
   extendResources(_paths: Parameters<ResourceLoader["extendResources"]>[0]): void {
@@ -144,31 +149,77 @@ export class SnapshotResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
-    const runtime = createExtensionRuntime();
-    if (this.#input.loadBundledExtensions !== true) {
-      this.#extensions = { extensions: [], errors: [], runtime };
-      return;
+    const preflight = this.inspect();
+    if (preflight.rejected.length > 0) {
+      throw new Error(`EXTENSION_LOAD_PREFLIGHT_FAILED: ${preflight.rejected.map((item) => item.id).join(", ")}`);
+    }
+    const loaderRoot = mkdtempSync(join(tmpdir(), "vc-agent-extension-loader-"));
+    const agentDir = join(loaderRoot, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    const approvedPaths = preflight.accepted
+      .filter((entry) => !(entry.id === "pi-web-access" && entry.entryPath === `pi-web-access@${PI_WEB_ACCESS_VERSION}`))
+      .map((entry) => resolve(this.#input.cwd, entry.entryPath));
+    const approved = approvedPaths.length === 0
+      ? undefined
+      : await discoverAndLoadExtensions(approvedPaths, loaderRoot, agentDir);
+    const runtime = approved?.runtime ?? createExtensionRuntime();
+    const extensions: Extension[] = [...(approved?.extensions ?? [])];
+    const errors = [...(approved?.errors ?? [])];
+    if (errors.length > 0) {
+      throw new Error(`EXTENSION_LOAD_FAILED: ${errors.map((error) => `${error.path}: ${error.error}`).join("; ")}`);
     }
 
-    preparePiWebAccessConfig();
-    const { default: piWebAccess } = await import("pi-web-access");
-    const extension = await loadInlineExtension(
-      piWebAccess,
-      this.#input.cwd,
-      createEventBus(),
-      runtime,
-      `pi-web-access@${PI_WEB_ACCESS_VERSION}`
-    );
-    this.#extensions = { extensions: [extension], errors: [], runtime };
+    if (this.#input.loadBundledExtensions === true) {
+      preparePiWebAccessConfig();
+      // The SDK's public root currently omits loadExtensionFromFactory even
+      // though AgentSession consumes the public ExtensionAPI/Runtime types.
+      // Keep this small adapter on that public contract so the bundled module
+      // remains usable in the bundled Worker, where it has no file path.
+      const { default: piWebAccess } = await import("pi-web-access");
+      extensions.push(await loadInlineExtension(
+        piWebAccess,
+        this.#input.cwd,
+        createEventBus(),
+        runtime,
+        `pi-web-access@${PI_WEB_ACCESS_VERSION}`
+      ));
+    }
+    this.#extensions = { extensions, errors, runtime };
   }
 }
 
+/** Project the loaded Pi Extension registration into the common source-aware seam. */
+export function runtimeExtensionTools(
+  loader: SnapshotResourceLoader,
+  revision?: ExtensionInventorySnapshot
+): RuntimeExtensionToolInput[] {
+  const effectiveRevision = revision ?? {
+    schemaVersion: 1 as const,
+    revisionId: loader.snapshot.extensions.revisionId,
+    enabled: loader.snapshot.extensions.enabled.map((entry) => ({ ...entry }))
+  };
+  const entries = new Map(effectiveRevision.enabled.map((entry) => [resolve(entry.entryPath), entry]));
+  const result: RuntimeExtensionToolInput[] = [];
+  for (const extension of loader.getExtensions().extensions) {
+    const isBundled = extension.path === `pi-web-access@${PI_WEB_ACCESS_VERSION}`;
+    const entry = entries.get(resolve(extension.path));
+    const sourceRevision = isBundled ? PI_WEB_ACCESS_VERSION : entry?.version ?? effectiveRevision.revisionId;
+    for (const name of extension.tools.keys()) {
+      result.push({
+        name,
+        source: isBundled ? "bundled_extension" : "approved_extension",
+        sourceId: isBundled ? "pi-web-access" : entry?.id ?? extension.path,
+        sourceRevision
+      });
+    }
+  }
+  return result.sort((left, right) => `${left.name}:${left.sourceId}`.localeCompare(`${right.name}:${right.sourceId}`));
+}
+
 /**
- * The Pi 0.80.8 root package does not export loadExtensionFromFactory even
- * though its public ExtensionAPI and ExtensionRunner consume this shape. Keep
- * the small registration bridge local so the app does not depend on an
- * unexported package path; runtime actions remain delegated to Pi's shared
- * ExtensionRuntime and are bound by the normal AgentSession runner.
+ * The Pi root package intentionally keeps this factory loader out of its
+ * public exports in 0.80.x. This adapter only registers through the official
+ * ExtensionAPI and shares the official ExtensionRuntime used by AgentSession.
  */
 async function loadInlineExtension(
   factory: ExtensionFactory,
@@ -189,7 +240,6 @@ async function loadInlineExtension(
     flags: new Map(),
     shortcuts: new Map()
   } as Extension;
-
   const api = {
     on(event: string, handler: (...args: unknown[]) => unknown): void {
       runtime.assertActive();
@@ -240,18 +290,16 @@ async function loadInlineExtension(
     getCommands: (...args: Parameters<ExtensionRuntime["getCommands"]>) => runtime.getCommands(...args),
     setModel: (...args: Parameters<ExtensionRuntime["setModel"]>) => runtime.setModel(...args),
     getThinkingLevel: (...args: Parameters<ExtensionRuntime["getThinkingLevel"]>) => runtime.getThinkingLevel(...args),
-    setThinkingLevel: (...args: Parameters<ExtensionRuntime["setThinkingLevel"]>) => runtime.setThinkingLevel(...args),
     registerProvider: (name: string, config: Parameters<ExtensionRuntime["registerProvider"]>[1]): void => runtime.registerProvider(name, config, extensionPath),
     unregisterProvider: (name: string): void => runtime.unregisterProvider(name, extensionPath),
     events: eventBus
   } as unknown as ExtensionAPI;
-
   await factory(api);
   return extension;
 }
 
 function runExtensionCommand(command: string, args: string[], cwd: string, options?: ExecOptions): Promise<ExecResult> {
-  return new Promise((resolve) => {
+  return new Promise((resolveResult) => {
     const child = spawn(command, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -273,18 +321,86 @@ function runExtensionCommand(command: string, args: string[], cwd: string, optio
     child.on("close", (code) => {
       if (timeout !== undefined) clearTimeout(timeout);
       options?.signal?.removeEventListener("abort", onAbort);
-      resolve({ stdout, stderr, code: code ?? 0, killed });
+      resolveResult({ stdout, stderr, code: code ?? 0, killed });
     });
-    child.on("error", (error) => {
-      stderr += error.message;
-    });
+    child.on("error", (error) => { stderr += error.message; });
   });
 }
 
+function inspectExtensionEntry(entry: ExtensionInventorySnapshot["enabled"][number]): { readonly code: string; readonly message: string } | undefined {
+  if (entry.version.length === 0 || entry.integrity.length === 0) return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "An enabled Extension is missing its immutable version or integrity identity." };
+  if (entry.trust !== "bundled-reviewed" && entry.trust !== "approved-trusted") return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "Only reviewed bundled or separately approved Extension revisions may load." };
+  if (entry.id === "pi-web-access" && entry.entryPath === `pi-web-access@${PI_WEB_ACCESS_VERSION}`) return undefined;
+  const candidate = resolve(entry.entryPath);
+  if (candidate.toLowerCase().split(sep).includes("staged")) return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "Staged Extension paths are never executable." };
+  try {
+    const realEntry = realpathSync(candidate);
+    if (resolve(realEntry).toLowerCase() !== resolve(candidate).toLowerCase()) return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "The exact Extension entry path resolves through a symlink and is not executable." };
+    if (!statSync(realEntry).isFile()) return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "The exact Extension entry path is not a file." };
+    const root = findArtifactRoot(realEntry);
+    const actualDirectoryHash = hashDirectory(root);
+    const actualEntryHash = createHash("sha256").update(readFileSync(realEntry)).digest("hex");
+    if (entry.integrity !== actualDirectoryHash && entry.integrity !== actualEntryHash && entry.integrity !== `sha256-${actualEntryHash}`) {
+      return { code: "EXTENSION_ARTIFACT_CHANGED", message: "The exact Extension entry no longer matches its approved integrity identity." };
+    }
+  } catch {
+    return { code: "EXTENSION_ENTRY_NOT_APPROVED", message: "The exact approved Extension entry path is unavailable." };
+  }
+  return undefined;
+}
+
+function findArtifactRoot(entryPath: string): string {
+  let current = dirname(entryPath);
+  for (let index = 0; index < 32; index += 1) {
+    if (existsSync(join(current, "package.json"))) return current;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return dirname(entryPath);
+}
+
+function hashDirectory(root: string): string {
+  const files: string[] = [];
+  visit(root);
+  const inventory = files.sort().map((file) => {
+    const path = join(root, file);
+    const stat = statSync(path);
+    const bytes = readFileSync(path);
+    const fileHash = createHash("sha256").update(bytes).digest("hex");
+    return `${file}\u0000${stat.size}\u0000${stat.mode & 0o777}\u0000${fileHash}`;
+  }).join("\n");
+  return createHash("sha256").update(inventory, "utf8").digest("hex");
+
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory)) {
+      const child = join(directory, entry);
+      const stat = statSync(child);
+      if (stat.isDirectory()) visit(child);
+      else if (stat.isFile()) files.push(normalizeRelative(root, child));
+    }
+  }
+}
+
+function normalizeRelative(root: string, path: string): string {
+  return relative(root, path).split(sep).join("/");
+}
+
+function isSafeSkillPath(filePath: string, baseDir: string): boolean {
+  try {
+    const realFile = realpathSync(filePath);
+    const realBase = realpathSync(baseDir);
+    const relativePath = relative(realBase, realFile);
+    return statSync(realFile).isFile() && (relativePath === "" || (!relativePath.startsWith(".." + sep) && relativePath !== ".."));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * pi-web-access reads its config path during module evaluation. Prepare an
- * app-owned config before the dynamic import so the Worker gets deterministic
- * tool names and never starts the interactive browser curator.
+ * pi-web-access reads its config path during module evaluation. The app pins
+ * only the required public names and disables browser/curator workflows while
+ * preserving unrelated valid settings.
  */
 function preparePiWebAccessConfig(): void {
   const configuredRoot = process.env.VC_AGENT_USER_DATA_DIR?.trim();
@@ -302,8 +418,7 @@ function preparePiWebAccessConfig(): void {
       const parsed: unknown = JSON.parse(readFileSync(configPath, "utf8"));
       if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) config = { ...(parsed as PiWebAccessConfig) };
     } catch {
-      // A malformed app-owned config should not prevent the bundled extension
-      // from loading; replace it with the safe defaults below.
+      // A malformed app-owned config is replaced with safe defaults below.
     }
   }
 
@@ -314,6 +429,7 @@ function preparePiWebAccessConfig(): void {
     ...config,
     workflow: "none",
     autoOpenBrowser: false,
+    allowBrowserCookies: false,
     toolNames: {
       ...configuredToolNames,
       webSearch: "web_search",
@@ -323,16 +439,9 @@ function preparePiWebAccessConfig(): void {
     }
   };
   const serialized = `${JSON.stringify(nextConfig, null, 2)}\n`;
-  if (!existsSync(configPath) || readFileSync(configPath, "utf8") !== serialized) writeFileSync(configPath, serialized, "utf8");
+  if (!existsSync(configPath) || readFileSync(configPath, "utf8") !== serialized) {
+    if (existsSync(configPath) && !existsSync(configPath + ".bak")) copyFileSync(configPath, configPath + ".bak");
+    writeFileSync(configPath, serialized, "utf8");
+  }
   process.env.PI_CODING_AGENT_DIR = configDirectory;
-}
-
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-  const end = content.indexOf("\n---", 3);
-  return end < 0 ? content : content.slice(end + "\n---".length);
-}
-
-function escapeXml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
 }

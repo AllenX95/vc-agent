@@ -201,6 +201,8 @@ describe("real Pi SDK tracer", () => {
     const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-loader-"));
     temporaryDirectories.push(cwd);
     const skillPath = join(cwd, "active", "docx", "SKILL.md");
+    mkdirSync(join(cwd, "active", "docx"), { recursive: true });
+    writeFileSync(skillPath, "---\nname: docx\ndescription: Create Word documents\n---\nUse the imported Word workflow.", "utf8");
     const skillResources: RuntimeResourceSnapshot = {
       ...resources,
       skills: {
@@ -222,8 +224,8 @@ describe("real Pi SDK tracer", () => {
     const loader = new SnapshotResourceLoader({ cwd, resources: skillResources, extensions });
 
     expect(loader.getSkills().skills).toMatchObject([{ name: "docx", description: "Create Word documents", filePath: skillPath }]);
-    expect(loader.getAppendSystemPrompt().at(-1)).toContain("Use the imported Word workflow.");
-    expect(loader.getAppendSystemPrompt().at(-1)).toContain(`References are relative to ${join(cwd, "active", "docx")}.`);
+    expect(loader.getAppendSystemPrompt()).toEqual([]);
+    expect(loader.getSkills().skills[0]?.filePath).toBe(skillPath);
     expect(Object.isFrozen(loader.snapshot.resources.skills)).toBe(true);
   });
 
@@ -447,33 +449,33 @@ describe("real Pi SDK tracer", () => {
           if (capabilityId === "capability_request") {
             return {
               schemaVersion: 1,
-              requestId: "request-project-command",
+              requestId: "request-output-write",
               status: "completed",
-              content: "Activated project.command",
-              activatedCapabilities: ["project.command"]
+              content: "Activated output.write_text",
+              activatedCapabilities: ["output.write_text"]
             };
           }
-          return { schemaVersion: 1, requestId: "request-project-command-execution", status: "completed", content: "Project command completed" };
+          return { schemaVersion: 1, requestId: "request-output-write-execution", status: "completed", content: "Output write completed" };
         }
       },
       responses: [
-        fauxAssistantMessage(fauxToolCall("capability_request", { mode: "activate", need: "Inspect the project", capabilityId: "project.command" }), { stopReason: "toolUse" }),
-        fauxAssistantMessage(fauxToolCall("project_command", { program: "git", operation: "status" }), { stopReason: "toolUse" }),
-        fauxAssistantMessage("The project inspection completed.")
+        fauxAssistantMessage(fauxToolCall("capability_request", { mode: "activate", need: "Create the requested text output", capabilityId: "output.write_text" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("output_write_text", { path: "summary.md", content: "Summary" }), { stopReason: "toolUse" }),
+        fauxAssistantMessage("The output was created.")
       ],
       onEvent: () => {}
     });
 
-    await handle.submit("Inspect the project.", { activeCapabilities: ["capability_request"] });
-    expect(requested).toEqual(["capability_request", "project.command"]);
+    await handle.submit("Create the requested output.", { activeCapabilities: ["capability_request"] });
+    expect(requested).toEqual(["capability_request", "output.write_text"]);
     handle.dispose();
   });
 
   it("keeps Host capability IDs separate from Provider function names", () => {
-    const capabilityIds = ["output.write_text", "output.edit_text", "project.command", "academic_research"];
+    const capabilityIds = ["output.write_text", "output.edit_text", "academic_research"];
     const providerNames = capabilityIds.map(providerToolNameForCapability);
 
-    expect(providerNames).toEqual(["output_write_text", "output_edit_text", "project_command", "academic_research"]);
+    expect(providerNames).toEqual(["output_write_text", "output_edit_text", "academic_research"]);
     expect(providerNames.every((name) => /^[a-zA-Z0-9_-]+$/u.test(name))).toBe(true);
   });
 

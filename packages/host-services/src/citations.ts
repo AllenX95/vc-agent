@@ -90,6 +90,7 @@ export class CitationRegistry {
 function isCitationBearingCapability(capabilityId: string, result: CapabilityExecutionResult): boolean {
   return capabilityId === "web_search"
     || capabilityId === "web_fetch"
+    || capabilityId === "source_check"
     || capabilityId === "academic_research"
     || result.retrieval?.contextReference.sourceClass === "web"
     || result.retrieval?.contextReference.sourceClass === "academic";
