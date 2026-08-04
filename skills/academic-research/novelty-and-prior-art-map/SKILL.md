@@ -6,6 +6,7 @@ description: "Map an AI technology's academic foundations, direct predecessors, 
 # Novelty And Prior-Art Map
 
 Treat prior art here as academic predecessor research, not a legal patent opinion.
+Use Extension-owned `web_fetch` for generic public pages and GitHub repository content; activate it through `capability_request` when needed. Keep normalized works, identifiers, evidence types, and graph links in `academic_research`.
 
 ## Workflow
 

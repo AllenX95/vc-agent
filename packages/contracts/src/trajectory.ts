@@ -33,6 +33,16 @@ const trajectoryEventBase = z.object({
   provenance: provenanceRefSchema,
   occurredAt: z.string().datetime()
 });
+const runtimeToolActivitySchema = z.object({
+  sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]),
+  sourceId: z.string().min(1),
+  sourceRevision: z.string().min(1),
+  activationReason: z.string().min(1),
+  actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]),
+  confirmationState: z.enum(["not_required", "required", "approved", "rejected"]),
+  durationMs: z.number().int().nonnegative().optional(),
+  truncated: z.boolean().optional()
+});
 
 export const reflectionDreamEligibilitySchema = z.object({
   sourceKind: z.literal("reflection_dialogue"),
@@ -99,7 +109,8 @@ const toolTerminal = trajectoryEventBase.extend({
     capabilityId: z.string().min(1),
     summary: z.string().max(20_000),
     artifactIds: z.array(z.string().min(1)),
-    contextReference: contextReferenceSchema.optional()
+    contextReference: contextReferenceSchema.optional(),
+    runtime: runtimeToolActivitySchema.optional()
   })
 });
 const toolStarted = trajectoryEventBase.extend({
@@ -108,7 +119,8 @@ const toolStarted = trajectoryEventBase.extend({
     toolCallId: z.string().min(1),
     capabilityId: z.string().min(1),
     arguments: z.record(z.string(), z.unknown()),
-    expectedStateVersion: z.number().int().positive()
+    expectedStateVersion: z.number().int().positive(),
+    runtime: runtimeToolActivitySchema.optional()
   })
 });
 const artifactCreated = trajectoryEventBase.extend({
@@ -191,6 +203,7 @@ export const trajectoryActivitySchema = z.object({
   label: z.string().min(1),
   status: z.enum(["started", "completed", "failed", "unknown_outcome"]),
   content: z.string(),
+  runtime: runtimeToolActivitySchema.optional(),
   artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
 });
 export type TrajectoryActivity = z.infer<typeof trajectoryActivitySchema>;

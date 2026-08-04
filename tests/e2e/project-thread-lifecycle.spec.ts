@@ -20,6 +20,7 @@ test("archives, restores, and deletes an entire Project Thread", async () => {
   try {
     const window = await application.firstWindow();
     await invokeRaw(window, "project.open");
+    await window.reload();
     await window.getByRole("button", { name: `New thread in ${basename(projectDirectory)}` }).click();
     await expect(window.getByRole("heading", { name: "Thread 1" })).toBeVisible();
 

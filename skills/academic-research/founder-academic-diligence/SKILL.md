@@ -6,6 +6,7 @@ description: "Assess an AI founder or team member's academic identity, represent
 # Founder Academic Diligence
 
 Use `academic_research` for author, paper, citation, GitHub, and Hugging Face evidence.
+Use Extension-owned `web_fetch` for generic public pages and repository content; activate it through `capability_request` when needed. Keep identity links and typed evidence in `academic_research`.
 
 ## Workflow
 

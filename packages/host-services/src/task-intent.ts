@@ -5,6 +5,13 @@ export function detectMaterialRecallIntent(text: string): boolean {
   return explicitFileMention || chineseSource || englishSource;
 }
 
+export function detectWebResearchIntent(text: string): boolean {
+  const url = /https?:\/\/\S+/iu.test(text);
+  const english = /\b(search|browse|look up|latest|current|news|public web|online research|web research)\b/iu.test(text);
+  const chinese = /(搜索|上网查|联网查|查找最新|最新新闻|网页|公开网络|网络调研|实时资料)/u.test(text);
+  return url || english || chinese;
+}
+
 export function detectProjectStateRecallIntent(text: string): boolean {
   const chinese = /(项目背景|项目状态|当前进展|工作状态|项目上下文|项目 context|context 面板|上下文面板)|(使用|读取|查看|召回|参考).{0,12}(context|上下文)/iu.test(text);
   const english = /\b(project context|project status|current project state|working state|context panel)\b|\b(use|read|recall|consult)\b.{0,20}\bcontext\b/iu.test(text);
@@ -27,12 +34,6 @@ export function detectArxivFulltextIntent(text: string): boolean {
   const acquisition = /(下载|保存|存到|落盘|归档|保留|download|save|store|archive|retain)/iu.test(text);
   const arxiv = /(?:arxiv(?:\.org)?|arxiv\s*(?:论文|paper|全文|full[- ]?text))/iu.test(text);
   return acquisition && arxiv;
-}
-
-export function detectProjectCommandIntent(text: string): boolean {
-  const chinese = /(运行|执行|调用|检查|查看).{0,16}(命令|rg|ripgrep|git\s*(status|diff|log)|pdfinfo|PDF\s*信息)/iu.test(text);
-  const english = /\b(run|execute|invoke|inspect|show)\b.{0,30}\b(command|ripgrep|rg|git\s+(status|diff|log)|pdfinfo|pdf metadata)\b/iu.test(text);
-  return chinese || english;
 }
 
 export function detectAcademicResearchIntent(text: string): boolean {

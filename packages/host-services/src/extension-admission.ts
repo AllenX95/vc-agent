@@ -86,6 +86,7 @@ export interface DeterministicInspectionReport {
   readonly files: readonly ExtensionFileInventory[];
   readonly lockfile?: { readonly name: string; readonly sha256: string };
   readonly entryPoints: readonly string[];
+  readonly toolNames: readonly string[];
   readonly lifecycleScripts: readonly string[];
   readonly nativeBinaries: readonly string[];
   readonly requestedPermissions: readonly string[];
@@ -158,6 +159,7 @@ export interface ApprovedExtensionRevision {
   readonly artifactHash: string;
   readonly dependencyClosureHash: string;
   readonly entryPoints: readonly string[];
+  readonly toolNames: readonly string[];
   readonly requestedPermissions: readonly string[];
   readonly enabled: false;
   readonly invalidated: boolean;
@@ -332,7 +334,7 @@ export class ExtensionAdmissionManager {
       if (copiedHash !== report.artifactHash) throw new ExtensionAdmissionError("EXTENSION_INTEGRITY_FAILED", "Approved artifact bytes do not match the reviewed identity.");
       const approved: ApprovedExtensionRevision = {
         schemaVersion: 1, extensionId: staged.extensionId, approvedRevisionId, stagedRevisionId: staged.stagedRevisionId, name: staged.name, version, approvedPath,
-        artifactHash: report.artifactHash, dependencyClosureHash: report.dependencyClosureHash, entryPoints: [...report.entryPoints], requestedPermissions: [...report.requestedPermissions], enabled: false, invalidated: false,
+        artifactHash: report.artifactHash, dependencyClosureHash: report.dependencyClosureHash, entryPoints: [...report.entryPoints], toolNames: [...report.toolNames], requestedPermissions: [...report.requestedPermissions], enabled: false, invalidated: false,
         trustDisclosure: "Trusted Worker Code: direct process behavior cannot be fully mediated by Standard Access.", approvedAt: this.#now()
       };
       this.#approved.set(approvedRevisionId, approved);
@@ -562,7 +564,7 @@ export class GlobalExtensionRevisionManager {
   }
 
   runtimeSnapshot(): ExtensionInventorySnapshot {
-    return { schemaVersion: 1, revisionId: this.#effectiveRevisionId, enabled: this.#effectiveExtensions.map((entry) => ({ id: entry.extensionId, version: entry.version, entryPath: this.#admission.runtimeEntry(entry.approvedRevisionId).entryPath, integrity: entry.artifactHash, trust: "approved-trusted" })) };
+    return { schemaVersion: 1, revisionId: this.#effectiveRevisionId, enabled: this.#effectiveExtensions.map((entry) => { const approved = this.#admission.assertApprovedRuntimeIdentity(entry.approvedRevisionId); return { id: entry.extensionId, version: entry.version, entryPath: this.#admission.runtimeEntry(entry.approvedRevisionId).entryPath, integrity: entry.artifactHash, trust: "approved-trusted", toolNames: [...(approved.toolNames ?? [])] }; }) };
   }
 
   private async activate(revisionId: string, immediate: boolean): Promise<void> {
@@ -617,6 +619,7 @@ function buildInspection(staged: StagedExtension, now: string): DeterministicIns
   const dependencies = collectDependencies(packageJson);
   const lifecycleScripts = collectLifecycleScripts(packageJson);
   const entryPoints = collectEntryPoints(packageJson);
+  const toolInventory = collectDeclaredToolNames(staged.stagedPath, entryPoints, packageJson);
   const nativeBinaries = files.filter((file) => NATIVE_EXTENSIONS.has(extname(file.relativePath).toLowerCase())).map((file) => file.relativePath);
   const requestedPermissions = collectStringArray(packageJson?.permissions ?? packageJson?.requestedPermissions);
   const licenses = collectLicenses(packageJson);
@@ -642,6 +645,10 @@ function buildInspection(staged: StagedExtension, now: string): DeterministicIns
       findings.push(finding("entry-point-missing-" + entryPoint.replace(/[^a-z0-9]/giu, "-"), "critical", "integrity", "Declared entry point is absent from the staged artifact.", false));
     }
   }
+  if (toolInventory.dynamicWithoutInventory) {
+    blockers.push("EXTENSION_TOOL_INVENTORY_UNAVAILABLE");
+    findings.push(finding("tool-inventory-unavailable", "critical", "coverage", "Extension tool names must be literal registerTool names or declared in vcAgent.toolNames for non-executing collision preflight.", false));
+  }
   if (lifecycleScripts.length > 0) findings.push(finding("lifecycle-scripts", "high", "lifecycle", "Lifecycle scripts are present and will not be executed during admission.", true));
   if (nativeBinaries.length > 0) findings.push(finding("native-binaries", "high", "native", "Native binaries are present in the retained artifact.", true));
   if (requestedPermissions.length > 0) findings.push(finding("requested-permissions", "high", "permission", "The artifact declares direct Worker permissions.", true));
@@ -651,7 +658,7 @@ function buildInspection(staged: StagedExtension, now: string): DeterministicIns
   const dependencyClosureHash = hashClosure(files, lockfile, dependencies);
   return {
     schemaVersion: 1, reportId: randomUUID(), stagedRevisionId: staged.stagedRevisionId, artifactHash: hashInventory(files), dependencyClosureHash,
-    identity: { extensionId: packageName, name: packageName, ...(version === undefined ? {} : { version }), ...(staged.sourceRevision === undefined ? {} : { sourceRevision: staged.sourceRevision }) }, files, ...(lockfile === undefined ? {} : { lockfile }), entryPoints, lifecycleScripts, nativeBinaries, requestedPermissions, licenses, vulnerabilities,
+    identity: { extensionId: packageName, name: packageName, ...(version === undefined ? {} : { version }), ...(staged.sourceRevision === undefined ? {} : { sourceRevision: staged.sourceRevision }) }, files, ...(lockfile === undefined ? {} : { lockfile }), entryPoints, toolNames: toolInventory.toolNames, lifecycleScripts, nativeBinaries, requestedPermissions, licenses, vulnerabilities,
     findings, blockers: [...new Set(blockers)], gaps, status: blockers.length === 0 ? "reviewable" : "blocked", generatedAt: now
   };
 }
@@ -686,6 +693,23 @@ function collectEntryPoints(packageJson: Record<string, unknown> | undefined): s
   if (typeof bin === "string") entries.push(normalizeRelative(bin));
   if (typeof bin === "object" && bin !== null) for (const value of Object.values(bin as Record<string, unknown>)) if (typeof value === "string") entries.push(normalizeRelative(value));
   return [...new Set(entries)].filter((entry) => entry !== "").sort();
+}
+
+function collectDeclaredToolNames(root: string, entryPoints: readonly string[], packageJson: Record<string, unknown> | undefined): { toolNames: string[]; dynamicWithoutInventory: boolean } {
+  const configured = packageJson?.vcAgent;
+  const declared = typeof configured === "object" && configured !== null && !Array.isArray(configured)
+    ? collectStringArray((configured as Record<string, unknown>).toolNames)
+    : [];
+  const literal = new Set(declared);
+  let hasRegistration = false;
+  for (const entryPoint of entryPoints) {
+    const path = join(root, entryPoint);
+    if (!existsSync(path) || !statSync(path).isFile()) continue;
+    const source = readFileSync(path, "utf8");
+    if (/\.registerTool\s*\(/u.test(source)) hasRegistration = true;
+    for (const match of source.matchAll(/\.registerTool\s*\(\s*\{[\s\S]{0,2000}?\bname\s*:\s*["'`]([^"'`]+)["'`]/gu)) literal.add(match[1]!);
+  }
+  return { toolNames: [...literal].sort(), dynamicWithoutInventory: hasRegistration && literal.size === 0 };
 }
 
 function collectExportStrings(value: unknown, entries: string[]): void {
@@ -755,8 +779,8 @@ function isContained(root: string, candidate: string): boolean { const rootPath 
 function dirnameFor(path: string): string { const parts = path.split(/[\\/]/u); parts.pop(); return parts.join(sep) || "."; }
 
 function cloneStaged(value: StagedExtension): StagedExtension { return { ...value }; }
-function cloneReport(value: DeterministicInspectionReport): DeterministicInspectionReport { return { ...value, identity: { ...value.identity }, files: value.files.map((file) => ({ ...file })), ...(value.lockfile === undefined ? {} : { lockfile: { ...value.lockfile } }), entryPoints: [...value.entryPoints], lifecycleScripts: [...value.lifecycleScripts], nativeBinaries: [...value.nativeBinaries], requestedPermissions: [...value.requestedPermissions], licenses: [...value.licenses], vulnerabilities: [...value.vulnerabilities], findings: value.findings.map((finding) => ({ ...finding })), blockers: [...value.blockers], gaps: [...value.gaps] }; }
+function cloneReport(value: DeterministicInspectionReport): DeterministicInspectionReport { return { ...value, identity: { ...value.identity }, files: value.files.map((file) => ({ ...file })), ...(value.lockfile === undefined ? {} : { lockfile: { ...value.lockfile } }), entryPoints: [...value.entryPoints], toolNames: [...(value.toolNames ?? [])], lifecycleScripts: [...value.lifecycleScripts], nativeBinaries: [...value.nativeBinaries], requestedPermissions: [...value.requestedPermissions], licenses: [...value.licenses], vulnerabilities: [...value.vulnerabilities], findings: value.findings.map((finding) => ({ ...finding })), blockers: [...value.blockers], gaps: [...value.gaps] }; }
 function cloneAudit(value: ExtensionAuditRun): ExtensionAuditRun { return { ...value, ...(value.profileId === undefined ? {} : { profileId: value.profileId }), ...(value.modelReview === undefined ? {} : { modelReview: { ...value.modelReview, findings: value.modelReview.findings.map((finding) => ({ ...finding })), residualRisk: [...value.modelReview.residualRisk], limitations: [...value.modelReview.limitations] } }) }; }
-function cloneApproved(value: ApprovedExtensionRevision): ApprovedExtensionRevision { return { ...value, entryPoints: [...value.entryPoints], requestedPermissions: [...value.requestedPermissions] }; }
+function cloneApproved(value: ApprovedExtensionRevision): ApprovedExtensionRevision { return { ...value, entryPoints: [...value.entryPoints], toolNames: [...(value.toolNames ?? [])], requestedPermissions: [...value.requestedPermissions] }; }
 function cloneEntry(value: GlobalExtensionEntry): GlobalExtensionEntry { return { ...value, entryPoints: [...value.entryPoints], requestedPermissions: [...value.requestedPermissions] }; }
 function clonePending(value: PendingGlobalExtensionRevision): PendingGlobalExtensionRevision { return { ...value, proposedExtensions: value.proposedExtensions.map(cloneEntry), change: { ...value.change } }; }

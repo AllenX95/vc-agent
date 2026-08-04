@@ -197,7 +197,8 @@ export class ThreadTrajectoryStore {
           kind: "tool",
           label: event.payload.capabilityId,
           status: "started",
-          content: "Capability execution requested."
+          content: "Capability execution requested.",
+          ...(event.payload.runtime === undefined ? {} : { runtime: event.payload.runtime })
         });
       } else if (event.event === "tool.completed" || event.event === "tool.failed" || event.event === "tool.unknown_outcome") {
         const id = `tool:${event.payload.toolCallId}`;
@@ -209,7 +210,8 @@ export class ThreadTrajectoryStore {
           kind: "tool",
           label: event.payload.capabilityId,
           status: event.event === "tool.completed" ? "completed" : event.event === "tool.unknown_outcome" ? "unknown_outcome" : "failed",
-          content: event.payload.summary
+          content: event.payload.summary,
+          ...(event.payload.runtime === undefined ? {} : { runtime: event.payload.runtime })
         });
       } else if (event.event === "artifact.created") {
         activities.set(`artifact:${event.payload.artifactId}`, {

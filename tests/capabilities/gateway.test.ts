@@ -9,7 +9,7 @@ import {
   UnknownOutcomeError,
   createTextOutputCapability
 } from "@vc-agent/capabilities";
-import { CapabilityGateway, detectArxivFulltextIntent, detectFileDownloadIntent, detectOutputIntent, detectProjectCommandIntent, detectTextEditIntent } from "@vc-agent/host-services";
+import { CapabilityGateway, detectArxivFulltextIntent, detectFileDownloadIntent, detectOutputIntent, detectTextEditIntent } from "@vc-agent/host-services";
 
 const temporaryDirectories: string[] = [];
 
@@ -87,8 +87,6 @@ describe("Capability Gateway", () => {
     expect(detectOutputIntent("Analyze the company and discuss the risks")).toBe(false);
     expect(detectTextEditIntent("请修改已有的投资报告文件")).toBe(true);
     expect(detectTextEditIntent("Revise the existing memo document")).toBe(true);
-    expect(detectProjectCommandIntent("运行 git diff 查看项目变化")).toBe(true);
-    expect(detectProjectCommandIntent("Run pdfinfo to inspect PDF metadata")).toBe(true);
   });
 
   it.each([

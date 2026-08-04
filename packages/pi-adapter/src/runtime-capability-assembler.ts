@@ -109,15 +109,16 @@ export class RuntimeCapabilityAssembler {
     const hostToolNames = new Set(input.hostToolNames ?? []);
 
     for (const name of [...hostToolNames].sort()) {
+      const policy = hostToolPolicy(name);
       tools.push({
         name,
         source: "host",
         sourceId: name,
         sourceRevision: input.hostSurface.revision,
         capabilityId: capabilityIdForProviderName(name, input.hostSurface.visibleCapabilityIds),
-        allowedScopes: input.hostSurface.scope === "project" ? ["project", "unscoped"] : ["unscoped"],
-        activationClass: name === "capability_request" ? "bootstrap" : "on_demand",
-        sideEffectClass: "none",
+        allowedScopes: policy.allowedScopes,
+        activationClass: policy.activationClass,
+        sideEffectClass: policy.sideEffectClass,
         hostMediated: true
       });
     }
@@ -272,6 +273,15 @@ function mcpSideEffectClass(schema: RuntimeMcpToolSchema): CapabilityMetadata["s
 
 function capabilityIdForProviderName(name: string, visibleCapabilityIds: readonly string[]): string | undefined {
   return visibleCapabilityIds.find((id) => providerToolNameForCapability(id) === name);
+}
+
+function hostToolPolicy(name: string): Pick<RuntimeToolDescriptor, "allowedScopes" | "activationClass" | "sideEffectClass"> {
+  if (name === "capability_request") return { allowedScopes: ["project", "unscoped"], activationClass: "bootstrap", sideEffectClass: "none" };
+  if (["material_recall", "project_state_recall", "reflection_evidence_drilldown"].includes(name)) return { allowedScopes: ["project"], activationClass: "common_read", sideEffectClass: "local_read" };
+  if (["memory_recall"].includes(name)) return { allowedScopes: ["project", "unscoped"], activationClass: "common_read", sideEffectClass: "local_read" };
+  if (["academic_research", "web_search", "web_fetch"].includes(name)) return { allowedScopes: ["project", "unscoped"], activationClass: "on_demand", sideEffectClass: "network_read" };
+  if (["output_write_text", "output_edit_text", "workspace_write_batch", "file_download", "arxiv_fulltext", "reflection_outcome_propose"].includes(name)) return { allowedScopes: ["project"], activationClass: "protected", sideEffectClass: "local_write" };
+  return { allowedScopes: ["project", "unscoped"], activationClass: "on_demand", sideEffectClass: "none" };
 }
 
 function sameRuntimeSource(left: RuntimeToolDescriptor, right: RuntimeToolDescriptor): boolean {

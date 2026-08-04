@@ -6,6 +6,7 @@ description: "Perform VC-oriented technical diligence on an AI paper, separating
 # Paper Technical Diligence
 
 Use `academic_research` to resolve the paper before drawing conclusions.
+Use Extension-owned `web_fetch` for generic public pages, GitHub README/repository content, or non-domain URLs; activate it through `capability_request` when needed. Keep typed academic facts and identifiers in `academic_research`.
 
 ## Workflow
 

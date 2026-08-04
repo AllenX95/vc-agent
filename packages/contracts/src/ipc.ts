@@ -537,6 +537,7 @@ const ipcTrajectoryActivitySchema = z.object({
   label: z.string().min(1),
   status: z.enum(["started", "completed", "failed", "unknown_outcome"]),
   content: z.string(),
+  runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
   artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
 });
 
@@ -606,7 +607,7 @@ const saveMcpServerCommandSchema = commandMetadataSchema.extend({
   command: z.literal("mcp.server.save"),
   payload: z.object({ serverId: z.string().uuid().optional(), name: z.string().trim().min(1).max(120), transport: z.enum(["stdio", "http", "fixture"]), endpoint: z.string().min(1).optional(), command: z.string().min(1).optional(), args: z.array(z.string().max(400)).max(50).optional(), workingDirectory: z.string().min(1).optional(), credentialRef: z.string().min(1).optional(), enabled: z.boolean(), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), enabledToolIds: z.array(z.string().min(1)).optional(), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })).optional() })
 });
-const activateMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.activate"), payload: z.object({ serverId: z.string().uuid(), toolIds: z.array(z.string().min(1)).max(100), scope: z.enum(["project", "unscoped"]), threadId: z.string().min(1).optional(), connect: z.boolean().optional() }) });
+const activateMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.activate"), payload: z.object({ serverId: z.string().uuid(), toolIds: z.array(z.string().min(1)).max(100), scope: z.enum(["project", "unscoped"]), threadId: z.string().min(1), connect: z.boolean().optional() }) });
 const disconnectMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.disconnect"), payload: z.object({ serverId: z.string().uuid() }) });
 const executeMcpToolCommandSchema = commandMetadataSchema.extend({
   command: z.literal("mcp.permission.resolve"),
@@ -1392,6 +1393,7 @@ const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
     capabilityId: z.string().min(1),
     status: z.enum(["started", "completed", "rejected", "failed", "unknown_outcome"]),
     content: z.string().max(20_000),
+    runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
     artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
   })
 });

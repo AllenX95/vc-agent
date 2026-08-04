@@ -6,6 +6,7 @@ description: "Trace papers and research teams through authors, institutions, Git
 # Research To Company Map
 
 Use `academic_research` to build an evidence-backed chain from research to public technical organizations.
+Use Extension-owned `web_fetch` for generic public pages and GitHub repository content; activate it through `capability_request` when needed. Keep normalized identities and typed links in `academic_research`.
 
 ## Workflow
 

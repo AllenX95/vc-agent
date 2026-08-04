@@ -6,6 +6,7 @@ description: "Decompose and verify technical claims from startup decks, intervie
 # Technical Claim Verification
 
 Use `academic_research` to test each atomic claim against papers and public artifacts.
+Use Extension-owned `web_fetch` for generic public pages and GitHub repository content; activate it through `capability_request` when needed. Keep claim evidence typing and source identifiers in `academic_research`.
 
 ## Workflow
 

@@ -6,7 +6,6 @@ import type { CapabilityExecutionRequest } from "@vc-agent/contracts";
 import {
   CapabilityRegistry,
   TextOutputStore,
-  createProjectCommandCapability,
   createTextEditCapability
 } from "@vc-agent/capabilities";
 import { CapabilityGateway } from "@vc-agent/host-services";
@@ -106,47 +105,4 @@ describe("controlled Project tools", () => {
     expect(readFileSync(target, "utf8")).toBe("User changed this file");
   });
 
-  it("runs only structured read-only Project commands through the injected executor", async () => {
-    const { projectRoot, outputLocation } = projectFixture();
-    const calls: unknown[] = [];
-    const registry = new CapabilityRegistry();
-    registry.register(createProjectCommandCapability({
-      run: async (input) => {
-        calls.push(input);
-        return { exitCode: 0, stdout: "memo.md:execution risk", stderr: "" };
-      }
-    }));
-    const gateway = new CapabilityGateway(registry);
-    const executionRequest = request("project.command", {
-      program: "rg",
-      query: "execution risk",
-      path: "outputs",
-      glob: "*.md",
-      ignoreCase: true
-    });
-    const auth = authorization(projectRoot, outputLocation, ["project.command"]);
-
-    const decision = await gateway.request(executionRequest, auth);
-    expect(decision).toMatchObject({ type: "result", result: { status: "completed", content: expect.stringContaining("memo.md") } });
-    expect(calls).toEqual([expect.objectContaining({
-      projectRoot,
-      invocation: { program: "rg", query: "execution risk", path: "outputs", glob: "*.md", ignoreCase: true }
-    })]);
-  });
-
-  it("does not accept arbitrary shell programs or write-capable git operations", async () => {
-    const { projectRoot, outputLocation } = projectFixture();
-    const registry = new CapabilityRegistry();
-    registry.register(createProjectCommandCapability({
-      run: async () => ({ exitCode: 0, stdout: "", stderr: "" })
-    }));
-    const gateway = new CapabilityGateway(registry);
-    const auth = authorization(projectRoot, outputLocation, ["project.command"]);
-
-    const shell = await gateway.request(request("project.command", { program: "powershell", args: ["Remove-Item", "x"] }), auth);
-    const gitWrite = await gateway.request(request("project.command", { program: "git", operation: "checkout" }), auth);
-
-    expect(shell).toMatchObject({ type: "result", result: { status: "failed", code: "INVALID_CAPABILITY_ARGUMENTS" } });
-    expect(gitWrite).toMatchObject({ type: "result", result: { status: "failed", code: "INVALID_CAPABILITY_ARGUMENTS" } });
-  });
 });

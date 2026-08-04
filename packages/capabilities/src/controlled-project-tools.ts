@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import {
-  projectCommandInvocationSchema,
-  type ArtifactRecord,
-  type ProjectCommandInvocation
+  type ArtifactRecord
 } from "@vc-agent/contracts";
 import type { CapabilityDefinition, CapabilityExecutionContext, SensitiveAction } from "./index.js";
 
@@ -186,65 +184,4 @@ function contentHash(content: string): string {
 function requireOutputLocation(context: CapabilityExecutionContext): string {
   if (context.outputLocation === undefined) throw new Error("Output Location is not configured");
   return context.outputLocation;
-}
-
-export interface ProjectCommandResult {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-export interface ProjectCommandExecutor {
-  run(input: {
-    readonly projectRoot: string;
-    readonly invocation: ProjectCommandInvocation;
-  }): Promise<ProjectCommandResult>;
-}
-
-export function createProjectCommandCapability(
-  executor: ProjectCommandExecutor
-): CapabilityDefinition<ProjectCommandInvocation> {
-  return {
-    metadata: {
-      id: "project.command",
-      version: "1.0.0",
-      label: "Run read-only Project command",
-      description: "Run one structured, allowlisted, read-only command inside the active Project. This cannot invoke a shell or replace OCR, PDF, or Office integrations.",
-      useWhen: "Use for bounded text search, read-only Git inspection, or PDF metadata when the dedicated Project and material tools are insufficient.",
-      tier: "on_demand",
-      activationClass: "ordinary_task",
-      sideEffectClass: "local_read",
-      allowedScopes: ["project"],
-      executor: "utility",
-      modelCallable: true,
-      inputSchema: {
-        oneOf: [
-          { type: "object", properties: { program: { const: "rg" }, query: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, ignoreCase: { type: "boolean" } }, required: ["program", "query"] },
-          { type: "object", properties: { program: { const: "git" }, operation: { enum: ["status", "diff", "log"] }, path: { type: "string" }, maxCount: { type: "number" } }, required: ["program", "operation"] },
-          { type: "object", properties: { program: { const: "pdfinfo" }, path: { type: "string" } }, required: ["program", "path"] }
-        ]
-      },
-      outputSchema: {
-        type: "object",
-        properties: { exitCode: { type: "number" }, stdout: { type: "string" }, stderr: { type: "string" } },
-        required: ["exitCode", "stdout", "stderr"]
-      }
-    },
-    inputSchema: projectCommandInvocationSchema,
-    inspect: () => undefined,
-    async execute(input, context) {
-      if (context.projectRoot === undefined || context.request.scope.kind !== "project") {
-        throw new Error("A Project root is required for command execution.");
-      }
-      const result = await executor.run({ projectRoot: context.projectRoot, invocation: input });
-      const successful = result.exitCode === 0 || (input.program === "rg" && result.exitCode === 1);
-      return {
-        schemaVersion: 1,
-        requestId: context.request.requestId,
-        status: successful ? "completed" : "failed",
-        ...(successful ? {} : { code: "PROJECT_COMMAND_FAILED" }),
-        content: JSON.stringify(result).slice(0, 20_000)
-      };
-    }
-  };
 }

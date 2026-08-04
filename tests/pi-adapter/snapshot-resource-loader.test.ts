@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -112,5 +112,39 @@ describe("SnapshotResourceLoader", () => {
 
     expect(loader.inspect().rejected).toEqual([expect.objectContaining({ id: "fixture-extension", code: "EXTENSION_ARTIFACT_CHANGED" })]);
     await expect(loader.reload()).rejects.toThrow("EXTENSION_LOAD_PREFLIGHT_FAILED");
+  });
+
+  it("rejects a colliding approved Extension before either module executes", () => {
+    const first = createApprovedFixture();
+    const second = createApprovedFixture();
+    const marker = join(second.root, "executed.marker");
+    writeFileSync(second.entryPath, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "executed");\n${readFileSync(second.entryPath, "utf8")}`, "utf8");
+    const secondEntry = { ...second.extension, id: "second-extension", integrity: hashInventory(second.root) };
+
+    expect(() => new SnapshotResourceLoader({
+      cwd: first.root,
+      resources,
+      extensions: { schemaVersion: 1, revisionId: "collision-v1", enabled: [first.extension, secondEntry] }
+    })).toThrow("EXTENSION_LOAD_PREFLIGHT_FAILED");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("reports malformed Web configuration without changing it during preflight", () => {
+    const root = mkdtempSync(join(tmpdir(), "vc-agent-web-config-"));
+    temporaryDirectories.push(root);
+    const configDirectory = join(root, "integrations", "pi-web-access");
+    mkdirSync(configDirectory, { recursive: true });
+    const configPath = join(configDirectory, "web-search.json");
+    writeFileSync(configPath, "{ malformed", "utf8");
+    const previous = process.env.VC_AGENT_USER_DATA_DIR;
+    process.env.VC_AGENT_USER_DATA_DIR = root;
+    try {
+      const loader = new SnapshotResourceLoader({ cwd: root, resources, extensions: { schemaVersion: 1, revisionId: "web-config-v1", enabled: [] }, loadBundledExtensions: true });
+      expect(loader.inspect().diagnostics).toContainEqual(expect.objectContaining({ code: "WEB_CONFIGURATION_INVALID", sourceId: "pi-web-access" }));
+      expect(readFileSync(configPath, "utf8")).toBe("{ malformed");
+    } finally {
+      if (previous === undefined) delete process.env.VC_AGENT_USER_DATA_DIR;
+      else process.env.VC_AGENT_USER_DATA_DIR = previous;
+    }
   });
 });

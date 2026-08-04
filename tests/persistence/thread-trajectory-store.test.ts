@@ -140,7 +140,7 @@ describe("ThreadTrajectoryStore", () => {
     store.append({
       ...metadata(3),
       event: "tool.completed",
-      payload: { toolCallId: "tool-1", capabilityId: "output.write_text", summary: "Created Output", artifactIds: ["artifact-1"] }
+      payload: { toolCallId: "tool-1", capabilityId: "output.write_text", summary: "Created Output", artifactIds: ["artifact-1"], runtime: { sourceClass: "bundled_extension", sourceId: "fixture-extension", sourceRevision: "1.2.3", activationReason: "task_visibility", actionClass: "local_write", confirmationState: "approved", durationMs: 12, truncated: false } }
     });
     store.append({
       ...metadata(4),
@@ -148,7 +148,7 @@ describe("ThreadTrajectoryStore", () => {
       payload: { artifactId: "artifact-1", mediaType: "text/plain", destination: "C:\\outputs\\memo.txt", sourceTurnId: "turn-1" }
     });
     expect(store.projectActivities("thread-1")).toMatchObject([
-      { kind: "tool", label: "output.write_text", status: "completed", content: "Created Output", sequence: 3 },
+      { kind: "tool", label: "output.write_text", status: "completed", content: "Created Output", sequence: 3, runtime: { sourceId: "fixture-extension", sourceRevision: "1.2.3", confirmationState: "approved", durationMs: 12 } },
       { kind: "artifact", artifact: { id: "artifact-1", mediaType: "text/plain" }, sequence: 4 }
     ]);
   });

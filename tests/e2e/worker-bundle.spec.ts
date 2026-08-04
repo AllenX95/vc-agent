@@ -17,7 +17,7 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
   const fixture = await launchWorkerFixture();
   try {
     await fixture.window.getByRole("textbox", { name: "Message" }).fill("Return exactly OK.");
-    await fixture.window.getByRole("button", { name: "Send" }).click();
+    await fixture.window.getByRole("button", { name: "Send", exact: true }).click();
 
     await expect(fixture.window.locator(".assistant-message.completed").last()).toBeVisible({ timeout: 10_000 });
     await expect(fixture.window.locator(".provider-failure")).toHaveCount(0);
@@ -43,7 +43,7 @@ test("boots the built Agent Worker and completes a Project Turn", async () => {
     await selectElementText(response.getByText("strong emphasis", { exact: true }));
     await fixture.window.getByRole("button", { name: "Add to task" }).click();
     await fixture.window.getByLabel("Message").fill("Focus on this excerpt.");
-    await fixture.window.getByRole("button", { name: "Send" }).click();
+    await fixture.window.getByRole("button", { name: "Send", exact: true }).click();
     const submitted = fixture.window.locator(".user-message").last();
     await expect(submitted.locator(".submitted-conversation-quote")).toContainText("strong emphasis");
     await expect(submitted.locator(".user-message-text")).toHaveText("Focus on this excerpt.");
@@ -70,7 +70,7 @@ test("reports a Worker crash during manual compaction as a compaction failure", 
   const fixture = await launchWorkerFixture({ VC_AGENT_TEST_WORKER_CRASH_ON_COMPACTION: "1" });
   try {
     await fixture.window.getByRole("textbox", { name: "Message" }).fill("Return exactly OK.");
-    await fixture.window.getByRole("button", { name: "Send" }).click();
+    await fixture.window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(fixture.window.locator(".assistant-message.completed").last()).toBeVisible({ timeout: 10_000 });
 
     const compact = fixture.window.getByRole("button", { name: "Compact thread" });

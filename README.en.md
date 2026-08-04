@@ -109,7 +109,7 @@ integrations/   # Office, MCP, Extension, and related integration state
 
 The application provides **Standard Access** and **Full Access** modes. Full Access reduces subsequent tool confirmations, but it does not bypass product-level review for Reflection, Dream, Memory commits, or Thread scope changes. The User remains responsible for securing the operating-system account, device, and backup destinations.
 
-In Standard Access, downloads, local ArXiv archiving, and bounded folder writes show their scoped source, destination, and file manifest before execution. `project.command` remains read-only inspection; it does not run Python download scripts or write files.
+In Standard Access, downloads, local ArXiv archiving, and bounded folder writes show their scoped source, destination, and file manifest before execution. Project text search reuses scoped Pi `grep`/`find`/`read` tools; no general project-command entry point is exposed.
 
 ## Repository structure
 

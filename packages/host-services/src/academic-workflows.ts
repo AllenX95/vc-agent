@@ -13,6 +13,7 @@ export interface AcademicWorkflowPrototype {
 
 const EVIDENCE_RULES = `Shared academic evidence rules:
 - Use academic_research before making source-dependent factual claims.
+- Delegate generic public-page, GitHub README/repository-content, and non-domain URL retrieval to the Extension-owned web_fetch tool (activate it through capability_request when absent). Keep academic_research for source-specific identifiers, normalization, evidence typing, graph semantics, and partial-failure reporting.
 - Distinguish indexed metadata, preprints, paper/README/Card author claims, inference, and VC judgment.
 - arXiv is a preprint source and does not prove peer review or conference acceptance.
 - Stars, downloads, and citations do not prove customers, adoption, revenue, or technical quality.
@@ -53,4 +54,3 @@ export function academicWorkflowPrototype(text: string): AcademicWorkflowPrototy
   else if (/(论文技术尽调|解读.{0,8}论文|评价.{0,8}论文|paper diligence|technical diligence|产业化价值)/iu.test(normalized)) id = "paper-technical-diligence";
   return id === undefined ? undefined : { id, version: 1, instructions: INSTRUCTIONS[id] };
 }
-

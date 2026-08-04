@@ -6,7 +6,6 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalParseSchema, utilityJobCommandSchema, type OfficeSkillJobCommand, type UtilityJobCommand, type UtilityJobEvent } from "@vc-agent/contracts";
 import { resolveParserPython } from "./python-runtime.js";
-import { prepareProjectCommand, runPreparedProjectCommand } from "./project-command.js";
 import { extractAcademicPdf } from "./academic-pdf-extract.js";
 import { runArxivFulltext } from "./arxiv-fulltext.js";
 
@@ -24,7 +23,6 @@ async function run(command: UtilityJobCommand): Promise<void> {
   if (command.command === "material.parse") await runMaterialParse(command);
   else if (command.command === "page_recovery.ocr") await runOcr(command);
   else if (command.command === "office.skill") await runOfficeSkill(command);
-  else if (command.command === "project.command") await runProjectCommand(command);
   else if (command.command === "arxiv.fulltext") parentPort.postMessage(await runArxivFulltext(command));
   else await runAcademicPdf(command);
 }
@@ -40,31 +38,6 @@ async function runAcademicPdf(command: Extract<UtilityJobCommand, { command: "ac
       event: "academic.pdf.extract.failed",
       code: error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message) ? error.message : "ACADEMIC_PDF_EXTRACT_FAILED",
       message: error instanceof Error ? error.message.slice(0, 2_000) : "Academic PDF extraction failed.",
-      stderr: ""
-    } satisfies UtilityJobEvent);
-  }
-}
-
-async function runProjectCommand(command: Extract<UtilityJobCommand, { command: "project.command" }>): Promise<void> {
-  try {
-    const prepared = await prepareProjectCommand(command.projectRoot, command.invocation);
-    const result = await runPreparedProjectCommand(prepared, {
-      timeoutMs: command.timeoutMs,
-      maxOutputBytes: command.maxOutputBytes
-    });
-    parentPort.postMessage({
-      schemaVersion: 1,
-      jobId: command.jobId,
-      event: "project.command.completed",
-      ...result
-    } satisfies UtilityJobEvent);
-  } catch (error) {
-    parentPort.postMessage({
-      schemaVersion: 1,
-      jobId: command.jobId,
-      event: "project.command.failed",
-      code: "PROJECT_COMMAND_FAILED",
-      message: error instanceof Error ? error.message.slice(0, 2_000) : "Project command failed.",
       stderr: ""
     } satisfies UtilityJobEvent);
   }

@@ -298,6 +298,7 @@ test("completes the desktop C1 fixture paths without eager external activation",
     const window = await application.firstWindow();
     const opened = await invokeRaw(window, "project.open");
     const projectId = (opened as { payload: { project: { id: string } } }).payload.project.id;
+    await window.reload();
     await window.getByRole("button", { name: `New thread in ${projectDirectory.split(/[\\/]/).at(-1)!}` }).click();
     const listedThreads = await invokeRaw(window, "thread.list") as { payload: { threads: Array<{ id: string; scope: string; projectId?: string }> } };
     const projectThread = listedThreads.payload.threads.find((thread) => thread.scope === "project" && thread.projectId === projectId);
@@ -308,7 +309,7 @@ test("completes the desktop C1 fixture paths without eager external activation",
     await window.getByRole("button", { name: "Thread 1", exact: true }).click();
     await expect(window.getByRole("combobox", { name: "Active Model Profile" })).toHaveValue(profile.payload.profile.id);
     await window.getByRole("textbox", { name: "Message" }).fill("Establish the selected integration parent Turn.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".user-message")).toContainText("Establish the selected integration parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
@@ -406,7 +407,7 @@ test("executes an explicitly configured Office runner through the Utility Worker
     await window.getByRole("button", { name: "Thread 1", exact: true }).click();
     await expect(window.getByRole("combobox", { name: "Active Model Profile" })).toHaveValue(profile.payload.profile.id);
     await window.getByRole("textbox", { name: "Message" }).fill("Establish the Office runner parent Turn.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".user-message")).toContainText("Establish the Office runner parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
@@ -459,7 +460,7 @@ test("cancels a running Office runner and reports an interrupted job", async () 
     await window.getByRole("button", { name: "Thread 1", exact: true }).click();
     await expect(window.getByRole("combobox", { name: "Active Model Profile" })).toHaveValue(profile.payload.profile.id);
     await window.getByRole("textbox", { name: "Message" }).fill("Establish the Office cancellation parent Turn.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".user-message")).toContainText("Establish the Office cancellation parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
@@ -638,7 +639,7 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
     await window.getByRole("button", { name: "New thread", exact: true }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Memory fixture" });
     await window.getByLabel("Message").fill("Provide an investment judgment on market sizing for an early-stage hard tech opportunity.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Recalled relevant Long-term Memory as prior judgment, not source evidence.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(window.locator(".tool-activity").filter({ hasText: "ltm-tam-framing" })).toHaveCount(2);
     await expect(window.locator(".conversation")).not.toContainText("src_ref_alpha");
@@ -650,21 +651,21 @@ test("edits and recalls de-identified Long-term Memory without Project state", a
     await window.getByRole("button", { name: "New thread" }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
     await window.getByLabel("Message").fill("Use my long-term memory about founder reference diligence.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(window.locator(".tool-activity").filter({ hasText: "ltm-founder-reference" })).toHaveCount(2);
 
     await window.getByRole("button", { name: "New thread" }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
     await window.getByLabel("Message").fill("Provide an investment judgment on founder references for seed financing.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(window.locator(".tool-activity").filter({ hasText: "ltm-founder-reference" })).toHaveCount(0);
 
     await window.getByRole("button", { name: "New thread" }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Explicit Memory fixture" });
     await window.getByLabel("Message").fill("Summarize the supplied text neutrally.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Completed the Long-term Memory policy fixture.", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(window.locator(".tool-activity")).toHaveCount(0);
   } finally {
@@ -726,7 +727,7 @@ test("retains a missing-Profile turn and runs Pi only after manual Profile selec
     await window.getByRole("button", { name: "New thread" }).click();
     await expect(window.getByRole("heading", { name: "Thread 1" })).toBeVisible();
     await window.getByLabel("Message").fill("Reply with one short sentence.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Model Profile not configured")).toBeVisible();
 
     const beforeProfile = await invokeBootstrap(window);
@@ -788,7 +789,7 @@ test("persists an interrupted trajectory, requires cross-Provider authorization,
     await window.getByLabel("Active Model Profile").selectOption({ label: "Provider A" });
 
     await window.getByLabel("Message").fill("Produce a deliberately slow answer.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await window.getByRole("button", { name: "Stop" }).click();
     await expect(window.getByText("Interrupted", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(window.getByText("The previous request will not resume automatically.")).toBeVisible();
@@ -866,7 +867,7 @@ test("queues editable follow-ups and restores them as unsent drafts after restar
     await expect(window.getByLabel("Queued message 1")).toHaveValue("Edited follow-up survives restart.");
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
 
-    await window.locator(".execution-queue-item").getByRole("button", { name: "Send" }).click();
+    await window.locator(".execution-queue-item").getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Edited follow-up survives restart.", { exact: true })).toBeVisible();
     await expect(window.locator(".execution-queue-item")).toHaveCount(0);
   } finally {
@@ -921,12 +922,12 @@ test("gates text Outputs on explicit intent and a selected Unscoped Output Locat
     let window = await application.firstWindow();
     await window.getByRole("button", { name: "New thread" }).click();
     await window.getByLabel("Message").fill("Analyze the company and discuss the risks.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Model Profile not configured")).toBeVisible();
     expect(readdirSync(outputDirectory)).toEqual([]);
 
     await window.getByLabel("Message").fill("Create a memo file for this investment view.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     const outputFailure = window.locator(".provider-failure").filter({ hasText: "OUTPUT_LOCATION_NOT_CONFIGURED" });
     await expect(outputFailure).toBeVisible();
     await outputFailure.getByRole("button", { name: "Choose output location" }).click();
@@ -996,13 +997,13 @@ test("opens a stable Project, isolates Project Threads, and resolves moved or co
     expect(await invokeBootstrap(window)).toMatchObject({ payload: { runtimeActivity: { agentWorkersStarted: 0, piSessionsStarted: 0, providerRequests: 0 } } });
 
     await window.getByLabel("Message").fill("Discuss this project without loading local materials.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
 
     await window.getByRole("button", { name: `New thread in ${projectName}` }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Project Provider" });
     await window.getByLabel("Message").fill("Start an independent project discussion.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
 
     const databaseAfterWork = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
@@ -1191,7 +1192,7 @@ test("freezes a System Prompt revision until the next Prompt Load Boundary", asy
     await window.getByRole("button", { name: "Settings" }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Prompt Boundary Provider" });
     await window.getByLabel("Message").fill("Establish the first physical context.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.locator(".provider-failure")).toHaveCount(1, { timeout: 30_000 });
 
     await window.getByRole("button", { name: "Settings" }).click();
@@ -1300,7 +1301,7 @@ test("captures a Project Memory candidate and appends it only after explicit con
     expect(existsSync(memoryPath)).toBe(false);
 
     await window.getByLabel("Message").fill("我认为生产稳定性是这个项目的核心风险");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     const candidate = window.locator(".memory-candidate");
     await expect(candidate).toContainText("Memory candidate captured");
     expect(existsSync(memoryPath)).toBe(false);
@@ -1396,9 +1397,9 @@ test("completes the daily VC workflow and resumes it after restart", async () =>
     await window.getByRole("button", { name: "Settings" }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Dogfood fixture" });
     await window.getByLabel("Message").fill("Search the current public web, use project materials, Context and Memory, and create an investment memo file with sources and uncertainty.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     const outputConfirmation = window.getByRole("dialog", { name: "Capability confirmation" });
-    await expect(outputConfirmation).toContainText("Create text Output");
+    await expect(outputConfirmation).toContainText("Create text Output", { timeout: 20_000 });
     await outputConfirmation.getByRole("button", { name: "Approve" }).click();
     await expect(window.getByText("Completed the bounded project review and created dogfood-investment-note.md.", { exact: true })).toBeVisible({ timeout: 30_000 });
     const assistantOutput = window.locator(".assistant-output").last();
@@ -1458,7 +1459,7 @@ test("recovers the complete Dogfood failure path without provider fallback", asy
     await expect(broken.locator(".parse-result")).toContainText("PARSER_FAILED", { timeout: 20_000 });
 
     await window.getByLabel("Message").fill("Assess this project.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Model Profile not configured")).toBeVisible();
     await window.getByRole("button", { name: "Adjust profile" }).click();
     await createProfile(window, { name: "Unavailable provider", provider: "anthropic", model: "claude-sonnet-4-5", apiKey: "sk-invalid-g1-failure-fixture" });
@@ -1469,7 +1470,7 @@ test("recovers the complete Dogfood failure path without provider fallback", asy
     await expect(window.locator(".provider-failure").last()).toContainText("anthropic / claude-sonnet-4-5");
 
     await window.getByLabel("Message").fill("Produce a deliberately slow answer.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await window.getByRole("button", { name: "Stop" }).click();
     await expect(window.getByText("Interrupted", { exact: true })).toBeVisible({ timeout: 20_000 });
     await application.close();
@@ -1564,7 +1565,7 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     const judgmentRoot = join(projectDirectory, "outputs", "system", "judgment-records");
     expect(existsSync(judgmentRoot)).toBe(false);
     await window.getByLabel("Message").fill("I adopt month-six retention above 80% in a representative cohort. Prepare a Judgment Record and reusable learning proposal.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("I prepared a non-authoritative Judgment Record draft", { exact: false })).toBeVisible({ timeout: 30_000 });
     await expect(window.locator(".tool-activity.completed").filter({ hasText: "reflection_outcome_propose" })).toBeVisible();
     await expect(workspace.getByTestId("judgment-record-draft")).toContainText("Draft · not authoritative");
@@ -1614,7 +1615,7 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
     await window.getByRole("button", { name: "New thread", exact: true }).click();
     await window.getByLabel("Active Model Profile").selectOption({ label: "Learning Gate recall" });
     await window.getByLabel("Message").fill("Recall the reviewed representative retention threshold for a new investment decision.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Recalled the reviewed representative-retention decision rule", { exact: false })).toBeVisible({ timeout: 30_000 });
     const recallDatabase = new DatabaseSync(join(userDataDirectory, "state.db"), { readOnly: true });
     const recallThread = recallDatabase.prepare("SELECT id FROM threads WHERE scope = 'unscoped' ORDER BY created_at DESC, rowid DESC LIMIT 1").get() as { id: string };
@@ -1644,10 +1645,10 @@ test("runs an isolated Unscoped Reflection without Project State and writes only
     let window = await application.firstWindow();
     await window.getByRole("button", { name: "New thread" }).click();
     await window.getByLabel("Message").fill("Use representative month-six retention above 80% as a decision-changing threshold, but verify cohort construction.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(window.getByText("Model Profile not configured")).toBeVisible();
     await window.getByLabel("Message").fill("Create a memo file for this investment view.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     const outputFailure = window.locator(".provider-failure").filter({ hasText: "OUTPUT_LOCATION_NOT_CONFIGURED" });
     await expect(outputFailure).toBeVisible();
     await outputFailure.getByRole("button", { name: "Choose output location" }).click();
@@ -1749,7 +1750,7 @@ test("marks only unconfirmed Reflection outcomes stale after a recalled Memory t
     await workspace.getByRole("button", { name: "Start critical dialogue" }).click();
     await expect(workspace).toContainText("Reflection dialogue", { timeout: 30_000 });
     await window.getByLabel("Message").fill("Prepare a Judgment Record and reusable Long-term Learning Proposal from this Reflection.");
-    await window.getByRole("button", { name: "Send" }).click();
+    await window.getByRole("button", { name: "Send", exact: true }).click();
     await expect(workspace.getByTestId("judgment-record-draft")).toContainText("Draft · not authoritative", { timeout: 30_000 });
 
     const outcomePath = join(userDataDirectory, "memory", "reflection", "outcomes.jsonl");

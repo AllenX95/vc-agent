@@ -187,7 +187,8 @@ describe("real Pi SDK tracer", () => {
     const loader = new SnapshotResourceLoader({ cwd, resources, extensions, loadBundledExtensions: true });
     await loader.reload();
 
-    const extension = loader.getExtensions().extensions.find((item) => item.path === "pi-web-access@0.17.0");
+    const bundledEntry = loader.snapshot.extensions.enabled.find((item) => item.id === "pi-web-access");
+    const extension = loader.getExtensions().extensions.find((item) => item.path === bundledEntry?.entryPath);
     expect(extension).toBeDefined();
     expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining([
       "web_search",

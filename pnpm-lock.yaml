@@ -44,12 +44,30 @@ importers:
 
   apps/agent-worker:
     dependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: 0.80.8
+        version: 0.80.8
       '@vc-agent/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@vc-agent/pi-adapter':
         specifier: workspace:*
         version: link:../../packages/pi-adapter
+      pi-web-access:
+        specifier: 0.17.0
+        version: 0.17.0(@earendil-works/pi-ai@0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3))(@earendil-works/pi-coding-agent@0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3))(@earendil-works/pi-tui@0.80.8)(@napi-rs/canvas@1.0.2)
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -66,6 +84,18 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: 0.80.8
+        version: 0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: 0.80.8
+        version: 0.80.8
       '@vc-agent/capabilities':
         specifier: workspace:*
         version: link:../../packages/capabilities
@@ -84,6 +114,9 @@ importers:
       lucide-react:
         specifier: 1.24.0
         version: 1.24.0(react@19.2.7)
+      pi-web-access:
+        specifier: 0.17.0
+        version: 0.17.0(@earendil-works/pi-ai@0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3))(@earendil-works/pi-coding-agent@0.80.8(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.1)(zod@4.4.3))(@earendil-works/pi-tui@0.80.8)(@napi-rs/canvas@1.0.2)
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -96,6 +129,9 @@ importers:
       remark-gfm:
         specifier: 4.0.1
         version: 4.0.1
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
     devDependencies:
       '@types/node':
         specifier: 26.1.1

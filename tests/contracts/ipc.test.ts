@@ -258,7 +258,7 @@ describe("versioned IPC contracts", () => {
       { command: "page_recovery.run", payload: { materialId: crypto.randomUUID(), projectId: crypto.randomUUID(), relativePath: "fixture.pdf", mediaType: "application/pdf", sourceHash } },
       { command: "mcp.server.list" },
       { command: "mcp.server.save", payload: { serverId, name: "Fixture", transport: "fixture", enabled: true, allowedScopes: ["project"] } },
-      { command: "mcp.activate", payload: { serverId, toolIds: [], scope: "project" } },
+      { command: "mcp.activate", payload: { serverId, toolIds: [], scope: "project", threadId: "thread-1" } },
       { command: "extension.list" },
       { command: "extension.stage" },
       { command: "extension.inspect", payload: { stagedRevisionId } }

@@ -29,7 +29,7 @@ import {
   type RuntimeCapabilityAssembly,
   type RuntimeExtensionToolInput
 } from "./runtime-capability-assembler.js";
-import { runtimeExtensionTools } from "./snapshot-resource-loader.js";
+import { preflightExtensionTools, runtimeExtensionTools } from "./snapshot-resource-loader.js";
 
 export interface PiSessionProfile {
   readonly provider: string;
@@ -238,9 +238,6 @@ export async function createPiSessionUsingRuntime(
     extensions: config.extensions,
     loadBundledExtensions: config.usePiWebAccess !== false
   });
-  await resourceLoader.reload();
-  const extensionTools = runtimeExtensionTools(resourceLoader);
-  const extensionToolByName = new Map(extensionTools.map((tool) => [tool.name, tool]));
   const capabilityAssembler = new RuntimeCapabilityAssembler();
 
   const settingsManager = SettingsManager.inMemory(
@@ -253,21 +250,38 @@ export async function createPiSessionUsingRuntime(
   );
   const physicalContext = reconcilePhysicalContext(config, model);
   let sessionRef: AgentSession | undefined;
+  let activeAssembly: RuntimeCapabilityAssembly | undefined;
+  let activeToolNames = new Set<string>();
+  let activeCapabilityIds = new Set<string>();
   let refreshTurnIdleTimeout = (): void => {};
   const capabilityProxy = config.capabilityProxy === undefined
     ? undefined
     : async (...args: Parameters<NonNullable<PiSessionConfig["capabilityProxy"]>>) => {
         refreshTurnIdleTimeout();
         try {
+          const capabilityId = args[1];
+          if (capabilityId !== "capability_request") {
+            const descriptor = activeAssembly?.tools.find((tool) => tool.capabilityId === capabilityId || tool.name === providerToolNameForCapability(capabilityId) || tool.name === capabilityId);
+            if (descriptor === undefined || !activeCapabilityIds.has(capabilityId)) {
+              return {
+                schemaVersion: 1 as const,
+                requestId: args[0],
+                status: "rejected" as const,
+                code: "CAPABILITY_NOT_ACTIVE",
+                content: `Capability '${capabilityId}' is not active for this Turn.`
+              };
+            }
+          }
           return await config.capabilityProxy!(...args);
         } finally {
           refreshTurnIdleTimeout();
         }
       };
-  let activeAssembly: RuntimeCapabilityAssembly | undefined;
   const activateAssembledCapabilities = (capabilityIds: readonly string[]): void => {
     if (activeAssembly === undefined || sessionRef === undefined) return;
-    sessionRef.setActiveToolsByName([...capabilityAssembler.activate(activeAssembly, capabilityIds)]);
+    activeToolNames = new Set(capabilityAssembler.activate(activeAssembly, capabilityIds));
+    activeCapabilityIds = new Set([...activeCapabilityIds, ...capabilityIds]);
+    sessionRef.setActiveToolsByName([...activeToolNames]);
   };
   const mcpToolNames = new Set((config.mcpActivation?.toolSchemas ?? []).map((schema) => providerToolNameForMcp(config.mcpActivation!.serverId, schema.name)));
   const customTools = [
@@ -278,6 +292,23 @@ export async function createPiSessionUsingRuntime(
     })),
     ...(capabilityProxy === undefined || config.mcpActivation === undefined ? [] : createMcpToolDefinitions(config.mcpActivation, capabilityProxy))
   ];
+  const hostToolNames = customTools
+    .map((tool) => tool.name)
+    .filter((name) => !mcpToolNames.has(name) && !isProjectReadToolName(name));
+  // Collision preflight uses approved metadata only. No Extension module has
+  // been imported at this point, so a conflicting artifact cannot execute.
+  capabilityAssembler.assemble({
+    hostSurface: fallbackCapabilitySurface([], config.projectReadRoot === undefined ? "unscoped" : "project"),
+    extensionRevision: config.extensions,
+    ...(config.mcpActivation === undefined ? {} : { mcpActivation: config.mcpActivation }),
+    ...(config.projectReadRoot === undefined ? {} : { projectReadRoot: config.projectReadRoot }),
+    skills: config.resources.skills,
+    hostToolNames,
+    extensionTools: preflightExtensionTools(resourceLoader)
+  });
+  await resourceLoader.reload();
+  const extensionTools = runtimeExtensionTools(resourceLoader);
+  const extensionToolByName = new Map(extensionTools.map((tool) => [tool.name, tool]));
   const { session } = await createAgentSession({
     cwd: config.cwd,
     modelRuntime,
@@ -295,10 +326,9 @@ export async function createPiSessionUsingRuntime(
   // registration must not make network tools implicitly active at session
   // creation time.
   session.setActiveToolsByName([]);
+  activeToolNames = new Set();
+  activeCapabilityIds = new Set();
 
-  const hostToolNames = customTools
-    .map((tool) => tool.name)
-    .filter((name) => !mcpToolNames.has(name) && !isProjectReadToolName(name));
   const assembleForTurn = (surface: CapabilitySurfaceSnapshot): RuntimeCapabilityAssembly => {
     const assembly = capabilityAssembler.assemble({
       hostSurface: surface,
@@ -310,7 +340,12 @@ export async function createPiSessionUsingRuntime(
       extensionTools
     });
     activeAssembly = assembly;
-    session.setActiveToolsByName([...assembly.initialActiveToolNames]);
+    activeToolNames = new Set(assembly.initialActiveToolNames);
+    activeCapabilityIds = new Set([
+      ...surface.executableCapabilityIds,
+      ...assembly.tools.filter((tool) => activeToolNames.has(tool.name)).flatMap((tool) => tool.capabilityId === undefined ? [] : [tool.capabilityId])
+    ]);
+    session.setActiveToolsByName([...activeToolNames]);
     return assembly;
   };
 

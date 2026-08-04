@@ -8,6 +8,8 @@
     ".": "./src/index.ts",
     "./provider-catalog": "./src/provider-catalog.ts",
     "./project-read-tool-metadata": "./src/project-read-tool-metadata.ts",
+    "./runtime-capability-assembler": "./src/runtime-capability-assembler.ts",
+    "./extension-preflight": "./src/extension-preflight.ts",
     "./testing": "./src/testing.ts",
     "./mcp": "./src/mcp-adapter.ts"
   },

@@ -57,7 +57,9 @@ export const extensionInventorySnapshotSchema = z.object({
       version: z.string().min(1),
       entryPath: z.string().min(1),
       integrity: z.string().min(1),
-      trust: z.enum(["bundled-reviewed", "approved-trusted"])
+      trust: z.enum(["bundled-reviewed", "approved-trusted"]),
+      /** Non-executing admission inventory used for collision preflight. */
+      toolNames: z.array(z.string().min(1).max(200)).optional()
     })
   )
 });

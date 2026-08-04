@@ -44,6 +44,8 @@ import {
 import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createRuntimeExtensionCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore, type CapabilityExecutionContext } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
+import { RuntimeCapabilityAssembler } from "@vc-agent/pi-adapter/runtime-capability-assembler";
+import { bundledPiWebAccessEntry, inspectExtensionEntries } from "@vc-agent/pi-adapter/extension-preflight";
 import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
 import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
@@ -168,11 +170,12 @@ type PendingMcpActivation = {
   readonly toolSchemas: McpActivationDecision["toolSchemas"];
   readonly scope: "project" | "unscoped";
   readonly reason: McpActivationDecision["reason"];
-  readonly threadId?: string;
+  readonly threadId: string;
 };
 const mcpActivations = new Map<string, PendingMcpActivation>();
 let integrationJobsPath: string | undefined;
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
+const mcpCapabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest; activation: FrozenMcpActivation; schema: FrozenMcpActivation["toolSchemas"][number] }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
 const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout>; contextTimer?: ReturnType<typeof setTimeout>; memoryTimer?: ReturnType<typeof setTimeout> }>();
@@ -280,10 +283,34 @@ function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
   return globalExtensionRevisions?.runtimeSnapshot() ?? { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] };
 }
 
+function runtimeCapabilityDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
+  try {
+    const extensions = extensionRuntimeSnapshot();
+    const entries = extensions.enabled.some((entry) => entry.id === "pi-web-access") ? extensions.enabled : [...extensions.enabled, bundledPiWebAccessEntry()];
+    const preflight = inspectExtensionEntries(extensions.revisionId, entries, true);
+    const assembly = new RuntimeCapabilityAssembler().assemble({
+      hostSurface: { schemaVersion: 1, revision: createHash("sha256").update("doctor-local-v1").digest("hex"), kind: "ordinary", scope: "unscoped", visibleCapabilityIds: [], executableCapabilityIds: [], requestableCatalog: [], initialToolSchemaEstimatedTokens: 0 },
+      extensionRevision: extensions,
+      skills: undefined,
+      hostToolNames: [],
+      extensionTools: preflight.accepted.flatMap((entry) => (entry.toolNames ?? []).map((name) => ({
+        name,
+        source: entry.trust === "bundled-reviewed" ? "bundled_extension" as const : "approved_extension" as const,
+        sourceId: entry.id,
+        sourceRevision: entry.version
+      })))
+    });
+    const status = preflight.diagnostics.length === 0 ? "ready" : "attention";
+    return { status, message: `Pi 0.80.8; pi-web-access 0.17.0; pi-mcp-adapter 1.5.1; Extension revision ${extensions.revisionId}; ${preflight.accepted.length} admitted source(s); assembly ${assembly.revision.slice(0, 12)}; preflight executed no Extension code${preflight.diagnostics.length === 0 ? "." : `; ${preflight.diagnostics.map((item) => item.code).join(", ")}.`}` };
+  } catch (error) {
+    return { status: "attention", message: `Runtime capability preflight failed without executing integrations: ${error instanceof Error ? error.message.slice(0, 240) : "unknown local failure"}` };
+  }
+}
+
 function takeMcpActivationForTurn(scope: "project" | "unscoped", threadId: string): FrozenMcpActivation | undefined {
   for (const [serverId, activation] of mcpActivations) {
     if (activation.scope !== scope) continue;
-    if (activation.threadId !== undefined && activation.threadId !== threadId) continue;
+    if (activation.threadId !== threadId) continue;
     mcpActivations.delete(serverId);
     return {
       schemaVersion: 1,
@@ -541,8 +568,16 @@ async function resolveSubAgentCapability(input: SubAgentCapabilityExecutionConte
   const outputLocation = parentThread.scope === "project"
     ? (() => { const project = stateStore!.getProject(parentThread.projectId); return project === undefined ? undefined : join(project.path, "outputs"); })()
     : input.contextBoundary.outputRoot ?? parentThread.outputLocation;
+  const delegatedOutputWrite = input.request.capabilityId === "output.write_text"
+    && input.capabilitySet.includes("write_output")
+    && input.outputTarget !== undefined
+    && outputLocation !== undefined;
+  if (delegatedOutputWrite) {
+    const requestedPath = typeof input.request.arguments.path === "string" ? input.request.arguments.path : "";
+    if (resolve(outputLocation, requestedPath) !== resolve(input.outputTarget!)) return fail("SUB_AGENT_OUTPUT_TARGET_MISMATCH", "The delegated writer requested a path outside its explicitly authorized output target.");
+  }
   const decision = await capabilityGateway.request(request, {
-    accessMode: stateStore.getAccessMode(),
+    accessMode: delegatedOutputWrite ? "full" : stateStore.getAccessMode(),
     scope: input.contextBoundary.scope,
     stateVersion: parentThread.stateVersion,
     activeCapabilityIds,
@@ -804,6 +839,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const profileCount = stateStore.listModelProfiles().length;
         const preparation = stateStore.statePreparation;
         const recovery = preparation.mode === "read_only_recovery";
+        const runtimeCapabilityDoctor = runtimeCapabilityDoctorMessage();
         return {
           ...eventMetadata(command.correlationId),
           event: "app.bootstrap.completed",
@@ -821,7 +857,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
                 status: recovery ? "attention" : "ready",
                 message: `State ${preparation.storedVersion}; supported ${preparation.supportedVersion}; ${preparation.status}; rollback ${preparation.rollbackAvailable ? "available" : "unavailable"}.`
               },
-              bundledExtensions: { status: "ready", message: "Reviewed bundled Extension inventory loaded." },
+              bundledExtensions: runtimeCapabilityDoctor,
               scheduler: { status: "ready", message: `Bounded capacity ${EXECUTION_CAPACITY}; no integration resource was activated by Doctor.` },
               agentRuntime: { status: recovery ? "unavailable" : "ready", message: recovery ? "Agent Workers are disabled in Read-only Recovery." : "Project and Unscoped Worker supervision is available." },
               utilityRuntime: { status: recovery ? "unavailable" : "ready", message: recovery ? "Utility jobs are disabled in Read-only Recovery." : "Utility runtime is available for bounded local jobs." },
@@ -830,7 +866,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
               office: recovery ? { status: "attention", message: "Office Skills are unavailable in Read-only Recovery." } : officeSkillsDoctorMessage(),
               ocr: { status: "attention", message: "Local page recovery dependencies are checked only when configured." },
               mcp: { status: "ready", message: "Pinned MCP adapter is lazy; no server connection was opened." },
-              extensionRevision: { status: "ready", message: "Global Extension revision is dormant; no code was loaded by Doctor." },
+              extensionRevision: runtimeCapabilityDoctor,
               backup: { status: "ready", message: "Personal Cognition Backup is local and credential-free." }
             }
           }
@@ -1071,7 +1107,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
             toolSchemas: activation.toolSchemas,
             scope: command.payload.scope,
             reason: activation.reason,
-            ...(command.payload.threadId === undefined ? {} : { threadId: command.payload.threadId })
+            threadId: command.payload.threadId
           });
           emit(integrationJobEvent(command.correlationId, "mcp", { id: activation.activationId, kind: "mcp:activation", state: "completed", message: `MCP activation admitted ${activation.toolSchemas.length} tool schema(s); provenance is pinned to ${activation.schemaRevision}. It will be attached to the next matching Turn only.`, updatedAt: new Date().toISOString(), resultId: activation.activationId }));
           return integrationStateEvent(command.correlationId, "changed");
@@ -3179,6 +3215,15 @@ function processRuntimeToolObservation(
   workerEvent: Extract<WorkerEvent, { event: "runtime_tool.started" | "runtime_tool.completed" }>
 ): void {
   const requestId = `runtime:${workerEvent.toolCallId}`;
+  const runtime = {
+    sourceClass: workerEvent.source,
+    sourceId: workerEvent.sourceId,
+    sourceRevision: workerEvent.sourceRevision,
+    activationReason: workerEvent.toolName === "source_check" ? "capability_broker" : "task_visibility",
+    actionClass: "network_read" as const,
+    confirmationState: "not_required" as const,
+    ...(workerEvent.event === "runtime_tool.completed" ? { durationMs: workerEvent.durationMs, truncated: workerEvent.content.length >= 20_000 } : {})
+  };
   if (workerEvent.event === "runtime_tool.started") {
     const started: TrajectoryEvent = {
       ...trajectoryMetadata(context.correlationId, context.threadId, context.turnId, AGENT_ACTOR, AGENT_PROVENANCE),
@@ -3187,7 +3232,8 @@ function processRuntimeToolObservation(
         toolCallId: workerEvent.toolCallId,
         capabilityId: workerEvent.toolName,
         arguments: summarizeCapabilityArguments(workerEvent.arguments),
-        expectedStateVersion: context.expectedStateVersion
+        expectedStateVersion: context.expectedStateVersion,
+        runtime
       }
     };
     trajectoryStore!.append(started);
@@ -3201,7 +3247,8 @@ function processRuntimeToolObservation(
         requestId,
         capabilityId: workerEvent.toolName,
         status: "started",
-        content: `Runtime Extension '${workerEvent.toolName}' started.`
+        content: `Runtime Extension '${workerEvent.toolName}' started.`,
+        runtime
       }
     });
     return;
@@ -3224,7 +3271,8 @@ function processRuntimeToolObservation(
       toolCallId: workerEvent.toolCallId,
       capabilityId: workerEvent.toolName,
       summary: result.content,
-      artifactIds: []
+      artifactIds: [],
+      runtime
     }
   };
   trajectoryStore!.append(terminal);
@@ -3238,7 +3286,8 @@ function processRuntimeToolObservation(
       requestId,
       capabilityId: workerEvent.toolName,
       status: result.status,
-      content: result.content
+      content: result.content,
+      runtime
     }
   });
 }
@@ -3288,6 +3337,26 @@ async function processCapabilityRequest(
       : undefined;
     const scopeMatches = activation !== undefined
       && ((request.scope.kind === "project" && activation.scope === "project") || (request.scope.kind === "unscoped" && activation.scope === "unscoped"));
+    if (activation !== undefined && schema !== undefined && scopeMatches && mcpIntegration !== null && schema.actionClass !== "read" && stateStore!.getAccessMode() === "standard") {
+      mcpCapabilityRequests.set(request.requestId, { context, request, activation, schema });
+      emit({
+        ...eventMetadata(context.correlationId, context.threadId),
+        event: "capability.confirmation.required",
+        payload: {
+          threadId: context.threadId,
+          turnId: context.turnId,
+          requestId: request.requestId,
+          capabilityId: request.capabilityId,
+          decisionClass: "G3",
+          action: `Execute MCP ${schema.actionClass} action`,
+          target: `${activation.serverId}:${schema.name}`,
+          reason: "Standard Access requires scoped confirmation for a protected MCP action.",
+          expectedEffect: "The connected MCP server may change external or local state using the reviewed arguments.",
+          preview: JSON.stringify(summarizeCapabilityArguments(request.arguments))
+        }
+      });
+      return;
+    }
     const result = activation === undefined || mcpIntegration === null || schema === undefined || !scopeMatches
       ? { schemaVersion: 1 as const, requestId: request.requestId, status: "rejected" as const, code: "MCP_TOOL_INACTIVE", content: "The MCP tool is not active for this Turn." }
       : await mcpIntegration.execute({
@@ -3302,7 +3371,7 @@ async function processCapabilityRequest(
           accessMode: stateStore!.getAccessMode(),
           expectedSchemaRevision: activation.schemaRevision
         });
-    finalizeCapability(context, request, result, true);
+    finalizeCapability(context, request, result, true, mcpRuntimeActivity(activation, schema, "not_required", result));
     return;
   }
 
@@ -3329,7 +3398,45 @@ function parseMcpCapabilityId(capabilityId: string): { readonly serverId: string
   return serverId.length === 0 || toolName.length === 0 ? undefined : { serverId, toolName };
 }
 
+function mcpRuntimeActivity(activation: FrozenMcpActivation | undefined, schema: FrozenMcpActivation["toolSchemas"][number] | undefined, confirmationState: "not_required" | "required" | "approved" | "rejected", result?: CapabilityExecutionResult) {
+  if (activation === undefined || schema === undefined) return undefined;
+  return {
+    sourceClass: "mcp" as const,
+    sourceId: `${activation.serverId}:${schema.name}`,
+    sourceRevision: activation.schemaRevision,
+    activationReason: activation.reason,
+    actionClass: schema.actionClass === "read" ? "network_read" as const : schema.actionClass === "local_file_upload" ? "local_write" as const : "external_write" as const,
+    confirmationState,
+    truncated: result?.code === "MCP_RESULT_TRUNCATED"
+  };
+}
+
 async function resolveCapabilityConfirmation(correlationId: string, requestId: string, approved: boolean): Promise<HostEvent> {
+  const pendingMcp = mcpCapabilityRequests.get(requestId);
+  if (pendingMcp !== undefined) {
+    mcpCapabilityRequests.delete(requestId);
+    const { context, request, activation, schema } = pendingMcp;
+    if (!approved) return finalizeCapability(context, request, { schemaVersion: 1, requestId, status: "rejected", code: "USER_REJECTED", content: "The User rejected this MCP action." }, false, mcpRuntimeActivity(activation, schema, "rejected"));
+    const stillCurrent = context.mcpActivation?.activationId === activation.activationId
+      && context.mcpActivation.schemaRevision === activation.schemaRevision
+      && context.mcpActivation.toolSchemas.some((item) => item.name === schema.name && item.schemaHash === schema.schemaHash);
+    const result = !stillCurrent || mcpIntegration === null
+      ? { schemaVersion: 1 as const, requestId, status: "rejected" as const, code: "MCP_TOOL_INACTIVE", content: "The scoped MCP activation is no longer current." }
+      : await mcpIntegration.execute({
+          requestId,
+          activationId: activation.activationId,
+          serverId: activation.serverId,
+          toolName: schema.name,
+          arguments: request.arguments,
+          threadId: context.threadId,
+          turnId: context.turnId,
+          scope: activation.scope,
+          accessMode: stateStore!.getAccessMode(),
+          confirmed: true,
+          expectedSchemaRevision: activation.schemaRevision
+        });
+    return finalizeCapability(context, request, result, false, mcpRuntimeActivity(activation, schema, "approved", result));
+  }
   const pending = capabilityRequests.get(requestId);
   if (pending === undefined || capabilityGateway === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The scoped capability confirmation is no longer active.");
@@ -3342,7 +3449,8 @@ function finalizeCapability(
   context: TurnContext,
   request: CapabilityExecutionRequest,
   initialResult: CapabilityExecutionResult,
-  emitToRenderer: boolean
+  emitToRenderer: boolean,
+  runtime?: NonNullable<Extract<TrajectoryEvent, { event: "tool.completed" | "tool.failed" | "tool.unknown_outcome" }>["payload"]["runtime"]>
 ): HostEvent {
   let result = initialResult;
   if (result.retrieval !== undefined && context.reflectionRunId !== undefined && context.recallBodyBytes + result.retrieval.bodyBytes > 32_000) {
@@ -3410,7 +3518,8 @@ function finalizeCapability(
       capabilityId: request.capabilityId,
       summary: retrievalTrajectorySummary(result),
       artifactIds: result.artifact === undefined ? [] : [result.artifact.id],
-      ...(result.retrieval === undefined ? {} : { contextReference: result.retrieval.contextReference })
+      ...(result.retrieval === undefined ? {} : { contextReference: result.retrieval.contextReference }),
+      ...(runtime === undefined ? {} : { runtime })
     }
   };
   trajectoryStore!.append(terminal);
@@ -3440,7 +3549,8 @@ function finalizeCapability(
       capabilityId: request.capabilityId,
       status: result.status,
       content: result.content,
-      ...(result.artifact === undefined ? {} : { artifact: { id: result.artifact.id, mediaType: result.artifact.mediaType, destination: result.artifact.destination } })
+      ...(result.artifact === undefined ? {} : { artifact: { id: result.artifact.id, mediaType: result.artifact.mediaType, destination: result.artifact.destination } }),
+      ...(runtime === undefined ? {} : { runtime })
     }
   };
   if (emitToRenderer) emit(hostEvent);
@@ -3596,6 +3706,11 @@ function finishTurn(context: TurnContext): void {
     const result = capabilityGateway?.cancel(requestId);
     if (result !== undefined) resolveCapabilityInWorker(context, result);
     capabilityRequests.delete(requestId);
+  }
+  for (const [requestId, pending] of mcpCapabilityRequests) {
+    if (pending.context.turnId !== context.turnId) continue;
+    resolveCapabilityInWorker(context, { schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "The pending MCP confirmation expired with its owning Turn." });
+    mcpCapabilityRequests.delete(requestId);
   }
   inflight!.complete(context.turnId);
   turnExecution?.finish({ kind: "turn", context });

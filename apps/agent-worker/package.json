@@ -9,8 +9,14 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.8",
+    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-coding-agent": "0.80.8",
+    "@earendil-works/pi-tui": "0.80.8",
     "@vc-agent/contracts": "workspace:*",
-    "@vc-agent/pi-adapter": "workspace:*"
+    "@vc-agent/pi-adapter": "workspace:*",
+    "pi-web-access": "0.17.0",
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

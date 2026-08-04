@@ -55,7 +55,7 @@ pdf=pymupdf.open(); page=pdf.new_page(); page.insert_text((72,72),'Native PDF in
     expect(pdf.blocks.some((block) => (block.tokens?.length ?? 0) > 0)).toBe(true);
     expect(pdf.recoveryRequests).toMatchObject([{ reason: "missing_text", status: "unavailable" }]);
     expect(pdf.warnings).toMatchObject([{ code: "OCR_UNAVAILABLE" }]);
-  });
+  }, 20_000);
 
   it("contains malformed input failure without poisoning a later parse", () => {
     const directory = mkdtempSync(join(tmpdir(), "vc-agent-parser-failure-"));

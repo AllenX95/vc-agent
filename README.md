@@ -109,7 +109,7 @@ integrations/   # Office、MCP、Extension 等集成状态
 
 应用提供 **Standard Access** 和 **Full Access** 两种访问模式。Full Access 会减少后续工具确认，但不会跳过 Reflection、Dream、Memory 提交或 Thread 范围变更等产品级复核。保护用户数据仍需要依赖操作系统账户、设备和备份位置的安全设置。
 
-在 Standard Access 下，下载、ArXiv 本地归档和文件夹批量写入都会先展示限定的来源、目标和文件清单，得到用户许可后才执行；`project.command` 仍只用于只读检查，不负责运行 Python 下载脚本或写文件。
+在 Standard Access 下，下载、ArXiv 本地归档和文件夹批量写入都会先展示限定的来源、目标和文件清单，得到用户许可后才执行；项目文本检索复用受范围约束的 Pi `grep`/`find`/`read` 工具，不开放通用项目命令入口。
 
 ## 项目结构
 
