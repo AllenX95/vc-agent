@@ -34,7 +34,7 @@ const trajectoryEventBase = z.object({
   occurredAt: z.string().datetime()
 });
 const runtimeToolActivitySchema = z.object({
-  sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]),
+  sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "pi_extension", "mcp"]),
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   activationReason: z.string().min(1),

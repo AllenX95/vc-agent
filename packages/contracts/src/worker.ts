@@ -2,68 +2,37 @@ import { z } from "zod";
 import { contextBudgetTelemetrySchema, contextUsageSchema, IPC_SCHEMA_VERSION, providerFailureSchema, thinkingLevelSchema, usageSchema } from "./ipc.js";
 import { physicalContextHistoryItemSchema } from "./trajectory.js";
 import { capabilityExecutionRequestSchema, capabilityExecutionResultSchema, capabilitySurfaceSnapshotSchema } from "./capability.js";
-import { frozenMcpActivationSchema } from "./runtime-capability.js";
-
-const runtimeSkillDecisionSchema = z.object({
-  packageId: z.string().min(1),
-  revisionId: z.string().min(1),
-  reason: z.enum(["task_match", "explicit"]),
-  resources: z.array(z.string().min(1)),
-  capabilities: z.array(z.string().min(1))
-});
-
-const runtimeSkillInstructionSchema = z.object({
-  packageId: z.string().min(1),
-  revisionId: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().min(1),
-  filePath: z.string().min(1),
-  baseDir: z.string().min(1),
-  /** Compatibility field for replayed pre-progressive-disclosure snapshots. New Turns omit it. */
-  content: z.string().optional()
-});
-
-const runtimeSkillResourceSchema = z.object({
-  packageId: z.string().min(1),
-  relativePath: z.string().min(1),
-  content: z.string()
-});
-
-export const runtimeSkillSnapshotSchema = z.object({
-  schemaVersion: z.literal(1),
-  revisionId: z.string().min(1),
-  decisions: z.array(runtimeSkillDecisionSchema),
-  instructions: z.array(runtimeSkillInstructionSchema),
-  resources: z.array(runtimeSkillResourceSchema)
-});
-export type RuntimeSkillSnapshot = z.infer<typeof runtimeSkillSnapshotSchema>;
-
+/**
+ * Host-owned prompt/context metadata carried across the Worker seam.
+ *
+ * Pi resource discovery (Extensions, MCP, and Skills) is intentionally absent
+ * here. Those resources are loaded by the native Pi ResourceRuntime from
+ * `piResources`; the Host only supplies its own prompt contribution.
+ */
 export const runtimeResourceSnapshotSchema = z.object({
   schemaVersion: z.literal(1),
   revisionId: z.string().min(1),
   systemPrompt: z.string(),
-  appendSystemPrompt: z.array(z.string()),
-  /** Task-scoped, Host-owned Skill projection. Older replay commands may omit it. */
-  skills: runtimeSkillSnapshotSchema.optional()
+  appendSystemPrompt: z.array(z.string())
 });
 export type RuntimeResourceSnapshot = z.infer<typeof runtimeResourceSnapshotSchema>;
 
-export const extensionInventorySnapshotSchema = z.object({
-  schemaVersion: z.literal(1),
-  revisionId: z.string().min(1),
-  enabled: z.array(
-    z.object({
-      id: z.string().min(1),
-      version: z.string().min(1),
-      entryPath: z.string().min(1),
-      integrity: z.string().min(1),
-      trust: z.enum(["bundled-reviewed", "approved-trusted"]),
-      /** Non-executing admission inventory used for collision preflight. */
-      toolNames: z.array(z.string().min(1).max(200)).optional()
-    })
-  )
+/**
+ * Application-owned Pi resource roots for the native loading path.
+ *
+ * This is deliberately a path/configuration contract, not an admission or
+ * activation record.  The Worker passes the values to Pi's native
+ * DefaultResourceLoader; the legacy snapshots below remain optional
+ * compatibility inputs while the desktop sender is migrated.
+ */
+export const piResourcesSchema = z.object({
+  agentDir: z.string().min(1),
+  skillsRoot: z.string().min(1),
+  extensionPaths: z.array(z.string().min(1)).optional(),
+  mcpConfigPath: z.string().min(1).optional(),
+  projectResourcesTrusted: z.boolean().optional()
 });
-export type ExtensionInventorySnapshot = z.infer<typeof extensionInventorySnapshotSchema>;
+export type PiResources = z.infer<typeof piResourcesSchema>;
 
 const workerCommandBase = z.object({
   schemaVersion: z.literal(IPC_SCHEMA_VERSION),
@@ -89,8 +58,6 @@ const executeTurn = workerCommandBase.extend({
   contextBudget: contextBudgetTelemetrySchema.optional(),
   /** New surface contract; activeCapabilities remains for replay compatibility during migration. */
   capabilitySurface: capabilitySurfaceSnapshotSchema.optional(),
-  /** Frozen, task-owned MCP schemas. No MCP server metadata is implied when omitted. */
-  mcpActivation: frozenMcpActivationSchema.optional(),
   activeCapabilities: z.array(z.string().min(1)),
   expectedStateVersion: z.number().int().positive(),
   executionScope: z.discriminatedUnion("kind", [
@@ -107,7 +74,8 @@ const executeTurn = workerCommandBase.extend({
     maxOutputTokens: z.number().int().positive().optional()
   }),
   resources: runtimeResourceSnapshotSchema,
-  extensions: extensionInventorySnapshotSchema
+  /** Native Pi resource roots. Omitted by old/replay commands. */
+  piResources: piResourcesSchema.optional()
 });
 const stopTurn = workerCommandBase.extend({ command: z.literal("turn.stop") });
 const acknowledgeTrajectory = workerCommandBase.extend({
@@ -175,7 +143,7 @@ const runtimeToolStarted = workerEventBase.extend({
   event: z.literal("runtime_tool.started"),
   toolCallId: z.string().min(1),
   toolName: z.string().min(1),
-  source: z.enum(["bundled_extension", "approved_extension"]),
+  source: z.enum(["bundled_extension", "pi_extension"]),
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   arguments: z.record(z.string(), z.unknown())
@@ -184,7 +152,7 @@ const runtimeToolCompleted = workerEventBase.extend({
   event: z.literal("runtime_tool.completed"),
   toolCallId: z.string().min(1),
   toolName: z.string().min(1),
-  source: z.enum(["bundled_extension", "approved_extension"]),
+  source: z.enum(["bundled_extension", "pi_extension"]),
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   content: z.string().max(20_000),

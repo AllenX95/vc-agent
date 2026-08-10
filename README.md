@@ -24,7 +24,7 @@ VC Agent 是一个面向单人风险投资工作的本地优先桌面 Agent。�
 | 模型执行 | 基于 Pi SDK 的流式对话、Model Profile、Provider 切换、上下文预算、Thread Compaction、执行队列和可见失败状态。 |
 | 投资工作流 | 支持普通 VC 对话、公共资料研究、Investment Reflection、Investment Retrospective，以及显式授权的 Sub-Agent 工作。 |
 | 记忆与复盘 | Project Context、Project Memory、Long-term Memory、Memory Evolution 和 Dream 两阶段复盘；持久化写入需要单独的用户确认。 |
-| 可选集成 | Skills Directory、Office 工作流、MCP、Academic Research，以及本地 Page Recovery / OCR。外部运行时均通过显式配置和 Host 边界接入。 |
+| 可选集成 | Pi 原生 Extensions、`mcp.json`、隔离的 VC Agent Skills Directory、Office 工作流、Academic Research，以及本地 Page Recovery / OCR。Extensions 与 MCP 在 Agent Worker 内按 Pi 语义运行；产品持久状态仍由 Host 管理。 |
 | 本地可靠性 | SQLite 状态存储、Thread Trajectory、版本化迁移、恢复模式、个人认知备份和可检查的本地输出。 |
 
 ## 设计原则
@@ -101,11 +101,13 @@ Windows 也可以直接运行：
 state.db        # SQLite 应用状态与索引
 threads/        # Thread Trajectory
 memory/         # Long-term Memory、Project Memory、Dream 等
-skills/         # 用户导入和激活的 Skills
-integrations/   # Office、MCP、Extension 等集成状态
+pi-agent/       # App 专属 Pi 目录：Extensions、mcp.json、隔离的 Skills
+integrations/   # Office、OCR 等 Host 管理的受保护工作流状态
 ```
 
 可以通过 `VC_AGENT_USER_DATA_DIR` 指定其他用户数据目录。Project 文件、Context、Memory、Outputs 和解析产物保持为普通本地文件，便于检查、备份和恢复；Provider 凭据通过操作系统保护机制保存，应用状态只保存引用和非敏感元数据。
+
+Extensions 直接放入 `pi-agent/extensions/`，MCP server 写入 `pi-agent/mcp.json`，Skills 只从 `pi-agent/skills/` 读取；设置页提供打开目录或配置与 Reload。安装 Extension 或配置 MCP server 本身就是信任决定：它们作为 Agent Worker 中的受信代码或受信工具集合运行。Skills 不会从 Pi、Codex、Claude Code、Project 或其他 ambient 目录发现；导入动作会把完整 Skill 复制到专属目录，而不是保留到来源的链接。
 
 应用提供 **Standard Access** 和 **Full Access** 两种访问模式。Full Access 会减少后续工具确认，但不会跳过 Reflection、Dream、Memory 提交或 Thread 范围变更等产品级复核。保护用户数据仍需要依赖操作系统账户、设备和备份位置的安全设置。
 

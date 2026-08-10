@@ -12,5 +12,5 @@ export function resolveVcAgentUserDataRoot(environment: AppDataEnvironment, appD
 export function resolveVcAgentSkillsRoot(environment: AppDataEnvironment, appDataFallback: string): string {
   const explicit = environment.VC_AGENT_SKILLS_ROOT?.trim();
   if (explicit !== undefined && explicit !== "") return resolve(explicit);
-  return join(resolveVcAgentUserDataRoot(environment, appDataFallback), "skills");
+  return join(resolveVcAgentUserDataRoot(environment, appDataFallback), "pi-agent", "skills");
 }

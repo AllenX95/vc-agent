@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPiSession, type ExtensionInventorySnapshot, type RuntimeResourceSnapshot } from "@vc-agent/pi-adapter";
+import { createPiSession, type RuntimeResourceSnapshot } from "@vc-agent/pi-adapter";
 
 const temporaryDirectories: string[] = [];
 const resources: RuntimeResourceSnapshot = {
@@ -10,11 +10,6 @@ const resources: RuntimeResourceSnapshot = {
   revisionId: "custom-url-test",
   systemPrompt: "You are a test agent.",
   appendSystemPrompt: []
-};
-const extensions: ExtensionInventorySnapshot = {
-  schemaVersion: 1,
-  revisionId: "custom-url-test",
-  enabled: []
 };
 
 afterEach(() => {
@@ -31,7 +26,7 @@ describe("custom URL Pi providers", () => {
       contextHistory: [],
       profile: { provider: "https://gateway.example/anthropic", model: "custom-model", apiKey: "test-key" },
       resources,
-      extensions,
+      piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") },
       usePiWebAccess: false
     }, () => {});
 

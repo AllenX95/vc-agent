@@ -34,10 +34,9 @@ import {
   type ReflectionRun,
   projectReflectionWorkflow,
   type SystemPromptRevision,
-  type SkillCompatibilityReport,
-  type SkillInventoryItem,
   type IntegrationState,
   type IntegrationTaskContext,
+  type PiResourcesSettingsState,
   type SubAgentProjection,
   type SubAgentRunProjection,
   type SubAgentTaskDetailProjection,
@@ -74,13 +73,13 @@ import {
 } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import { useUiLanguage } from "./i18n";
+import { PiResourcesSettings } from "./PiResourcesSettings";
 import {
   applicationCommandSuggestions,
   applyComposerSuggestion,
   fileSuggestion,
   matchComposerSuggestions,
   profileSuggestion,
-  skillSuggestion,
   thinkingSuggestion,
   type ComposerSuggestion
 } from "./composer-suggestions";
@@ -92,7 +91,7 @@ const TASK_MODEL_TYPES: Array<{ id: TaskModelType; label: string }> = [
   { id: "ordinary_conversation", label: "Ordinary conversation" }, { id: "web_research", label: "Web research" },
   { id: "document_generation", label: "Document generation" }, { id: "dream", label: "Dream" },
   { id: "independent_evidence", label: "Independent evidence" }, { id: "memory_aware_reflection", label: "Memory-aware reflection" },
-  { id: "extension_audit", label: "Extension audit" }, { id: "visual_material_analysis", label: "Visual material analysis" },
+  { id: "visual_material_analysis", label: "Visual material analysis" },
   { id: "sub_agent_default", label: "Default Sub-Agent" }, { id: "sub_agent_researcher", label: "Sub-Agent researcher" },
   { id: "sub_agent_critic", label: "Sub-Agent critic" }, { id: "sub_agent_synthesizer", label: "Sub-Agent synthesizer" },
   { id: "sub_agent_writer", label: "Sub-Agent writer" }, { id: "sub_agent_custom", label: "Sub-Agent custom" }
@@ -177,10 +176,8 @@ export function App() {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [academicCredentials, setAcademicCredentials] = useState<AcademicCredentialStatus[]>([]);
   const [taskAssignments, setTaskAssignments] = useState<TaskModelAssignment[]>([]);
-  const [skillsRoot, setSkillsRoot] = useState<string | null>(null);
-  const [skillPackages, setSkillPackages] = useState<SkillInventoryItem[]>([]);
-  const [lastSkillReport, setLastSkillReport] = useState<SkillCompatibilityReport | null>(null);
   const [integrationState, setIntegrationState] = useState<IntegrationState | null>(null);
+  const [piResourcesState, setPiResourcesState] = useState<PiResourcesSettingsState | null>(null);
   const [subAgentProjections, setSubAgentProjections] = useState<Record<string, SubAgentProjection>>({});
   const [subAgentRunProjections, setSubAgentRunProjections] = useState<Record<string, SubAgentRunProjection>>({});
   const [subAgentTaskDetails, setSubAgentTaskDetails] = useState<Record<string, SubAgentTaskDetailProjection>>({});
@@ -255,13 +252,6 @@ export function App() {
   const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
   const composerCandidates: ComposerSuggestion[] = [
     ...applicationCommandSuggestions(),
-    ...skillPackages
-      .filter((item) => item.enabled && item.state === "active")
-      .map((item) => skillSuggestion({
-        packageId: item.packageId,
-        name: item.packageId,
-        description: [item.metadata.name, item.metadata.description].filter(Boolean).join(" · ") || undefined
-      })),
     ...profiles.map((profile) => profileSuggestion(profile)),
     ...(["off", "minimal", "low", "medium", "high", "xhigh"] as const).map(thinkingSuggestion),
     ...(activeThread?.scope === "project" ? (materialsByProject[activeThread.projectId] ?? [])
@@ -312,12 +302,8 @@ export function App() {
       case "access.mode.changed": setBootstrap((current) => current === null ? current : { ...current, accessMode: event.payload.mode }); break;
       case "profiles.listed": setProfiles(event.payload.profiles); break;
       case "academic.credentials.updated": setAcademicCredentials(event.payload.credentials); break;
-      case "skills.updated":
-        setSkillsRoot(event.payload.root);
-        setSkillPackages(event.payload.packages);
-        setLastSkillReport(event.payload.report ?? null);
-        break;
       case "integration.state.updated": setIntegrationState(event.payload.state); break;
+      case "pi.resources.updated": setPiResourcesState(event.payload.state); break;
       case "integration.job.updated": setIntegrationState((current) => current === null ? current : { ...current, runtime: { ...current.runtime, runningJobs: event.payload.job.state === "running" ? current.runtime.runningJobs + 1 : current.runtime.runningJobs, queuedJobs: event.payload.job.state === "queued" ? current.runtime.queuedJobs + 1 : current.runtime.queuedJobs }, ...(event.payload.workflow === "office" ? { office: { ...current.office, jobs: [...current.office.jobs.filter((job) => job.id !== event.payload.job.id), event.payload.job] } } : {}), ...(event.payload.workflow === "page_recovery" ? { pageRecovery: { ...current.pageRecovery, parses: [...current.pageRecovery.parses.filter((job) => job.id !== event.payload.job.id), event.payload.job] } } : {}) }); break;
       case "integration.diagnostic": setDiagnostic(localDiagnostic(`${event.payload.workflow}: ${event.payload.code} · ${event.payload.message}`)); break;
       case "sub_agent.runs.listed":
@@ -575,7 +561,7 @@ export function App() {
     void invoke(createBootstrapCommand());
     void invoke(createCommand({ command: "profile.list" }));
     void invoke(createCommand({ command: "academic.credentials.list" }));
-    void invoke(createCommand({ command: "skills.list" }));
+    void invoke(createCommand({ command: "pi.resources.load" }));
     void invoke(createCommand({ command: "integration.state.load" }));
     void invoke(createCommand({ command: "task_model_assignment.list" }));
     void invoke(createCommand({ command: "reflection.list", payload: {} }));
@@ -1016,7 +1002,7 @@ export function App() {
         <DiagnosticBanner event={diagnostic} />
         {!dreamNoticeDismissed && (dreamDueProposal !== null || pendingDreamReminder !== null) && <div className="dream-notice" role="status"><Moon size={17} /><div><strong>{pendingDreamReminder?.kind === "resumable_run" ? "Dream run can resume" : pendingDreamReminder?.kind === "carryover" ? "Dream has unresolved carryover" : "Dream review is due"}</strong><span>{pendingDreamReminder !== null ? `${pendingDreamReminder.affectedScopeCount} scope(s) · oldest ${new Date(pendingDreamReminder.oldestUnresolvedAt).toLocaleDateString()}` : `${dreamDueProposal?.candidateCount ?? 0} captured candidate(s) · ${dreamDueProposal?.eligibleSessionCount ?? 0} eligible exchange(s)`}</span></div><div>{pendingDreamReminder?.kind === "resumable_run" && pendingDreamReminder.batchId !== undefined ? <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "dream.resume", payload: { batchId: pendingDreamReminder.batchId! } }))}>Resume</button> : <button className="primary-button" type="button" onClick={openDreamLaunch}>Review</button>}<button type="button" onClick={deferDreamNotice}>Tomorrow</button><button type="button" onClick={() => setDreamNoticeDismissed(true)}>Dismiss</button></div></div>}
         {view === "settings" ? (
-          <SettingsView bootstrap={bootstrap} profiles={profiles} academicCredentials={academicCredentials} taskAssignments={taskAssignments} projects={projects} materialsByProject={materialsByProject} skillPackages={skillPackages} skillsRoot={skillsRoot} lastSkillReport={lastSkillReport} integrationState={integrationState} subAgentProjections={subAgentProjections} subAgentRunProjections={subAgentRunProjections} subAgentTaskDetails={subAgentTaskDetails} activeThreadId={activeThreadId} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} personalCognitionNotice={personalCognitionNotice} learningTelemetry={learningTelemetry} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
+          <SettingsView bootstrap={bootstrap} profiles={profiles} academicCredentials={academicCredentials} taskAssignments={taskAssignments} projects={projects} materialsByProject={materialsByProject} integrationState={integrationState} piResourcesState={piResourcesState} subAgentProjections={subAgentProjections} subAgentRunProjections={subAgentRunProjections} subAgentTaskDetails={subAgentTaskDetails} activeThreadId={activeThreadId} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} promptRevisions={promptRevisions} activePromptRevisionId={activePromptRevisionId} formOpen={profileFormOpen} setFormOpen={setProfileFormOpen} invoke={invoke} readOnly={readOnlyRecovery} recoveryExport={recoveryExport} personalCognitionNotice={personalCognitionNotice} learningTelemetry={learningTelemetry} longTermMemoryDocument={longTermMemoryDocument} longTermMemoryDraft={longTermMemoryDraft} preparedMemoryPatch={preparedMemoryPatch} memoryMaintenance={memoryMaintenance} dreamState={dreamState} openDreamLaunch={openDreamLaunch} onLongTermMemoryChange={(content) => { longTermMemoryDirty.current = true; setLongTermMemoryDraft(content); }} onLongTermMemoryRefresh={() => { longTermMemoryDirty.current = false; void invoke(createCommand({ command: "long_term_memory.refresh" })); }} />
         ) : activeThread === undefined ? (
           <div className="empty-workspace" data-testid="empty-workspace"><div className="empty-icon"><MessageSquare size={22} /></div><h1>No active thread</h1><p>Create or select a thread from the navigation.</p></div>
         ) : (
@@ -1192,24 +1178,6 @@ function staleOutcomeSummary(reasons: Array<{ dependency: { kind: string; target
   return `Relevant ${kinds.join(" and ")} ${reasons.some((item) => item.reason === "changed") ? "changed" : "became unavailable"}. Continue the Reflection before preparing a replacement.`;
 }
 
-function SkillsSettings({ packages, root, lastReport, invoke }: {
-  packages: SkillInventoryItem[];
-  root: string | null;
-  lastReport: SkillCompatibilityReport | null;
-  invoke(command: HostCommand): Promise<unknown>;
-}) {
-  const academicSkillIds = ["paper-technical-diligence", "founder-academic-diligence", "technical-claim-verification", "novelty-and-prior-art-map", "research-to-company-map", "arxiv-fulltext-reader"];
-  const activeAcademicSkillCount = academicSkillIds.filter((packageId) => packages.some((item) => item.packageId === packageId && item.enabled && item.state === "active")).length;
-  return <div className="settings-section skills-settings" data-testid="skills-settings">
-    <div className="settings-section-header"><div><h2>Skills Directory</h2><p>Complete packages are copied into an app-owned directory and remain disabled until explicit activation.</p></div><div className="form-actions"><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.academic.install" }))} disabled={activeAcademicSkillCount === academicSkillIds.length}>Install academic skills</button><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.import" }))}>Import Skill</button></div></div>
-    <dl><div><dt>Location</dt><dd title={root ?? undefined}>{root ?? "Not initialized"}</dd></div><div><dt>Packages</dt><dd>{packages.length}</dd></div><div><dt>Active</dt><dd>{packages.filter((item) => item.enabled && item.state === "active").length}</dd></div><div><dt>Academic research skills</dt><dd>{activeAcademicSkillCount}/{academicSkillIds.length}</dd></div></dl>
-    {packages.length === 0 ? <p className="empty-setting">No imported Skill packages</p> : <div className="profile-list">{packages.map((item) => <div className="profile-row" key={item.revisionId}>
-      <div><strong>{item.metadata.name ?? item.packageId}</strong><span>{item.packageId} · {item.compatibility} · {item.state}</span><span>{item.declaredDependencies.length === 0 ? "No declared dependencies" : item.declaredDependencies.join(", ")}</span>{item.findings.length > 0 && <span role="status">{item.findings.length} diagnostic(s)</span>}</div>
-      <div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "skills.inspect", payload: { revisionId: item.revisionId } }))}>Inspect</button>{item.enabled ? <button type="button" onClick={() => void invoke(createCommand({ command: "skills.disable", payload: { packageId: item.packageId } }))}>Disable</button> : <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "skills.activate", payload: { revisionId: item.revisionId } }))} disabled={item.compatibility !== "compatible" || !["awaiting_activation", "disabled", "invalidated"].includes(item.state)}>Activate</button>}</div>
-    </div>)}</div>}
-    {lastReport !== null && <details className="skill-report" open><summary>Latest compatibility report · {lastReport.status}</summary><span>{lastReport.files.length} file(s) · {lastReport.missingReferences.length} missing reference(s) · {lastReport.undeclaredExecutables.length} undeclared executable(s)</span>{lastReport.findings.map((finding, index) => <p key={`${finding.code}-${index}`}><strong>{finding.severity}</strong> {finding.message}</p>)}</details>}
-  </div>;
-}
 
 function DelegationSettings({ projections, runProjections, taskDetails, activeThread, activeProfile, invoke, readOnly }: { projections: Record<string, SubAgentProjection>; runProjections: Record<string, SubAgentRunProjection>; taskDetails: Record<string, SubAgentTaskDetailProjection>; activeThread: Thread | undefined; activeProfile: ModelProfile | undefined; invoke(command: HostCommand): Promise<unknown>; readOnly: boolean }) {
   const [objective, setObjective] = useState("Find independent evidence for the current bounded question.");
@@ -1265,39 +1233,34 @@ function DelegationSettings({ projections, runProjections, taskDetails, activeTh
   </div>;
 }
 
-function IntegrationsSettings({ state, invoke, readOnly, profiles, projects, materialsByProject, skillPackages, activeThread, activeProfile, integrationContext }: { state: IntegrationState | null; invoke(command: HostCommand): Promise<unknown>; readOnly: boolean; profiles: ModelProfile[]; projects: Project[]; materialsByProject: Record<string, MaterialInventoryItem[]>; skillPackages: SkillInventoryItem[]; activeThread: Thread | undefined; activeProfile: ModelProfile | undefined; integrationContext: IntegrationTaskContext }) {
+type IntegrationsSettingsProps = { state: IntegrationState | null; invoke(command: HostCommand): Promise<unknown>; readOnly: boolean; profiles: ModelProfile[]; projects: Project[]; materialsByProject: Record<string, MaterialInventoryItem[]>; activeThread: Thread | undefined; activeProfile: ModelProfile | undefined; integrationContext: IntegrationTaskContext };
+
+/**
+ * Office, Skill Creator, and Page Recovery remain protected product workflows.
+ * They are intentionally separate from the Pi-native resource settings above:
+ * none of the controls below register, activate, or authorize generic Skills,
+ * MCP servers, or Extensions.
+ */
+function PiWorkflowIntegrationsSettings({ state, invoke, readOnly, profiles, projects, materialsByProject, activeThread, activeProfile, integrationContext }: IntegrationsSettingsProps) {
   const project = activeThread?.scope === "project" ? projects.find((item) => item.id === activeThread.projectId) : undefined;
   const profile = activeProfile;
-  const [mcpName, setMcpName] = useState("");
   const [officeSourcePath, setOfficeSourcePath] = useState("");
   const [officeKind, setOfficeKind] = useState<"create" | "edit" | "review">("create");
   const [officeFormat, setOfficeFormat] = useState<"docx" | "pptx" | "xlsx" | "pdf">("docx");
   const [officeOutputName, setOfficeOutputName] = useState("");
-  const [officeSkillRevisionId, setOfficeSkillRevisionId] = useState("");
+  const [officeSkillName, setOfficeSkillName] = useState("docx");
   const [officeReplacementConfirmations, setOfficeReplacementConfirmations] = useState<Record<string, boolean>>({});
   const [skillPackageId, setSkillPackageId] = useState("");
   const [skillOperation, setSkillOperation] = useState<"create" | "update">("create");
-  const [skillTargetRevisionId, setSkillTargetRevisionId] = useState("");
+  const [skillTargetName, setSkillTargetName] = useState("");
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [skillObjective, setSkillObjective] = useState("");
   const [skillConstraints, setSkillConstraints] = useState("");
   const [skillDependencies, setSkillDependencies] = useState("");
-  const [mcpTransport, setMcpTransport] = useState<"stdio" | "http">("stdio");
-  const [mcpCommand, setMcpCommand] = useState("");
-  const [mcpArguments, setMcpArguments] = useState("");
-  const [mcpWorkingDirectory, setMcpWorkingDirectory] = useState("");
-  const [mcpEndpoint, setMcpEndpoint] = useState("");
-  const [mcpCredentialRef, setMcpCredentialRef] = useState("");
-  const [mcpToolArguments, setMcpToolArguments] = useState("{}");
-  const [mcpNotice, setMcpNotice] = useState<string | null>(null);
-  const activeOfficeSkills = skillPackages.filter((item) => item.enabled && item.state === "active" && item.compatibility === "compatible");
-  const activeSkill = activeOfficeSkills.find((item) => item.revisionId === officeSkillRevisionId);
-  const officeSource = officeSourcePath;
   const officeNeedsSource = officeKind !== "create";
   const material = project === undefined ? undefined : materialsByProject[project.id]?.find((item) => item.mediaType === "application/pdf");
   const officeMissing = missingIntegrationContext(integrationContext, ["projectId", "threadId", "turnId", "profileId"]);
-  const refresh = () => void invoke(createCommand({ command: "integration.state.load" }));
   const chooseOfficeSource = async () => {
     const result = await invoke(createCommand({ command: "office.source.choose", payload: { format: officeFormat } }));
     if (typeof result === "object" && result !== null && "event" in result && (result as { event?: unknown }).event === "office.source.selected") {
@@ -1306,7 +1269,7 @@ function IntegrationsSettings({ state, invoke, readOnly, profiles, projects, mat
     }
   };
   const prepareOffice = () => {
-    if (activeSkill === undefined || project === undefined || activeThread === undefined || profile === undefined || integrationContext.turnId === undefined || (officeNeedsSource && officeSource === "")) return;
+    if (officeSkillName.trim() === "" || project === undefined || activeThread === undefined || profile === undefined || integrationContext.turnId === undefined || (officeNeedsSource && officeSourcePath === "")) return;
     void invoke(createCommand({ command: "office.task.prepare", payload: {
       kind: officeKind,
       format: officeFormat,
@@ -1315,66 +1278,49 @@ function IntegrationsSettings({ state, invoke, readOnly, profiles, projects, mat
       threadId: activeThread.id,
       turnId: integrationContext.turnId,
       profile: { id: profile.id, provider: profile.provider, model: profile.model },
-      skillRevisionId: activeSkill.revisionId,
+      skillName: officeSkillName.trim(),
       outputDirectory: `${project.path}/outputs`,
       ...(officeOutputName.trim() === "" ? {} : { outputFileName: officeOutputName.trim() }),
-      ...(officeNeedsSource ? { sourcePath: officeSource, sourceReferences: ["settings:office-source"], renderPreview: true } : {}),
+      ...(officeNeedsSource ? { sourcePath: officeSourcePath, sourceReferences: ["settings:office-source"], renderPreview: true } : {}),
       explicitIntent: true
     } }));
   };
   const createDraft = () => {
-    if (skillPackageId.trim() === "" || skillName.trim() === "" || skillDescription.trim() === "" || skillObjective.trim() === "" || (skillOperation === "update" && skillTargetRevisionId === "")) return;
-    void invoke(createCommand({ command: "skill_creator.prepare", payload: { operation: skillOperation, explicitIntent: true, packageId: skillPackageId.trim(), ...(profile === undefined ? {} : { profileId: profile.id }), ...(skillOperation === "update" ? { targetRevisionId: skillTargetRevisionId } : {}), files: { "SKILL.md": `---\nname: ${skillName.trim()}\ndescription: ${skillDescription.trim()}\n---\n# ${skillName.trim()}\n\n## Objective\n${skillObjective.trim()}\n\n## Constraints\n${skillConstraints.trim() || "None specified."}\n`, "LICENSE": "User review required." }, ...(skillDependencies.trim() === "" ? {} : { dependencies: skillDependencies.split(",").map((item) => item.trim()).filter(Boolean) }) } }));
+    if (skillPackageId.trim() === "" || skillName.trim() === "" || skillDescription.trim() === "" || skillObjective.trim() === "" || (skillOperation === "update" && skillTargetName.trim() === "")) return;
+    void invoke(createCommand({ command: "skill_creator.prepare", payload: {
+      operation: skillOperation,
+      explicitIntent: true,
+      packageId: skillPackageId.trim(),
+      ...(profile === undefined ? {} : { profileId: profile.id }),
+      ...(skillOperation === "update" ? { targetSkillName: skillTargetName.trim() } : {}),
+      files: { "SKILL.md": `---\nname: ${skillName.trim()}\ndescription: ${skillDescription.trim()}\n---\n# ${skillName.trim()}\n\n## Objective\n${skillObjective.trim()}\n\n## Constraints\n${skillConstraints.trim() || "None specified."}\n`, "LICENSE": "User review required." },
+      ...(skillDependencies.trim() === "" ? {} : { dependencies: skillDependencies.split(",").map((item) => item.trim()).filter(Boolean) })
+    } }));
   };
-  const runParse = () => { if (project === undefined || material === undefined) return; void invoke(createCommand({ command: "page_recovery.run", payload: { materialId: material.id, projectId: project.id, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash } })); };
-  const saveMcp = () => {
-    const name = mcpName.trim();
-    if (name === "") return;
-    const args = mcpArguments.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean);
-    void invoke(createCommand({ command: "mcp.server.save", payload: { serverId: crypto.randomUUID(), name, transport: mcpTransport, ...(mcpTransport === "stdio" && mcpCommand.trim() === "" ? {} : mcpTransport === "stdio" ? { command: mcpCommand.trim(), ...(args.length === 0 ? {} : { args }) } : {}), ...(mcpWorkingDirectory.trim() === "" ? {} : { workingDirectory: mcpWorkingDirectory.trim() }), ...(mcpTransport === "http" && mcpEndpoint.trim() === "" ? {} : mcpTransport === "http" ? { endpoint: mcpEndpoint.trim() } : {}), ...(mcpCredentialRef.trim() === "" ? {} : { credentialRef: mcpCredentialRef.trim() }), enabled: true, allowedScopes: ["project", "unscoped"] } }));
-  };
-  const runMcpTool = async (serverId: string, toolName: string, accessMode: "standard" | "full", confirmed?: boolean) => {
-    const activation = state?.mcp.activeActivation;
-    if (activation === undefined || activation.serverId !== serverId) return;
-    if (integrationContext.threadId === undefined || integrationContext.turnId === undefined) {
-      setMcpNotice("Select a Thread with a parent Turn before executing an MCP tool.");
-      return;
-    }
-    let arguments_: Record<string, unknown> = {};
-    try {
-      const parsed: unknown = JSON.parse(mcpToolArguments);
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("MCP arguments must be a JSON object.");
-      arguments_ = parsed as Record<string, unknown>;
-    } catch (error) {
-      setMcpNotice(error instanceof Error ? error.message : "MCP arguments must be valid JSON.");
-      return;
-    }
-    const result = await invoke(createCommand({ command: "mcp.permission.resolve", payload: { activationId: activation.activationId, serverId, toolName, arguments: arguments_, threadId: integrationContext.threadId, turnId: integrationContext.turnId, scope: activation.scope, accessMode, ...(confirmed === undefined ? {} : { confirmed }), expectedSchemaRevision: activation.schemaRevision } }));
-    if (typeof result === "object" && result !== null && "event" in result && (result as { event?: unknown }).event === "integration.job.updated") setMcpNotice(((result as { payload?: { job?: { message?: string } } }).payload?.job?.message) ?? "MCP action completed.");
+  const runParse = () => {
+    if (project === undefined || material === undefined) return;
+    void invoke(createCommand({ command: "page_recovery.run", payload: { materialId: material.id, projectId: project.id, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash } }));
   };
   return <div className="settings-section integrations-settings" data-testid="integrations-settings">
-    <div className="settings-section-header"><div><span className="eyebrow">C1 / C2 integration surface</span><h2>Integrations</h2><p>Every integration is lazy, Host-authorized, restart-safe, and explicit about unavailable dependencies.</p></div><button className="compact-button" type="button" onClick={refresh}>Refresh status</button></div>
+    <div className="settings-section-header"><div><span className="eyebrow">Protected workflows</span><h2>Office, Skill Creator, and Page Recovery</h2><p>These workflows retain their product-specific validation and durable-commit controls. Generic Pi resources are managed above.</p></div><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "integration.state.load" }))}>Refresh status</button></div>
     <div className="integration-task-context" data-testid="integration-task-context" role="status"><strong>Selected task context</strong><span>Project: {project?.displayName ?? "Not selected"}</span><span>Thread: {activeThread?.title ?? "Not selected"}</span><span>Parent Turn: {integrationContext.turnId ?? "Not available"}</span><span>Profile: {profile === undefined ? "Not selected" : `${profile.provider} / ${profile.model}`}</span><span>Access: {integrationContext.accessMode}</span></div>
-    {state === null ? <p>Loading Integration state...</p> : <>
+    {state === null ? <p>Loading protected workflow state...</p> : <>
       <div className="integration-grid">
         <IntegrationCard title="Office Skills" status={state.office.status} message={state.office.status.message} className="office-integration-card">
-          <span>{state.office.activeSkillCount} active Skill package(s) · {state.office.supportedFormats.join(", ")}</span>
+          <span>{state.office.activeSkillCount} active Office Skill package(s) · {state.office.supportedFormats.join(", ")}</span>
           <span>{state.office.jobs.length} task record(s)</span>
           {officeMissing.length > 0 && <span role="status">Office actions require: {officeMissing.join(", ")}.</span>}
-          {activeOfficeSkills.length === 0 && <span role="status">Import and activate a compatible Office Skill revision.</span>}
+          <span>Enter the Skill name exactly as it appears in the dedicated VC Agent Skills Directory.</span>
           <div className="integration-form-grid">
             <label>Office operation<select aria-label="Office operation" value={officeKind} onChange={(event) => { const kind = event.target.value as typeof officeKind; setOfficeKind(kind); if (kind === "create") setOfficeSourcePath(""); }}><option value="create">Create</option><option value="edit">Edit</option><option value="review">Review</option></select></label>
             <label>Office format<select aria-label="Office format" value={officeFormat} onChange={(event) => { setOfficeFormat(event.target.value as typeof officeFormat); setOfficeSourcePath(""); }}><option value="docx">DOCX</option><option value="pptx">PPTX</option><option value="xlsx">XLSX</option><option value="pdf">PDF</option></select></label>
-            <label>Office Skill revision<select aria-label="Office Skill revision" value={officeSkillRevisionId} onChange={(event) => setOfficeSkillRevisionId(event.target.value)}><option value="">Select active revision</option>{activeOfficeSkills.map((item) => <option key={item.revisionId} value={item.revisionId}>{item.packageId} · {item.revisionId.slice(0, 8)}</option>)}</select></label>
+            <label>Office Skill name<input aria-label="Office Skill name" value={officeSkillName} onChange={(event) => setOfficeSkillName(event.target.value)} placeholder="docx" /></label>
             <label>Output name<input aria-label="Office output name" value={officeOutputName} onChange={(event) => setOfficeOutputName(event.target.value)} placeholder={officeKind === "create" ? "generated-output" : officeKind === "review" ? "reviewed-copy" : "edited-copy"} /></label>
           </div>
-          <span title={project === undefined ? undefined : `${project.path}/outputs`}>Output location: {project === undefined ? "Select a Project" : "Project outputs/"}</span>
-          {officeNeedsSource && <div className="integration-inline-row"><input aria-label="Office source path" value={officeSource} readOnly placeholder={`Choose an existing ${officeFormat.toUpperCase()} source`} /><button type="button" onClick={() => void chooseOfficeSource()} disabled={readOnly}>Choose source</button></div>}
-          <button className="primary-button" type="button" onClick={prepareOffice} disabled={readOnly || activeSkill === undefined || officeMissing.length > 0 || (officeNeedsSource && officeSource === "")}>Prepare Office task</button>
+          {officeNeedsSource && <div className="integration-inline-row"><input aria-label="Office source path" value={officeSourcePath} readOnly placeholder={`Choose an existing ${officeFormat.toUpperCase()} source`} /><button type="button" onClick={() => void chooseOfficeSource()}>Choose source</button></div>}
+          <button className="primary-button" type="button" onClick={prepareOffice} disabled={readOnly || officeSkillName.trim() === "" || officeMissing.length > 0 || (officeNeedsSource && officeSourcePath === "")}>Prepare Office task</button>
           {state.office.jobs.map((job) => <div className="integration-office-job" key={job.id}>
             <div className="integration-inline-row"><span>{job.kind} · {job.format ?? "unknown"} · {job.state}</span><span>{job.message}</span></div>
-            {job.skillRevisionId !== undefined && <span>Skill revision {job.skillRevisionId.slice(0, 8)} · provenance retained</span>}
-            {job.sourcePath !== undefined && <span title={job.sourcePath}>Source: {basenameForUi(job.sourcePath)}</span>}
             {job.stagedOutputPath !== undefined && <div className="integration-inline-row"><span title={job.stagedOutputPath}>Staged copy: {basenameForUi(job.stagedOutputPath)}</span>{job.resultId !== undefined && <button type="button" onClick={() => void invoke(createCommand({ command: "office.artifact.open", payload: { resultId: job.resultId!, artifact: "staged_output" } }))}>Open staged copy</button>}</div>}
             {job.changeSummaryPath !== undefined && <div className="integration-inline-row"><span>Change summary/diff ready</span>{job.resultId !== undefined && <button type="button" onClick={() => void invoke(createCommand({ command: "office.artifact.open", payload: { resultId: job.resultId!, artifact: "change_summary" } }))}>Open change summary</button>}</div>}
             {job.previewPaths !== undefined && <div className="integration-inline-row"><span>Render/preview: {job.previewPaths.length > 0 ? "ready" : "not produced"}</span>{job.resultId !== undefined && job.previewPaths.length > 0 && <button type="button" onClick={() => void invoke(createCommand({ command: "office.artifact.open", payload: { resultId: job.resultId!, artifact: "preview", previewIndex: 0 } }))}>Open preview</button>}</div>}
@@ -1389,15 +1335,26 @@ function IntegrationsSettings({ state, invoke, readOnly, profiles, projects, mat
             </div>
           </div>)}
         </IntegrationCard>
-        <IntegrationCard title="Skill Creator" status={state.skillCreator.status} message={state.skillCreator.status.message}><span>{state.skillCreator.drafts.length} draft(s)</span><span>Creator Profile: {profile === undefined ? "Not selected" : `${profile.provider} / ${profile.model}`}</span><div className="integration-form-grid"><select aria-label="Skill operation" value={skillOperation} onChange={(event) => setSkillOperation(event.target.value as "create" | "update")}><option value="create">Create</option><option value="update">Update</option></select>{skillOperation === "update" && <select aria-label="Skill target revision" value={skillTargetRevisionId} onChange={(event) => { const revisionId = event.target.value; setSkillTargetRevisionId(revisionId); const target = skillPackages.find((item) => item.revisionId === revisionId); if (target !== undefined) setSkillPackageId(target.packageId); }}><option value="">Select target Skill</option>{skillPackages.filter((item) => item.enabled && item.state === "active").map((item) => <option key={item.revisionId} value={item.revisionId}>{item.packageId} · {item.revisionId.slice(0, 8)}</option>)}</select>}<input aria-label="Skill package id" value={skillPackageId} onChange={(event) => setSkillPackageId(event.target.value)} placeholder="Package id" /><input aria-label="Skill name" value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="Name" /><input aria-label="Skill description" value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="Description" /><textarea aria-label="Skill objective" value={skillObjective} onChange={(event) => setSkillObjective(event.target.value)} placeholder="Objective" /><textarea aria-label="Skill constraints" value={skillConstraints} onChange={(event) => setSkillConstraints(event.target.value)} placeholder="Constraints" /><input aria-label="Skill dependencies" value={skillDependencies} onChange={(event) => setSkillDependencies(event.target.value)} placeholder="Dependencies, comma separated" /></div>{!readOnly && <button type="button" onClick={createDraft} disabled={profile === undefined || !skillPackageId.trim() || !skillName.trim() || !skillDescription.trim() || !skillObjective.trim() || (skillOperation === "update" && !skillTargetRevisionId)}>Create explicit draft</button>}{state.skillCreator.drafts.map((draft) => <div className="integration-inline-row" key={draft.draftId}><span>{draft.packageId} · {draft.operation} · {draft.state}</span>{draft.state === "draft_ready" && <button type="button" onClick={() => void invoke(createCommand({ command: "skill_creator.review", payload: { draftId: draft.draftId } }))}>Review</button>}{!readOnly && ["draft_ready", "reviewed"].includes(draft.state) && <button type="button" onClick={() => void invoke(createCommand({ command: "skill_creator.handoff", payload: { draftId: draft.draftId, confirmed: true, accessMode: integrationContext.accessMode } }))}>Hand off disabled</button>}</div>)}</IntegrationCard>
-        <IntegrationCard title="Page Recovery / OCR" status={state.pageRecovery.status} message={state.pageRecovery.status.message}><span>Native: {state.pageRecovery.availability.native.status} · Paddle: {state.pageRecovery.availability.paddle.status} · Ovis: {state.pageRecovery.availability.ovis.status}</span><span>Policy {state.pageRecovery.availability.policyRevision} · {state.pageRecovery.telemetry.lastStatus}</span><div className="integration-inline-row"><button type="button" onClick={() => void invoke(createCommand({ command: "page_recovery.inspect" }))}>Inspect availability</button><button type="button" onClick={runParse} disabled={readOnly || project === undefined || material === undefined}>Run Page Recovery</button></div>{state.pageRecovery.lastParse !== undefined && <div className="integration-page-results" role="status"><strong>Last Parse · per-page retained result</strong>{state.pageRecovery.lastParse.pages.map((page) => <span key={page.pageNumber}>Page {page.pageNumber}: {page.selectedStage}{page.retainedEarlier ? " · retained earlier result" : ""}{page.warningCodes.length === 0 ? "" : ` · ${page.warningCodes.join(", ")}`}</span>)}</div>}{state.pageRecovery.parses.map((job) => <div className="integration-inline-row" key={job.id}><span>{job.kind} · {job.state} · {job.message}</span>{job.state === "running" && <button type="button" onClick={() => void invoke(createCommand({ command: "page_recovery.cancel", payload: { parseId: job.id } }))}>Cancel Parse</button>}</div>)}</IntegrationCard>
-        <IntegrationCard title="Connected Tools / MCP" status={state.mcp.status} message={state.mcp.status.message}><span>{state.mcp.servers.length} configured server(s) · {state.mcp.connectedServers} connected</span><span>{state.mcp.adapterVersion} · {state.mcp.activeTools} active tool(s)</span><div className="integration-form-grid"><input aria-label="MCP config identifier" value={mcpName} onChange={(event) => setMcpName(event.target.value)} placeholder="Server name" /><select aria-label="MCP transport" value={mcpTransport} onChange={(event) => setMcpTransport(event.target.value as "stdio" | "http")}><option value="stdio">stdio</option><option value="http">HTTP</option></select>{mcpTransport === "stdio" ? <><input aria-label="MCP command" value={mcpCommand} onChange={(event) => setMcpCommand(event.target.value)} placeholder="Command" /><textarea aria-label="MCP arguments" value={mcpArguments} onChange={(event) => setMcpArguments(event.target.value)} placeholder="One argument per line" /><input aria-label="MCP working directory" value={mcpWorkingDirectory} onChange={(event) => setMcpWorkingDirectory(event.target.value)} placeholder="Working directory" /></> : <input aria-label="MCP endpoint" value={mcpEndpoint} onChange={(event) => setMcpEndpoint(event.target.value)} placeholder="HTTPS endpoint" />}<input aria-label="MCP credential reference" value={mcpCredentialRef} onChange={(event) => setMcpCredentialRef(event.target.value)} placeholder="Optional protected credential ref" /><button type="button" onClick={saveMcp} disabled={readOnly || !mcpName.trim() || (mcpTransport === "stdio" ? !mcpCommand.trim() : !mcpEndpoint.trim())}>Save config</button></div><label>MCP tool arguments (JSON)<textarea aria-label="MCP tool arguments" value={mcpToolArguments} onChange={(event) => setMcpToolArguments(event.target.value)} /></label><button type="button" onClick={() => void invoke(createCommand({ command: "mcp.server.list" }))}>Load servers</button>{state.mcp.activeActivation !== undefined && <span role="status">Task activation {state.mcp.activeActivation.schemaRevision} · {state.mcp.activeActivation.toolIds.join(", ") || "no tools"} · scope {state.mcp.activeActivation.scope}</span>}{mcpNotice !== null && <span role="status">{mcpNotice}</span>}{state.mcp.servers.map((server) => <div className="integration-mcp-server" key={server.serverId}><div className="integration-inline-row"><span>{server.name} · {server.connectionStatus} · schemas {server.schemaRevision}</span>{!readOnly && <><button type="button" onClick={() => void invoke(createCommand({ command: "mcp.server.test", payload: { serverId: server.serverId } }))}>Test Connection</button>{server.connectionStatus === "disconnected" && <button type="button" disabled={activeThread === undefined} onClick={() => void invoke(createCommand({ command: "mcp.activate", payload: { serverId: server.serverId, toolIds: [], scope: activeThread?.scope ?? "project", threadId: activeThread!.id } }))}>Activate</button>}{server.connectionStatus === "connected" && <button type="button" onClick={() => void invoke(createCommand({ command: "mcp.disconnect", payload: { serverId: server.serverId } }))}>Disconnect</button>}</>}</div>{server.toolSchemas.length === 0 ? <span>No cached tool schemas. Test Connection to discover them.</span> : <div className="integration-tool-list">{server.toolSchemas.map((schema) => <div className="integration-inline-row" key={`${server.serverId}:${schema.name}`}><span title={schema.description}>{schema.name} · {schema.actionClass} · {schema.inputBytes}/{schema.outputBytes} bytes · {schema.allowedScopes.join(", ")}</span>{state.mcp.activeActivation?.serverId === server.serverId && state.mcp.activeActivation.toolIds.includes(schema.name) && <button type="button" onClick={() => void runMcpTool(server.serverId, schema.name, integrationContext.accessMode, schema.actionClass === "read" ? undefined : true)}>{schema.actionClass === "read" ? "Run read" : "Confirm action"}</button>}</div>)}</div>}</div>)}</IntegrationCard>
-        <IntegrationCard title="Extension Admission" status={state.extensions.status} message={state.extensions.status.message}><span>{state.extensions.stagedCount} staged · {state.extensions.approvedCount} approved · {state.extensions.enabledCount} enabled</span><span>Revision {state.extensions.effectiveRevisionId.slice(0, 12)}</span>{!readOnly && <button type="button" onClick={() => void invoke(createCommand({ command: "extension.stage" }))}>Stage Extension</button>}{state.extensions.staged.map((item) => <div className="integration-inline-row" key={item.stagedRevisionId}><span>{item.name || item.extensionId} · {item.state}</span><button type="button" onClick={() => void invoke(createCommand({ command: "extension.inspect", payload: { stagedRevisionId: item.stagedRevisionId } }))}>Inspect</button></div>)}{state.extensions.reports.map((report) => <div className="integration-inline-row" key={report.reportId}><span>Inspection · {report.status}</span>{!readOnly && report.status === "reviewable" && <><button type="button" disabled={profile === undefined} onClick={() => void invoke(createCommand({ command: "extension.audit", payload: { stagedRevisionId: report.stagedRevisionId, ...(profile === undefined ? {} : { profileId: profile.id }) } }))}>Audit</button><button type="button" onClick={() => void invoke(createCommand({ command: "extension.approve", payload: { stagedRevisionId: report.stagedRevisionId, reportId: report.reportId, expectedArtifactHash: report.artifactHash, acceptedFindingIds: [], userConfirmed: true } }))}>Approve</button></>}</div>)}{state.extensions.approved.map((item) => <div className="integration-inline-row" key={item.approvedRevisionId}><span>{item.extensionId} · {item.enabled ? "enabled" : item.invalidated ? "invalidated" : "approved / disabled"}</span>{!readOnly && !item.enabled && !item.invalidated && <button type="button" onClick={() => void invoke(createCommand({ command: "extension.revision.prepare", payload: { action: "enable", extensionId: item.extensionId, approvedRevisionId: item.approvedRevisionId } }))}>Prepare enable</button>}{!readOnly && item.enabled && <button type="button" onClick={() => void invoke(createCommand({ command: "extension.rollback", payload: { approvedRevisionId: item.approvedRevisionId } }))}>Rollback</button>}</div>)}{state.extensions.pendingRevisionId !== undefined && !readOnly && <button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "extension.revision.activate", payload: { revisionId: state.extensions.pendingRevisionId!, mode: "idle" } }))}>Activate pending revision</button>}</IntegrationCard>
+        <IntegrationCard title="Skill Creator" status={state.skillCreator.status} message={state.skillCreator.status.message}>
+          <span>{state.skillCreator.drafts.length} draft(s)</span><span>Creator Profile: {profile === undefined ? "Not selected" : `${profile.provider} / ${profile.model}`}</span>
+          <div className="integration-form-grid"><select aria-label="Skill operation" value={skillOperation} onChange={(event) => setSkillOperation(event.target.value as typeof skillOperation)}><option value="create">Create</option><option value="update">Update</option></select>{skillOperation === "update" && <input aria-label="Skill target name" value={skillTargetName} onChange={(event) => setSkillTargetName(event.target.value)} placeholder="Existing Skill name" />}<input aria-label="Skill package id" value={skillPackageId} onChange={(event) => setSkillPackageId(event.target.value)} placeholder="Package id" /><input aria-label="Skill name" value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="Name" /><input aria-label="Skill description" value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="Description" /><textarea aria-label="Skill objective" value={skillObjective} onChange={(event) => setSkillObjective(event.target.value)} placeholder="Objective" /><textarea aria-label="Skill constraints" value={skillConstraints} onChange={(event) => setSkillConstraints(event.target.value)} placeholder="Constraints" /><input aria-label="Skill dependencies" value={skillDependencies} onChange={(event) => setSkillDependencies(event.target.value)} placeholder="Dependencies, comma separated" /></div>
+          {!readOnly && <button type="button" onClick={createDraft} disabled={profile === undefined || !skillPackageId.trim() || !skillName.trim() || !skillDescription.trim() || !skillObjective.trim() || (skillOperation === "update" && !skillTargetName.trim())}>Create explicit draft</button>}
+          {state.skillCreator.drafts.map((draft) => <div className="integration-inline-row" key={draft.draftId}><span>{draft.packageId} · {draft.operation} · {draft.state}</span>{draft.state === "draft_ready" && <button type="button" onClick={() => void invoke(createCommand({ command: "skill_creator.review", payload: { draftId: draft.draftId } }))}>Review</button>}{!readOnly && ["draft_ready", "reviewed"].includes(draft.state) && <button type="button" onClick={() => void invoke(createCommand({ command: "skill_creator.handoff", payload: { draftId: draft.draftId, confirmed: true, accessMode: integrationContext.accessMode } }))}>Hand off to protected runner</button>}</div>)}
+        </IntegrationCard>
+        <IntegrationCard title="Page Recovery / OCR" status={state.pageRecovery.status} message={state.pageRecovery.status.message}>
+          <span>Native: {state.pageRecovery.availability.native.status} · Paddle: {state.pageRecovery.availability.paddle.status} · Ovis: {state.pageRecovery.availability.ovis.status}</span><span>Policy {state.pageRecovery.availability.policyRevision} · {state.pageRecovery.telemetry.lastStatus}</span>
+          <div className="integration-inline-row"><button type="button" onClick={() => void invoke(createCommand({ command: "page_recovery.inspect" }))}>Inspect availability</button><button type="button" onClick={runParse} disabled={readOnly || project === undefined || material === undefined}>Run Page Recovery</button></div>
+          {state.pageRecovery.lastParse !== undefined && <div className="integration-page-results" role="status"><strong>Last Parse · per-page retained result</strong>{state.pageRecovery.lastParse.pages.map((page) => <span key={page.pageNumber}>Page {page.pageNumber}: {page.selectedStage}{page.retainedEarlier ? " · retained earlier result" : ""}{page.warningCodes.length === 0 ? "" : ` · ${page.warningCodes.join(", ")}`}</span>)}</div>}
+          {state.pageRecovery.parses.map((job) => <div className="integration-inline-row" key={job.id}><span>{job.kind} · {job.state} · {job.message}</span>{job.state === "running" && <button type="button" onClick={() => void invoke(createCommand({ command: "page_recovery.cancel", payload: { parseId: job.id } }))}>Cancel Parse</button>}</div>)}
+        </IntegrationCard>
       </div>
-      {state.runtime.runningJobs > 0 && <p className="integration-runtime-status" role="status">{state.runtime.runningJobs} integration job(s) active · {state.runtime.queuedJobs} queued · {state.runtime.failures} failure(s) retained.</p>}
-      <details className="integration-job-list"><summary>Recent workflow states</summary>{[...state.office.jobs, ...state.pageRecovery.parses].length === 0 ? <p className="empty-setting">No integration jobs have run.</p> : [...state.office.jobs, ...state.pageRecovery.parses].map((job) => <div className="profile-row" key={job.id}><div><strong>{job.kind}</strong><span>{job.state} · {job.message}</span></div><span>{new Date(job.updatedAt).toLocaleString()}</span></div>)}</details>
+      {state.runtime.runningJobs > 0 && <p className="integration-runtime-status" role="status">{state.runtime.runningJobs} protected workflow job(s) active · {state.runtime.queuedJobs} queued · {state.runtime.failures} failure(s) retained.</p>}
     </>}
   </div>;
+}
+
+function IntegrationsSettings({ state, invoke, readOnly, profiles, projects, materialsByProject, activeThread, activeProfile, integrationContext }: IntegrationsSettingsProps) {
+  return <PiWorkflowIntegrationsSettings state={state} invoke={invoke} readOnly={readOnly} profiles={profiles} projects={projects} materialsByProject={materialsByProject} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} />;
 }
 
 function basenameForUi(path: string): string {
@@ -1448,17 +1405,15 @@ function ProjectMemoryPanel({ document, draft, onChange, onReload, onSave }: {
   </div>;
 }
 
-function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignments, projects, materialsByProject, skillPackages, skillsRoot, lastSkillReport, integrationState, subAgentProjections, subAgentRunProjections, subAgentTaskDetails, activeThreadId, activeThread, activeProfile, integrationContext, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, personalCognitionNotice, learningTelemetry, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
+function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignments, projects, materialsByProject, integrationState, piResourcesState, subAgentProjections, subAgentRunProjections, subAgentTaskDetails, activeThreadId, activeThread, activeProfile, integrationContext, promptRevisions, activePromptRevisionId, formOpen, setFormOpen, invoke, readOnly, recoveryExport, personalCognitionNotice, learningTelemetry, longTermMemoryDocument, longTermMemoryDraft, preparedMemoryPatch, memoryMaintenance, dreamState, openDreamLaunch, onLongTermMemoryChange, onLongTermMemoryRefresh }: {
   bootstrap: BootstrapState | null;
   profiles: ModelProfile[];
   academicCredentials: AcademicCredentialStatus[];
   taskAssignments: TaskModelAssignment[];
   projects: Project[];
   materialsByProject: Record<string, MaterialInventoryItem[]>;
-  skillPackages: SkillInventoryItem[];
-  skillsRoot: string | null;
-  lastSkillReport: SkillCompatibilityReport | null;
   integrationState: IntegrationState | null;
+  piResourcesState: PiResourcesSettingsState | null;
   subAgentProjections: Record<string, SubAgentProjection>;
   subAgentRunProjections: Record<string, SubAgentRunProjection>;
   subAgentTaskDetails: Record<string, SubAgentTaskDetailProjection>;
@@ -1577,7 +1532,20 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>
       <div className="settings-section personal-cognition-settings"><div className="settings-section-header"><div><h2>Personal Cognition Backup</h2><p>Portable, checksummed cognition only. Projects, workflow state, trajectories, and credentials are excluded.</p></div></div><div className="form-actions"><button type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.restore" }))}>Restore backup</button><button className="primary-button" type="button" onClick={() => void invoke(createCommand({ command: "personal_cognition.backup.create" }))}>Create backup</button></div>{personalCognitionNotice && <span role="status" title={personalCognitionNotice}>{personalCognitionNotice}</span>}</div>
-      <SkillsSettings packages={skillPackages} root={skillsRoot} lastReport={lastSkillReport} invoke={invoke} />
+      {piResourcesState === null ? <div className="settings-section pi-resources-settings" data-testid="pi-resources-settings"><p>Loading Pi-native resources...</p></div> : <PiResourcesSettings
+        state={piResourcesState}
+        disabled={readOnly}
+        actions={{
+          onOpenExtensionsFolder: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "extensions_folder" } })); },
+          onOpenMcpConfig: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "mcp_config" } })); },
+          onOpenSkillsFolder: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "skills_folder" } })); },
+          onImportSkill: async () => { await invoke(createCommand({ command: "pi.resources.import_skill" })); },
+          onReload: async () => { await invoke(createCommand({ command: "pi.resources.reload" })); },
+          onSetProjectResourcesTrusted: async (trusted) => {
+            await invoke(createCommand({ command: "pi.resources.project_trust.set", payload: { trusted } }));
+          }
+        }}
+      />}
       <div className="settings-section academic-credential-settings">
         <div className="settings-section-header"><div><h2>Academic Research Sources</h2><p>Credentials are encrypted by Windows and are never exposed back to the interface. arXiv does not require a credential.</p></div></div>
         <div className="academic-credential-list">
@@ -1612,7 +1580,7 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
       <PromptSettings revisions={promptRevisions} activeRevisionId={activePromptRevisionId} invoke={invoke} />
       <div className="settings-section"><h2>Access Mode</h2><div className="access-mode-control" role="group" aria-label="Access Mode"><button type="button" className={bootstrap?.accessMode === "standard" ? "active" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "standard" } }))}>Standard</button><button type="button" className={bootstrap?.accessMode === "full" ? "active full" : ""} onClick={() => void invoke(createCommand({ command: "access.mode.set", payload: { mode: "full" } }))}>Full Access</button></div></div>
       </fieldset>
-       <IntegrationsSettings state={integrationState} invoke={invoke} readOnly={readOnly} profiles={profiles} projects={projects} materialsByProject={materialsByProject} skillPackages={skillPackages} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} />
+       <IntegrationsSettings state={integrationState} invoke={invoke} readOnly={readOnly} profiles={profiles} projects={projects} materialsByProject={materialsByProject} activeThread={activeThread} activeProfile={activeProfile} integrationContext={integrationContext} />
       <DelegationSettings projections={subAgentProjections} runProjections={subAgentRunProjections} taskDetails={subAgentTaskDetails} activeThread={activeThread} activeProfile={activeProfile} invoke={invoke} readOnly={readOnly} />
       <div className="settings-section"><h2>Local state</h2><dl><div><dt>Application version</dt><dd>{bootstrap?.applicationVersion ?? "Loading"}</dd></div><div><dt>Storage mode</dt><dd>{bootstrap?.storageMode ?? "Loading"}</dd></div><div><dt>State schema</dt><dd>{bootstrap?.stateSchemaVersion ?? "Loading"}</dd></div><div><dt>Supported schema</dt><dd>{bootstrap?.migration.supportedVersion ?? "Loading"}</dd></div><div><dt>Migration status</dt><dd>{bootstrap?.migration.status ?? "Loading"}</dd></div><div><dt>Rollback</dt><dd>{bootstrap?.migration.rollbackAvailable ? "Available" : "Unavailable"}</dd></div><div><dt>Projects</dt><dd>{bootstrap?.entityCounts.projects ?? 0}</dd></div><div><dt>Threads</dt><dd>{bootstrap?.entityCounts.threads ?? 0}</dd></div></dl></div>
       <div className="settings-section"><h2>Runtime</h2><dl><div><dt>Agent workers</dt><dd>{bootstrap?.runtimeActivity.agentWorkersStarted ?? 0}</dd></div><div><dt>Pi sessions</dt><dd>{bootstrap?.runtimeActivity.piSessionsStarted ?? 0}</dd></div><div><dt>Provider requests</dt><dd>{bootstrap?.runtimeActivity.providerRequests ?? 0}</dd></div><div><dt>Execution capacity</dt><dd>{bootstrap === null ? "-" : `${bootstrap.executionScheduler.runningCount} / ${bootstrap.executionScheduler.capacity}`}</dd></div><div><dt>Queued / drafts</dt><dd>{bootstrap === null ? "-" : `${bootstrap.executionScheduler.queuedCount} / ${bootstrap.executionScheduler.draftCount}`}</dd></div><div><dt>Average queue delay</dt><dd>{bootstrap?.executionScheduler.averageQueueDelayMs ?? 0} ms</dd></div><div><dt>Longest running</dt><dd>{bootstrap?.executionScheduler.longestRunningMs ?? 0} ms</dd></div><div><dt>Execution failures</dt><dd>{bootstrap?.executionScheduler.failureCount ?? 0}</dd></div></dl></div>

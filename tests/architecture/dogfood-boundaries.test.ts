@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CapabilityRegistry, TextOutputStore, createTextOutputCapability } from "@vc-agent/capabilities";
 import { BASELINE_PARSER_ADAPTERS, ProjectOutputRegistry, getParserAdapter } from "@vc-agent/host-services";
-import { SnapshotResourceLoader } from "@vc-agent/pi-adapter";
+import { PiResourceRuntime, resolveBundledPiWebAccessPath } from "@vc-agent/pi-adapter";
 
 const temporaryDirectories: string[] = [];
 const root = resolve(import.meta.dirname, "../..");
@@ -18,14 +18,16 @@ describe("Dogfood adapter boundaries", () => {
   it("runs fixture resources, capabilities, parsers, and outputs through their public interfaces", async () => {
     const project = mkdtempSync(join(tmpdir(), "vc-agent-g1-boundaries-"));
     temporaryDirectories.push(project);
-    const loader = new SnapshotResourceLoader({
+    const loader = new PiResourceRuntime({
       cwd: project,
-      resources: { schemaVersion: 1, revisionId: "fixture-resources", systemPrompt: "Fixture VC prompt", appendSystemPrompt: [] },
-      extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] }
+      agentDir: join(project, "pi-agent"),
+      skillsRoot: join(project, "pi-agent", "skills"),
+      systemPrompt: "Fixture VC prompt",
+      appendSystemPrompt: []
     });
-    await loader.reload();
-    expect(loader.snapshot.resources.systemPrompt).toBe("Fixture VC prompt");
-    expect(loader.snapshot.extensions.enabled).toEqual([]);
+    const resources = await loader.reload();
+    expect(resources.systemPrompt).toBe("Fixture VC prompt");
+    expect(resources.extensions.extensions).toEqual([]);
 
     const capabilities = new CapabilityRegistry();
     capabilities.register(createTextOutputCapability(new TextOutputStore()));
@@ -52,12 +54,13 @@ describe("Dogfood adapter boundaries", () => {
     expect(supervisor).toContain("export class AgentWorkerSupervisor");
     expect(supervisor).toContain("workerEventSchema.safeParse");
     const adapter = readFileSync(join(root, "packages/pi-adapter/src/pi-session.ts"), "utf8");
-    expect(adapter).toContain("enableAnalytics: false");
-    expect(adapter).toContain("enableInstallTelemetry: false");
+    const runtime = readFileSync(join(root, "packages/pi-adapter/src/pi-resource-runtime.ts"), "utf8");
+    expect(runtime).toContain("DefaultResourceLoader");
+    expect(runtime).toContain("SettingsManager");
     // The composition root is expected to import later-stage workflows. The
     // reusable Worker supervisor and Pi adapter themselves must remain free of
     // those feature dependencies.
-    const dogfoodSources = [supervisor, adapter].join("\n");
+    const dogfoodSources = [supervisor, adapter, runtime].join("\n");
     expect(dogfoodSources).not.toMatch(/from ["'][^"']*(dream|reflection|long-term-memory|sub-agent|office|ocr|mcp|extension-audit)/iu);
   });
 
@@ -67,18 +70,20 @@ describe("Dogfood adapter boundaries", () => {
 
     const project = mkdtempSync(join(tmpdir(), "vc-agent-pi-web-routing-"));
     temporaryDirectories.push(project);
-    const loader = new SnapshotResourceLoader({
+    const webExtension = resolveBundledPiWebAccessPath();
+    expect(webExtension).toBeDefined();
+    const loader = new PiResourceRuntime({
       cwd: project,
-      resources: { schemaVersion: 1, revisionId: "pi-web-routing", systemPrompt: "Fixture VC prompt", appendSystemPrompt: [] },
-      extensions: { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] },
-      loadBundledExtensions: true
+      agentDir: join(project, "pi-agent"),
+      skillsRoot: join(project, "pi-agent", "skills"),
+      systemPrompt: "Fixture VC prompt",
+      extensionPaths: [webExtension!]
     });
-    await loader.reload();
+    const resources = await loader.reload();
 
-    const bundledEntry = loader.snapshot.extensions.enabled.find((item) => item.id === "pi-web-access");
-    const extension = loader.getExtensions().extensions.find((item) => item.path === bundledEntry?.entryPath);
+    const extension = resources.extensions.extensions.find((item) => item.resolvedPath === webExtension || item.path === webExtension);
     expect(extension).toBeDefined();
-    expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining(["web_search", "web_fetch", "web_fetch_content"]));
+    expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining(["web_search", "source_check", "fetch_content", "get_search_content"]));
   });
 
   it("keeps fixture adapters behind test-only entry points", () => {

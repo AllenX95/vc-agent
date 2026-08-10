@@ -66,19 +66,33 @@ export {
   type WorkerOwner
 } from "./agent-runtime-supervisor.js";
 export {
-  SkillPackageManager,
-  SkillResourceProjector,
-  type LocalSkillImport,
-  type RuntimeSkillSnapshot,
-  type SkillActivationDecision,
-  type SkillCompatibilityFinding,
-  type SkillCompatibilityReport,
-  type SkillDirectoryLimits,
-  type SkillImportResult,
-  type SkillInventoryItem,
-  type SkillPackageState,
-  type SkillSourceKind
-} from "./skills-directory.js";
+  VcSkillsDirectoryAdapter,
+  VcAgentSkillsDirectory,
+  type VcSkillDiagnostic,
+  type VcSkillDiagnosticCode,
+  type VcSkillDiagnosticSeverity,
+  type VcSkillDirectoryLimits,
+  type VcSkillImportRequest,
+  type VcSkillImportResult,
+  type VcSkillMetadata,
+  type VcSkillsDirectoryAdapterOptions,
+  type VcSkillsDirectorySnapshot
+} from "./vc-skills-directory.js";
+export {
+  PI_INTEGRATION_MIGRATION_MARKER,
+  PI_INTEGRATION_MIGRATION_SCHEMA_VERSION,
+  PiIntegrationMigration,
+  PiIntegrationMigrationError,
+  type PiIntegrationExtensionPlan,
+  type PiIntegrationMigrationDiagnostic,
+  type PiIntegrationMigrationDiagnosticCode,
+  type PiIntegrationMigrationErrorCode,
+  type PiIntegrationMigrationInput,
+  type PiIntegrationMigrationInspection,
+  type PiIntegrationMigrationResult,
+  type PiIntegrationMcpPlan,
+  type PiIntegrationSkillPlan
+} from "./pi-integration-migration.js";
 export {
   USER_OFFICE_SKILL_FORMATS,
   isUserOfficeSkillPackage,
@@ -125,45 +139,6 @@ export {
   type PageStage,
   type PaddleOcrAdapter
 } from "./page-recovery-pipeline.js";
-export {
-  McpIntegrationError,
-  McpIntegrationManager,
-  PINNED_PI_MCP_ADAPTER_VERSION,
-  type McpActionClass,
-  type McpActivationDecision,
-  type McpActivationRequest,
-  type McpAdapterConnection,
-  type McpCredentialResolver,
-  type McpIntegrationManager as McpIntegrationManagerType,
-  type McpProxyExecutionRequest,
-  type McpServerConfigurationRequest,
-  type McpServerRecord,
-  type McpServerStatus,
-  type McpToolSchema,
-  type PinnedPiMcpAdapter
-} from "./mcp-integration-manager.js";
-export {
-  ExtensionAdmissionError,
-  ExtensionAdmissionManager,
-  GlobalExtensionRevisionManager,
-  type ApprovedExtensionRevision,
-  type DeterministicInspectionReport,
-  type ExtensionAdmissionErrorCode,
-  type ExtensionAdmissionSnapshot,
-  type ExtensionAuditAdapter,
-  type ExtensionAuditInput,
-  type ExtensionAuditRequest,
-  type ExtensionAuditResult,
-  type ExtensionAuditRun,
-  type ExtensionEnablementChange,
-  type ExtensionFileInventory,
-  type ExtensionFinding,
-  type GlobalExtensionEntry,
-  type GlobalExtensionRevisionState,
-  type LocalExtensionStageRequest,
-  type PendingGlobalExtensionRevision,
-  type StagedExtension
-} from "./extension-admission.js";
 export {
   BUNDLED_ACADEMIC_SKILL_IDS,
   installBundledAcademicSkills,

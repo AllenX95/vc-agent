@@ -1,23 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  PINNED_PI_MCP_ADAPTER_VERSION,
   pageTextBlock,
-  type ExtensionAuditAdapter,
-  type McpAdapterConnection,
-  type McpServerRecord,
-  type McpToolSchema,
   type NativePdfAdapter,
   type OvisOcrAdapter,
   type OfficeExecutionPlan,
   type OfficeSkillJobAdapter,
   type PaddleOcrAdapter,
   type PageCandidate,
-  type MaterialParseRequest,
-  type PinnedPiMcpAdapter
+  type MaterialParseRequest
 } from "@vc-agent/host-services";
-import { createPiMcpAdapter, PI_MCP_ADAPTER_VERSION, type PiMcpServerConfig } from "@vc-agent/pi-adapter/mcp";
 import type { LocalOcrDevice, OfficeSkillJobCommand, UtilityJobEvent } from "@vc-agent/contracts";
 import type { UtilityJobRunner } from "./utility-job-runner.js";
 
@@ -53,7 +46,7 @@ export function createDesktopOfficeAdapter(options: DesktopOfficeAdapterOptions 
         command: "office.skill",
         kind: plan.task.kind,
         format: plan.task.format,
-        skillRevisionId: plan.task.skillRevisionId,
+        skillRevisionId: plan.task.skillIdentity ?? `skill:${plan.skillHash.slice(0, 24)}`,
         skillRoot: plan.skillRoot,
         runner: runnerSpec,
         inputPaths: [...plan.job.inputPaths],
@@ -238,188 +231,4 @@ function configuredOcrDevice(): LocalOcrDevice {
 
 function localPrintableRatio(text: string): number {
   return text.length === 0 ? 0 : [...text].filter((character) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(character)).length / [...text].length;
-}
-
-export function createDesktopMcpAdapter(): PinnedPiMcpAdapter {
-  const realAdapter = createPiMcpAdapter();
-  return {
-    version: PINNED_PI_MCP_ADAPTER_VERSION,
-    async connect(config: McpServerRecord, credentialValue: string | undefined, signal?: AbortSignal): Promise<McpAdapterConnection> {
-      if (config.transport === "fixture") return createFixtureMcpConnection(config);
-      if (PI_MCP_ADAPTER_VERSION !== PINNED_PI_MCP_ADAPTER_VERSION.slice("pi-mcp-adapter@".length)) throw new Error("MCP_ADAPTER_UNAVAILABLE");
-      const connection = await realAdapter.connect(toPiMcpServerConfig(config, credentialValue), signal);
-      return {
-        async listTools() {
-          const tools = await connection.listTools();
-          return tools.map((tool) => normalizeMcpTool(tool, config));
-        },
-        call: (toolName, arguments_, callSignal) => connection.call(toolName, arguments_, callSignal),
-        close: () => connection.close()
-      };
-    }
-  };
-}
-
-function createFixtureMcpConnection(config: McpServerRecord): McpAdapterConnection {
-  let closed = false;
-  const schemas = config.cachedToolSchemas.length > 0 ? config.cachedToolSchemas : defaultMcpSchemas();
-  return {
-    async listTools() {
-      if (closed) throw new Error("MCP_DISCONNECTED");
-      return schemas;
-    },
-    async call(toolName: string, arguments_: Readonly<Record<string, unknown>>) {
-      if (closed) throw new Error("MCP_DISCONNECTED");
-      if (process.env.VC_AGENT_TEST_MCP_FAILURE === "1") throw new Error("MCP_CONNECTION_FAILED");
-      return { fixture: true, toolName, arguments: arguments_, observedAt: new Date().toISOString() };
-    },
-    async close() { closed = true; }
-  };
-}
-
-function toPiMcpServerConfig(config: McpServerRecord, credentialValue: string | undefined): PiMcpServerConfig {
-  return {
-    serverKey: config.serverId,
-    transport: config.transport === "http" ? "http" : "stdio",
-    ...(config.command === undefined ? {} : { command: config.command }),
-    ...(config.args.length === 0 ? {} : { args: config.args }),
-    ...(config.workingDirectory === undefined ? {} : { cwd: config.workingDirectory }),
-    ...(config.endpoint === undefined ? {} : { endpoint: config.endpoint }),
-    ...(credentialValue === undefined ? {} : { credentialValue })
-  };
-}
-
-function normalizeMcpTool(tool: { readonly name: string; readonly description?: string; readonly inputSchema?: unknown }, config: McpServerRecord): McpToolSchema {
-  const cached = config.cachedToolSchemas.find((schema) => schema.name === tool.name);
-  if (cached !== undefined) {
-    // Keep Host-reviewed policy metadata, but always recompute the protocol
-    // schema identity from the live tool definition so a changed server cannot
-    // hide behind a stale cached hash.
-    return {
-      ...cached,
-      ...(tool.description === undefined ? {} : { description: tool.description }),
-      schemaHash: schemaHash(tool.inputSchema)
-    };
-  }
-  return {
-    name: tool.name,
-    ...(tool.description === undefined ? {} : { description: tool.description }),
-    actionClass: /(?:write|update|delete|create|submit|send|upload)/iu.test(tool.name) ? "write" : "read",
-    allowedScopes: config.allowedScopes,
-    inputBytes: 4_000,
-    outputBytes: 20_000,
-    schemaHash: schemaHash(tool.inputSchema)
-  };
-}
-
-function schemaHash(schema: unknown): string {
-  const canonical = JSON.stringify(schema ?? null);
-  let hash = 2166136261;
-  for (const character of canonical) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
-  return `mcp-schema-${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
-export interface DesktopExtensionAuditProfile {
-  readonly provider: string;
-  readonly model: string;
-  readonly apiKey: string;
-  readonly thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-}
-
-export interface DesktopExtensionAuditExecution {
-  readonly auditRunId: string;
-  readonly instructionsRevision: string;
-  readonly profile: DesktopExtensionAuditProfile;
-  readonly systemPrompt: string;
-  readonly prompt: string;
-  readonly signal: AbortSignal;
-}
-
-export function createDesktopExtensionAuditAdapter(options: {
-  readonly resolveProfile?: (profileId: string) => DesktopExtensionAuditProfile | undefined;
-  readonly executeAudit?: (input: DesktopExtensionAuditExecution) => Promise<string>;
-  readonly fixtureMode?: boolean;
-} = {}): ExtensionAuditAdapter {
-  return {
-    async review(input, signal) {
-      // Fixture audit is injectable only in the test environment. Production
-      // always goes through the explicit Provider endpoint below.
-      if (options.fixtureMode === true || (options.fixtureMode === undefined && process.env.NODE_ENV === "test")) {
-        if (process.env.VC_AGENT_TEST_EXTENSION_AUDIT_FAILURE === "1") throw new Error("EXTENSION_AUDIT_PROVIDER_FAILED");
-        return { summary: `Test-only Extension Audit completed for ${input.stagedRevisionId}.`, findings: [], residualRisk: ["Trusted Worker Code remains outside Standard Access mediation."], limitations: ["Test fixture audit does not claim semantic correctness of third-party code."] };
-      }
-      if (input.profileId === undefined) throw new Error("EXTENSION_AUDIT_PROFILE_MISSING");
-      const profile = options.resolveProfile?.(input.profileId);
-      if (profile === undefined) throw new Error("EXTENSION_AUDIT_PROFILE_MISSING");
-      if (options.executeAudit === undefined) throw new Error("EXTENSION_AUDIT_PROVIDER_UNAVAILABLE");
-      const message = await options.executeAudit({
-        auditRunId: input.auditRunId,
-        instructionsRevision: input.instructionsRevision,
-        profile,
-        systemPrompt: [
-          "You are an isolated Extension Audit reviewer.",
-          "Review only the bounded deterministic report and Extension snapshot supplied in this request.",
-          "Do not assume access to Projects, ordinary Threads, Skills, VC prompts, Memory, credentials, or tools.",
-          "Return strict JSON with keys summary, findings, residualRisk, and limitations.",
-          "Each finding must contain severity (low|medium|high|critical) and message."
-        ].join("\n"),
-        prompt: JSON.stringify({
-          schemaVersion: 1,
-          auditRunId: input.auditRunId,
-          stagedRevisionId: input.stagedRevisionId,
-          profile: { provider: profile.provider, model: profile.model },
-          instructionsRevision: input.instructionsRevision,
-          deterministicReport: input.deterministicReport,
-          extensionSnapshot: extensionAuditSnapshot(input.stagedArtifactPath)
-        }),
-        signal
-      });
-      return parseExtensionAuditResult(parseStrictJson(message));
-    }
-  };
-}
-
-function parseStrictJson(value: string): unknown {
-  const trimmed = value.trim();
-  const body = trimmed.startsWith("```") ? trimmed.replace(/^```(?:json)?\s*/iu, "").replace(/\s*```$/u, "") : trimmed;
-  try { return JSON.parse(body); }
-  catch { throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE"); }
-}
-
-function extensionAuditSnapshot(root: string): { readonly files: readonly { readonly path: string; readonly content: string }[] } {
-  const files: Array<{ path: string; content: string }> = [];
-  const visit = (directory: string, relative = "") => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const child = join(directory, entry.name);
-      const childRelative = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      if (entry.isDirectory()) visit(child, childRelative);
-      else if (entry.isFile() && files.reduce((size, item) => size + Buffer.byteLength(item.content, "utf8"), 0) < 200_000) {
-        const content = readFileSync(child, "utf8").slice(0, 50_000);
-        files.push({ path: childRelative, content });
-      }
-    }
-  };
-  if (existsSync(root)) visit(root);
-  return { files };
-}
-
-function parseExtensionAuditResult(value: unknown): { summary: string; findings: Array<{ severity: "low" | "medium" | "high" | "critical"; message: string }>; residualRisk: string[]; limitations: string[] } {
-  if (value === null || typeof value !== "object") throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE");
-  const record = value as Record<string, unknown>;
-  if (typeof record.summary !== "string" || !Array.isArray(record.findings) || !Array.isArray(record.residualRisk) || !Array.isArray(record.limitations)) throw new Error("EXTENSION_AUDIT_PROVIDER_INVALID_RESPONSE");
-  const findings = record.findings.flatMap((item) => {
-    if (item === null || typeof item !== "object") return [];
-    const finding = item as Record<string, unknown>;
-    return typeof finding.message === "string" && (finding.severity === "low" || finding.severity === "medium" || finding.severity === "high" || finding.severity === "critical") ? [{ severity: finding.severity as "low" | "medium" | "high" | "critical", message: finding.message }] : [];
-  });
-  const residualRisk = record.residualRisk.filter((item): item is string => typeof item === "string");
-  const limitations = record.limitations.filter((item): item is string => typeof item === "string");
-  return { summary: record.summary, findings, residualRisk, limitations };
-}
-
-function defaultMcpSchemas(): McpToolSchema[] {
-  return [
-    { name: "fixture.search", description: "Bounded fixture read", actionClass: "read", allowedScopes: ["project", "unscoped"], inputBytes: 4_000, outputBytes: 20_000, schemaHash: "fixture-search-v1" },
-    { name: "fixture.write", description: "Explicitly confirmed fixture write", actionClass: "write", allowedScopes: ["project"], inputBytes: 4_000, outputBytes: 20_000, schemaHash: "fixture-write-v1" }
-  ];
 }

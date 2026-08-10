@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPiSession, type ExtensionInventorySnapshot, type RuntimeResourceSnapshot } from "@vc-agent/pi-adapter";
+import { createPiSession, type RuntimeResourceSnapshot } from "@vc-agent/pi-adapter";
 
 type CapturedPayload = {
   readonly tools?: readonly {
@@ -31,6 +31,7 @@ const ACTIVE_CAPABILITIES = [
 ] as const;
 
 const EXPECTED_PROVIDER_TOOL_NAMES = [
+  "mcp",
   "capability_request",
   "material_recall",
   "reflection_evidence_drilldown",
@@ -53,11 +54,6 @@ const resources: RuntimeResourceSnapshot = {
   revisionId: "provider-tool-schema-test",
   systemPrompt: "You are vc-agent.",
   appendSystemPrompt: []
-};
-const extensions: ExtensionInventorySnapshot = {
-  schemaVersion: 1,
-  revisionId: "provider-tool-schema-test-extensions",
-  enabled: []
 };
 
 afterEach(() => {
@@ -92,7 +88,7 @@ async function captureProjectCommandPayload(input: {
       threadDirectory: cwd,
       contextHistory: [],
       resources,
-      extensions,
+      piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") },
       usePiWebAccess: false,
       profile: { provider: input.provider, model: input.model, apiKey: "schema-test-key" },
       capabilityProxy: async () => ({ schemaVersion: 1, requestId: "provider-tool-schema-test", status: "completed", content: "ok" })

@@ -4,7 +4,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import type {
   CapabilityExecutionRequest,
   CapabilityExecutionResult,
-  ExtensionInventorySnapshot,
+  PiResources,
   RuntimeResourceSnapshot,
   SubAgentCapability,
   SubAgentContextBoundary,
@@ -51,7 +51,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
   readonly #resolveProjectPath: (projectId: string) => string | undefined;
   readonly #resolveCredential: (profileId: string) => string | undefined;
   readonly #resources: () => RuntimeResourceSnapshot;
-  readonly #extensions: () => ExtensionInventorySnapshot;
+  readonly #piResources: () => PiResources;
   readonly #resolveCapability: SubAgentCapabilityResolver | undefined;
   readonly #pending = new Map<string, PendingExecution>();
 
@@ -61,7 +61,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
     readonly resolveProjectPath?: (projectId: string) => string | undefined;
     readonly resolveCredential: (profileId: string) => string | undefined;
     readonly resources: () => RuntimeResourceSnapshot;
-    readonly extensions: () => ExtensionInventorySnapshot;
+    readonly piResources: () => PiResources;
     readonly resolveCapability?: SubAgentCapabilityResolver;
   }) {
     this.#supervisor = input.supervisor;
@@ -69,7 +69,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
     this.#resolveProjectPath = input.resolveProjectPath ?? (() => undefined);
     this.#resolveCredential = input.resolveCredential;
     this.#resources = input.resources;
-    this.#extensions = input.extensions;
+    this.#piResources = input.piResources;
     this.#resolveCapability = input.resolveCapability;
   }
 
@@ -114,7 +114,7 @@ export class DesktopSubAgentProviderExecutor implements SubAgentProviderExecutor
         ...(commandProfile.maxOutputTokens === undefined ? {} : { maxOutputTokens: commandProfile.maxOutputTokens })
       },
       resources,
-      extensions: this.#extensions()
+      piResources: this.#piResources()
     };
     return new Promise<SubAgentProviderExecutionResult>((resolve, reject) => {
       const pending: PendingExecution = { input, command, resolve, reject, citations: new CitationRegistry(), toolEvents: [], settled: false };

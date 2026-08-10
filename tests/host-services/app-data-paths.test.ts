@@ -7,7 +7,7 @@ describe("vc-agent application data paths", () => {
     const environment = { LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" };
     const userData = resolveVcAgentUserDataRoot(environment, "C:\\fallback");
     expect(userData).toBe(resolve(environment.LOCALAPPDATA, "vc-agent"));
-    expect(resolveVcAgentSkillsRoot(environment, "C:\\fallback")).toBe(resolve(userData, "skills"));
+    expect(resolveVcAgentSkillsRoot(environment, "C:\\fallback")).toBe(resolve(userData, "pi-agent", "skills"));
   });
 
   it("respects explicit vc-agent roots without consulting another agent directory", () => {

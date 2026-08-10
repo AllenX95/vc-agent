@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const STATE_SCHEMA_VERSION = 16;
+export const STATE_SCHEMA_VERSION = 17;
 
 export type StatePreparation =
   | { readonly status: "fresh" | "ready" | "migrated"; readonly mode: "read_write"; readonly storedVersion: number; readonly supportedVersion: number; readonly rollbackAvailable: boolean }

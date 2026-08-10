@@ -3,8 +3,7 @@ import type {
   DreamExtractionScope,
   ModelProfile,
   SystemPromptRevision,
-  WorkerCommand,
-  FrozenMcpActivation
+  WorkerCommand
 } from "@vc-agent/contracts";
 import type { CitationRegistry, DreamSynthesisInput } from "@vc-agent/host-services";
 
@@ -23,7 +22,6 @@ export interface TurnContext {
   readonly activeCapabilities: string[];
   readonly executableCapabilityIds: string[];
   readonly capabilitySurface: TurnCapabilitySurfaceSnapshot;
-  readonly mcpActivation?: FrozenMcpActivation;
   readonly citations: CitationRegistry;
   readonly expectedStateVersion: number;
   readonly promptRevision: SystemPromptRevision;

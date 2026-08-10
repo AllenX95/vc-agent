@@ -4,13 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentTurnIdleTimeoutError,
-  SnapshotResourceLoader,
   aggregateUsage,
   createPiSession,
   listKnownPiModels,
-  providerToolNameForCapability,
   sanitizeProviderFailure,
-  type ExtensionInventorySnapshot,
   type PiSessionEvent,
   type RuntimeResourceSnapshot
 } from "@vc-agent/pi-adapter";
@@ -23,12 +20,13 @@ const resources: RuntimeResourceSnapshot = {
   systemPrompt: "You are vc-agent.",
   appendSystemPrompt: []
 };
-const extensions: ExtensionInventorySnapshot = {
-  schemaVersion: 1,
-  revisionId: "bundled-empty-v1",
-  enabled: []
-};
-
+const extensions = undefined;
+const providerToolNameForCapability = (capabilityId: string): string => ({
+  "output.write_text": "output_write_text",
+  "output.edit_text": "output_edit_text",
+  "workspace.write_batch": "workspace_write_batch",
+  "arxiv.fulltext": "arxiv_fulltext"
+}[capabilityId] ?? capabilityId);
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -155,108 +153,29 @@ describe("real Pi SDK tracer", () => {
           apiKey: "tracer-not-submitted"
         },
         resources,
-        extensions
+        extensions,
+        piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") }
       },
       () => {}
     );
 
     expect(handle.provider).toBe(model!.provider);
     expect(handle.model).toBe(model!.model);
-    expect(handle.activeTools).toEqual([]);
+    expect(handle.activeTools).toContain("mcp");
     expect(existsSync(join(cwd, ".pi", "sessions"))).toBe(false);
     handle.dispose();
-  });
-
-  it("keeps Host snapshots immutable and rejects dynamic resource extension", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-loader-"));
-    temporaryDirectories.push(cwd);
-    const loader = new SnapshotResourceLoader({ cwd, resources, extensions });
-    await loader.reload();
-
-    expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
-    expect(loader.getSkills().skills).toEqual([]);
-    expect(loader.getPrompts().prompts).toEqual([]);
-    expect(loader.getExtensions().extensions).toEqual([]);
-    expect(() => loader.extendResources({ skillPaths: [] })).toThrow("immutable");
-    expect(Object.isFrozen(loader.snapshot)).toBe(true);
-  });
-
-  it("loads the bundled pi-web-access extension with the vc-agent web tool names", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-web-extension-"));
-    temporaryDirectories.push(cwd);
-    const loader = new SnapshotResourceLoader({ cwd, resources, extensions, loadBundledExtensions: true });
-    await loader.reload();
-
-    const bundledEntry = loader.snapshot.extensions.enabled.find((item) => item.id === "pi-web-access");
-    const extension = loader.getExtensions().extensions.find((item) => item.path === bundledEntry?.entryPath);
-    expect(extension).toBeDefined();
-    expect([...extension!.tools.keys()]).toEqual(expect.arrayContaining([
-      "web_search",
-      "source_check",
-      "web_fetch",
-      "web_fetch_content"
-    ]));
-  });
-
-  it("projects task-scoped Skill instructions into the real Pi resource loader", () => {
-    const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-loader-"));
-    temporaryDirectories.push(cwd);
-    const skillPath = join(cwd, "active", "docx", "SKILL.md");
-    mkdirSync(join(cwd, "active", "docx"), { recursive: true });
-    writeFileSync(skillPath, "---\nname: docx\ndescription: Create Word documents\n---\nUse the imported Word workflow.", "utf8");
-    const skillResources: RuntimeResourceSnapshot = {
-      ...resources,
-      skills: {
-        schemaVersion: 1,
-        revisionId: "skill-snapshot-1",
-        decisions: [{ packageId: "docx", revisionId: "docx-rev-1", reason: "task_match", resources: ["SKILL.md"], capabilities: [] }],
-        instructions: [{
-          packageId: "docx",
-          revisionId: "docx-rev-1",
-          name: "Word Documents",
-          description: "Create Word documents",
-          filePath: skillPath,
-          baseDir: join(cwd, "active", "docx"),
-          content: "---\nname: docx\ndescription: Create Word documents\n---\nUse the imported Word workflow."
-        }],
-        resources: []
-      }
-    };
-    const loader = new SnapshotResourceLoader({ cwd, resources: skillResources, extensions });
-
-    expect(loader.getSkills().skills).toMatchObject([{ name: "docx", description: "Create Word documents", filePath: skillPath }]);
-    expect(loader.getAppendSystemPrompt()).toEqual([]);
-    expect(loader.getSkills().skills[0]?.filePath).toBe(skillPath);
-    expect(Object.isFrozen(loader.snapshot.resources.skills)).toBe(true);
   });
 
   it("expands a supported Skill slash command before sending it to the model", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "vc-agent-skill-command-"));
     temporaryDirectories.push(cwd);
-    const skillDirectory = join(cwd, "active", "docx");
+    const skillsRoot = join(cwd, "skills");
+    const skillDirectory = join(skillsRoot, "docx");
     const skillPath = join(skillDirectory, "SKILL.md");
     mkdirSync(skillDirectory, { recursive: true });
-    writeFileSync(skillPath, "---\nname: Word Documents\n---\nFollow the imported document workflow.", "utf8");
-    const skillResources: RuntimeResourceSnapshot = {
-      ...resources,
-      skills: {
-        schemaVersion: 1,
-        revisionId: "skill-command-snapshot",
-        decisions: [{ packageId: "docx", revisionId: "docx-rev-1", reason: "explicit", resources: ["SKILL.md"], capabilities: [] }],
-        instructions: [{
-          packageId: "docx",
-          revisionId: "docx-rev-1",
-          name: "Word Documents",
-          description: "Create Word documents",
-          filePath: skillPath,
-          baseDir: skillDirectory,
-          content: "Follow the imported document workflow."
-        }],
-        resources: []
-      }
-    };
+    writeFileSync(skillPath, "---\nname: docx\ndescription: Create Word documents\n---\nFollow the imported document workflow.", "utf8");
     const handle = await createFauxPiSession({
-      config: { cwd, threadDirectory: cwd, contextHistory: [], resources: skillResources, extensions },
+      config: { cwd, threadDirectory: cwd, contextHistory: [], resources, extensions, piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot } },
       responses: [fauxAssistantMessage("Done.")],
       onEvent: () => {}
     });
@@ -286,7 +205,8 @@ describe("real Pi SDK tracer", () => {
         contextHistory: [{ user: "Prior question", assistant: "Prior visible answer", status: "completed" }],
         profile,
         resources,
-        extensions
+        extensions,
+        piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") }
       },
       () => {}
     );
@@ -306,7 +226,8 @@ describe("real Pi SDK tracer", () => {
         contextHistory: [],
         profile,
         resources,
-        extensions
+        extensions,
+        piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") }
       },
       () => {}
     );
@@ -323,7 +244,8 @@ describe("real Pi SDK tracer", () => {
         contextHistory: [{ user: "Question", assistant: "Visible answer", status: "completed" }],
         profile,
         resources,
-        extensions
+        extensions,
+        piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") }
       },
       () => {}
     );
@@ -617,7 +539,8 @@ describe("real Pi SDK tracer", () => {
         }],
         profile: { provider: model.provider, model: model.model, apiKey: "reference-secret" },
         resources,
-        extensions
+        extensions,
+        piResources: { agentDir: join(cwd, "pi-agent"), skillsRoot: join(cwd, "skills") }
       },
       () => {}
     );

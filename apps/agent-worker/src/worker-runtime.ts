@@ -107,7 +107,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
     return;
   }
   if (runtime.retireSessionBeforeNextTurn && runtime.session !== null) {
-    runtime.session.dispose();
+    await disposeWorkerSession(runtime.session);
     runtime.session = null;
     runtime.sessionProfileKey = null;
     runtime.retireSessionBeforeNextTurn = false;
@@ -127,11 +127,11 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
       command.profile.thinkingLevel,
       command.profile.contextWindow ?? "catalog",
       command.profile.maxOutputTokens ?? "catalog",
-      command.mcpActivation?.activationId ?? "no-mcp",
-      command.mcpActivation?.schemaRevision ?? "no-mcp"
+      command.resources.revisionId,
+      JSON.stringify(command.piResources)
     ].join("\u0000");
     if (runtime.session !== null && runtime.sessionProfileKey !== profileKey) {
-      runtime.session.dispose();
+      await disposeWorkerSession(runtime.session);
       runtime.session = null;
     }
     if (runtime.session === null) {
@@ -143,8 +143,7 @@ async function executeTurn(command: ExecuteCommand): Promise<void> {
         ...(command.hostHighWater === undefined ? {} : { hostHighWater: command.hostHighWater }),
         contextHistory: command.contextHistory,
         resources: command.resources,
-        extensions: command.extensions,
-        ...(command.mcpActivation === undefined ? {} : { mcpActivation: command.mcpActivation }),
+        piResources: command.piResources,
         capabilityProxy: (toolCallId: string, capabilityId: string, arguments_: Record<string, unknown>, signal?: AbortSignal) => requestCapability(runtime, toolCallId, capabilityId, arguments_, signal)
       };
       const onSessionEvent = (event: PiSessionEvent) => {
@@ -349,7 +348,18 @@ function mapUsage(usage: { input: number; output: number; cacheRead: number; cac
   };
 }
 
+async function disposeWorkerSession(session: PiSessionHandle): Promise<void> {
+  if (session.disposeAsync !== undefined) {
+    await session.disposeAsync();
+    return;
+  }
+  session.dispose();
+}
+
 process.on("disconnect", () => {
-  for (const runtime of sessions.values()) runtime.session?.dispose();
+  for (const runtime of sessions.values()) {
+    if (runtime.session === null) continue;
+    void disposeWorkerSession(runtime.session);
+  }
   process.exit(0);
 });

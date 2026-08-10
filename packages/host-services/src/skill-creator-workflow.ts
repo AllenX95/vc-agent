@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { LocalJobSupervisor, type LocalJobManifest } from "./agent-runtime-supervisor.js";
-import { SkillPackageManager, type SkillImportResult } from "./skills-directory.js";
+import { VcSkillsDirectoryAdapter, type VcSkillImportResult, type VcSkillMetadata } from "./vc-skills-directory.js";
 
 export type SkillDraftState = "requested" | "planned" | "running" | "draft_ready" | "reviewed" | "accepted_into_i1" | "discarded" | "failed" | "cancelled" | "timed_out" | "stale";
 
@@ -18,7 +18,10 @@ export interface UpdateSkillDraftRequest {
   readonly explicitIntent: boolean;
   readonly draftId?: string;
   readonly packageId: string;
-  readonly targetRevisionId: string;
+  /** Preferred target source path below the dedicated Skills Directory. */
+  readonly targetSkillPath?: string;
+  /** Preferred target Skill name. */
+  readonly targetSkillName?: string;
   readonly files: Readonly<Record<string, string>>;
   readonly dependencies?: readonly string[];
   readonly accessMode?: "standard" | "full";
@@ -31,7 +34,8 @@ export interface SkillDraft {
   readonly operation: "create" | "update";
   readonly state: SkillDraftState;
   readonly stagingPath: string;
-  readonly targetRevisionId?: string;
+  readonly targetSkillPath?: string;
+  readonly targetSkillHash?: string;
   readonly targetHash?: string;
   readonly targetActiveHash?: string;
   readonly files: readonly string[];
@@ -62,16 +66,18 @@ interface StoredDraft extends SkillDraft {
 }
 
 export class SkillCreationWorkflow {
-  readonly #manager: SkillPackageManager;
+  readonly #skills: VcSkillsDirectoryAdapter;
   readonly #root: string;
   readonly #now: () => string;
   readonly #adapter: SkillCreatorAdapter;
   readonly #jobs: LocalJobSupervisor;
   readonly #drafts = new Map<string, StoredDraft>();
 
-  constructor(input: { manager: SkillPackageManager; root?: string; adapter?: SkillCreatorAdapter; now?: () => string }) {
-    this.#manager = input.manager;
-    this.#root = resolve(input.root ?? join(input.manager.root, "creator"));
+  constructor(input: { skills: VcSkillsDirectoryAdapter | { readonly root: string }; root?: string; adapter?: SkillCreatorAdapter; now?: () => string }) {
+    this.#skills = asAdapter(input.skills);
+    // Draft files live outside the dedicated Skill source so Pi never
+    // discovers an in-progress Creator package as an available Skill.
+    this.#root = resolve(input.root ?? join(dirnameFor(this.#skills.root), "skill-creator"));
     this.#now = input.now ?? (() => new Date().toISOString());
     this.#adapter = input.adapter ?? defaultCreatorAdapter();
     this.#jobs = new LocalJobSupervisor({ capacity: 1, adapter: { run: async (manifest, signal) => {
@@ -89,30 +95,29 @@ export class SkillCreationWorkflow {
 
   async updateDraft(request: UpdateSkillDraftRequest): Promise<SkillDraft> {
     if (!request.explicitIntent) throw new Error("SKILL_CREATOR_CAPABILITY_REJECTED");
-    const target = this.#manager.getRevision(request.targetRevisionId);
-    if (target === undefined || !target.enabled || target.state !== "active") throw new Error("SKILL_DRAFT_STALE");
-    const base = readFiles(this.#manager.activePath(target));
+    const target = this.resolveTarget(request.targetSkillPath, request.targetSkillName);
+    if (target === undefined) throw new Error("SKILL_DRAFT_STALE");
+    const base = readFiles(target.baseDir);
     const files = { ...base, ...request.files };
-    return this.startDraft({ operation: "update", ...(request.draftId === undefined ? {} : { draftId: request.draftId }), packageId: request.packageId, files, dependencies: request.dependencies ?? target.declaredDependencies, targetRevisionId: target.revisionId, targetHash: hashDirectory(this.#manager.sourcePath(target)), targetActiveHash: hashDirectory(this.#manager.activePath(target)) });
+    return this.startDraft({ operation: "update", ...(request.draftId === undefined ? {} : { draftId: request.draftId }), packageId: request.packageId, files, dependencies: request.dependencies ?? [], targetSkillPath: target.baseDir, targetSkillHash: hashDirectory(target.baseDir) });
   }
 
   async review(draftId: string): Promise<SkillDraftReview> {
     const draft = this.#drafts.get(draftId);
     if (draft === undefined) throw new Error("SKILL_DRAFT_PATH_ESCAPE");
     if (!["draft_ready", "reviewed"].includes(draft.state)) throw new Error("SKILL_CREATOR_RESULT_INVALID");
-    const currentTarget = draft.targetRevisionId === undefined ? undefined : this.#manager.getRevision(draft.targetRevisionId);
-    const currentTargetHash = currentTarget === undefined ? undefined : hashDirectory(this.#manager.sourcePath(currentTarget));
-    const currentTargetActiveHash = currentTarget === undefined ? undefined : hashDirectory(this.#manager.activePath(currentTarget));
-    if (draft.targetRevisionId !== undefined && (currentTarget === undefined || currentTargetHash !== draft.targetHash || (draft.targetActiveHash !== undefined && currentTargetActiveHash !== draft.targetActiveHash))) {
+    const currentTarget = draft.targetSkillPath === undefined ? undefined : this.resolveTarget(draft.targetSkillPath, undefined);
+    const currentTargetHash = currentTarget === undefined ? undefined : hashDirectory(currentTarget.baseDir);
+    if (draft.targetSkillPath !== undefined && (currentTarget === undefined || currentTargetHash !== draft.targetSkillHash)) {
       const stale = this.update(draft, { state: "stale" });
       this.#drafts.set(draftId, stale);
       this.save();
-      return { draft: stale, status: "stale", fileInventory: listFiles(stale.stagingPath), dependencies: stale.dependencies, executableEntryPoints: executableFiles(stale.stagingPath), contentPreview: preview(stale.stagingPath), exactDiff: diffFor(draft, currentTarget === undefined ? {} : readFiles(this.#manager.activePath(currentTarget))), compatibilityFindings: ["SKILL_DRAFT_STALE"] };
+      return { draft: stale, status: "stale", fileInventory: listFiles(stale.stagingPath), dependencies: stale.dependencies, executableEntryPoints: executableFiles(stale.stagingPath), contentPreview: preview(stale.stagingPath), exactDiff: diffFor(draft, currentTarget === undefined ? {} : readFiles(currentTarget.baseDir)), compatibilityFindings: ["SKILL_DRAFT_STALE"] };
     }
     const reviewed = this.update(draft, { state: "reviewed" });
     this.#drafts.set(draftId, reviewed);
     this.save();
-    const baseline = currentTarget === undefined ? {} : readFiles(this.#manager.activePath(currentTarget));
+    const baseline = currentTarget === undefined ? {} : readFiles(currentTarget.baseDir);
     return {
       draft: reviewed,
       status: "reviewable",
@@ -125,15 +130,17 @@ export class SkillCreationWorkflow {
     };
   }
 
-  async accept(draftId: string, options: { readonly confirmed?: boolean; readonly accessMode?: "standard" | "full" } = {}): Promise<SkillImportResult> {
+  async accept(draftId: string, options: { readonly confirmed?: boolean; readonly accessMode?: "standard" | "full" } = {}): Promise<VcSkillImportResult> {
     const draft = this.#drafts.get(draftId);
     if (draft === undefined || draft.state !== "reviewed") throw new Error("SKILL_CREATOR_RESULT_INVALID");
     if ((options.accessMode ?? "standard") === "standard" && options.confirmed !== true) throw new Error("SKILL_CREATOR_CAPABILITY_REJECTED");
-    if (draft.targetRevisionId !== undefined) {
-      const target = this.#manager.getRevision(draft.targetRevisionId);
-      if (target === undefined || hashDirectory(this.#manager.sourcePath(target)) !== draft.targetHash || (draft.targetActiveHash !== undefined && hashDirectory(this.#manager.activePath(target)) !== draft.targetActiveHash)) throw new Error("SKILL_DRAFT_STALE");
+    if (draft.targetSkillPath !== undefined) {
+      const target = this.resolveTarget(draft.targetSkillPath, undefined);
+      if (target === undefined || hashDirectory(target.baseDir) !== draft.targetSkillHash) throw new Error("SKILL_DRAFT_STALE");
     }
-    const result = await this.#manager.importLocalDirectory({ sourceDirectory: draft.stagingPath, packageId: draft.packageId, sourceKind: "creator_draft" });
+    const result = draft.targetSkillPath === undefined
+      ? this.#skills.importSkill({ sourceDirectory: draft.stagingPath, destinationName: draft.packageId })
+      : this.#skills.replaceSkill({ sourceDirectory: draft.stagingPath, destinationName: draft.packageId });
     const accepted = this.update(draft, { state: "accepted_into_i1" });
     this.#drafts.set(draftId, accepted);
     this.save();
@@ -155,7 +162,21 @@ export class SkillCreationWorkflow {
   async cancel(draftId: string): Promise<void> { await this.#jobs.cancel("creator-" + draftId); }
   async shutdown(): Promise<void> { await this.#jobs.shutdown(10_000); }
 
-  private async startDraft(input: { operation: "create" | "update"; draftId?: string; packageId: string; files: Readonly<Record<string, string>>; dependencies: readonly string[]; targetRevisionId?: string; targetHash?: string; targetActiveHash?: string }): Promise<SkillDraft> {
+  private resolveTarget(skillPath?: string, skillName?: string): VcSkillMetadata | undefined {
+    const snapshot = this.#skills.discover();
+    if (skillPath !== undefined) {
+      const candidate = resolve(skillPath);
+      const found = snapshot.skills.find((skill) => skill.baseDir === candidate || skill.filePath === candidate || skill.filePath === join(candidate, "SKILL.md"));
+      if (found !== undefined && this.#skills.isContained(found.baseDir) && this.#skills.isContained(found.filePath)) return found;
+    }
+    if (skillName !== undefined) {
+      const found = snapshot.skills.find((skill) => skill.name === skillName);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  private async startDraft(input: { operation: "create" | "update"; draftId?: string; packageId: string; files: Readonly<Record<string, string>>; dependencies: readonly string[]; targetSkillPath?: string; targetSkillHash?: string }): Promise<SkillDraft> {
     const packageId = normalizePackageId(input.packageId);
     const draftId = input.draftId ?? randomUUID();
     const stageRoot = join(this.#root, draftId, "source");
@@ -176,9 +197,8 @@ export class SkillCreationWorkflow {
       operation: input.operation,
       state: "running",
       stagingPath: stageRoot,
-      ...(input.targetRevisionId === undefined ? {} : { targetRevisionId: input.targetRevisionId }),
-      ...(input.targetHash === undefined ? {} : { targetHash: input.targetHash }),
-      ...(input.targetActiveHash === undefined ? {} : { targetActiveHash: input.targetActiveHash }),
+      ...(input.targetSkillPath === undefined ? {} : { targetSkillPath: input.targetSkillPath }),
+      ...(input.targetSkillHash === undefined ? {} : { targetSkillHash: input.targetSkillHash }),
       files: listFiles(stageRoot),
       dependencies: [...input.dependencies],
       createdAt: now,
@@ -308,4 +328,10 @@ function diffFor(draft: SkillDraft, baseline: Readonly<Record<string, string>>):
     if (after !== undefined) lines.push("+ " + path + ": " + after.slice(0, 2_000));
   }
   return lines.join("\n");
+}
+
+function asAdapter(source: (VcSkillsDirectoryAdapter | { readonly root: string }) | undefined): VcSkillsDirectoryAdapter {
+  if (source === undefined) throw new Error("VC_SKILLS_DIRECTORY_REQUIRED");
+  if (source instanceof VcSkillsDirectoryAdapter) return source;
+  return new VcSkillsDirectoryAdapter({ root: source.root });
 }

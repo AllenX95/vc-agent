@@ -2,6 +2,7 @@ import { z } from "zod";
 import { citationManifestSchema } from "./citation.js";
 import { dreamDueProposalSchema, dreamReviewStateSchema, pendingDreamReminderSchema } from "./dream.js";
 import { subAgentExplicitIntentEvidenceSchema, subAgentProjectionSchema, subAgentRunProjectionSchema, subAgentRunSchema, subAgentTaskDetailProjectionSchema, subAgentTaskInputSchema, subAgentTaskSchema, subAgentAttemptSchema } from "./sub-agent.js";
+import { piResourcesSettingsStateSchema } from "./pi-resources.js";
 
 export const IPC_SCHEMA_VERSION = 1 as const;
 
@@ -45,32 +46,6 @@ export const academicCredentialStatusSchema = z.object({
   configured: z.boolean()
 });
 export type AcademicCredentialStatus = z.infer<typeof academicCredentialStatusSchema>;
-
-export const skillFindingSchema = z.object({
-  code: z.enum(["SKILL_REFERENCE_MISSING", "SKILL_METADATA_INVALID", "SKILL_DIRECTIVE_UNSUPPORTED", "SKILL_DEPENDENCY_UNDECLARED", "SKILL_PATH_ESCAPE", "SKILL_COPY_FAILED", "SKILL_RESOURCE_LIMIT_EXCEEDED", "SKILL_HASH_MISMATCH"]),
-  severity: z.enum(["info", "warning", "block"]),
-  path: z.string().optional(),
-  message: z.string().min(1)
-});
-export type SkillFinding = z.infer<typeof skillFindingSchema>;
-
-export const skillInventoryItemSchema = z.object({
-  schemaVersion: z.literal(1), packageId: z.string().min(1), revisionId: z.string().uuid(), importId: z.string().uuid(),
-  sourceKind: z.enum(["local_directory", "creator_draft", "bundled_reviewed"]), importedAt: z.string().datetime(), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
-  overlayHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), compatibility: z.enum(["unknown", "compatible", "incompatible", "blocked"]),
-  declaredDependencies: z.array(z.string()), overlayRevision: z.string().uuid().optional(), enabled: z.boolean(), licensePresent: z.boolean(),
-  state: z.enum(["copying", "copied", "inspecting", "compatible", "incompatible", "blocked", "awaiting_activation", "active", "disabled", "invalidated", "failed"]),
-  files: z.array(z.string()), activeHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), failureCode: z.string().optional(),
-  findings: z.array(skillFindingSchema), metadata: z.record(z.string(), z.string())
-});
-export type SkillInventoryItem = z.infer<typeof skillInventoryItemSchema>;
-
-export const skillCompatibilityReportSchema = z.object({
-  package: skillInventoryItemSchema, status: z.enum(["compatible", "incompatible", "blocked"]), files: z.array(z.string()),
-  missingReferences: z.array(z.string()), unsupportedDirectives: z.array(z.string()), undeclaredExecutables: z.array(z.string()),
-  overlayRevision: z.string().uuid().optional(), exactHash: z.string().regex(/^[a-f0-9]{64}$/), findings: z.array(skillFindingSchema)
-});
-export type SkillCompatibilityReport = z.infer<typeof skillCompatibilityReportSchema>;
 
 export const integrationLifecycleStateSchema = z.enum(["pending", "queued", "running", "completed", "failed", "interrupted", "unknown_outcome"]);
 export type IntegrationLifecycleState = z.infer<typeof integrationLifecycleStateSchema>;
@@ -134,42 +109,16 @@ const pageRecoveryIntegrationStateSchema = z.object({
   }).optional()
 });
 
-const mcpIntegrationStateSchema = z.object({
-  status: integrationStatusSchema,
-  adapterVersion: z.string().min(1),
-  servers: z.array(z.object({
-    serverId: z.string().uuid(), name: z.string().min(1), enabled: z.boolean(), adapterVersion: z.string().min(1),
-    credentialReferencePresent: z.boolean(), connectionStatus: z.enum(["disconnected", "testing", "connecting", "connected", "unavailable", "failed"]),
-    schemaState: z.enum(["unknown", "cached", "current_for_connection", "mismatched"]), schemaRevision: z.string().min(1),
-    enabledToolIds: z.array(z.string()), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })), lastStatusMessage: z.string().optional(), failureCount: z.number().int().nonnegative()
-  })),
-  connectedServers: z.number().int().nonnegative(), activeTools: z.number().int().nonnegative(), failureCount: z.number().int().nonnegative(),
-  activeActivation: z.object({ activationId: z.string().uuid(), serverId: z.string().uuid(), schemaRevision: z.string().min(1), toolIds: z.array(z.string().min(1)), scope: z.enum(["project", "unscoped"]) }).optional()
-});
-
-const extensionIntegrationStateSchema = z.object({
-  status: integrationStatusSchema,
-  stagedCount: z.number().int().nonnegative(), inspectionCount: z.number().int().nonnegative(), auditCount: z.number().int().nonnegative(),
-  approvedCount: z.number().int().nonnegative(), effectiveRevisionId: z.string().min(1), enabledCount: z.number().int().nonnegative(),
-  pendingRevisionId: z.string().uuid().optional(), invalidatedRevisionIds: z.array(z.string().uuid()),
-  staged: z.array(z.object({ stagedRevisionId: z.string().uuid(), extensionId: z.string(), name: z.string(), state: z.string(), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), createdAt: z.string().datetime() })),
-  reports: z.array(z.object({ reportId: z.string().uuid(), stagedRevisionId: z.string().uuid(), status: z.enum(["reviewable", "blocked"]), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), findingCount: z.number().int().nonnegative(), blockerCount: z.number().int().nonnegative(), generatedAt: z.string().datetime() })),
-  audits: z.array(z.object({ auditRunId: z.string().uuid(), stagedRevisionId: z.string().uuid(), status: z.string(), updatedAt: z.string().datetime(), failureCode: z.string().optional() })),
-  approved: z.array(z.object({ approvedRevisionId: z.string().uuid(), extensionId: z.string(), name: z.string(), version: z.string(), artifactHash: z.string().regex(/^[a-f0-9]{64}$/), enabled: z.boolean(), invalidated: z.boolean(), approvedAt: z.string().datetime() }))
-});
-
 export const integrationStateSchema = z.object({
   schemaVersion: z.literal(1), generatedAt: z.string().datetime(),
   office: officeIntegrationStateSchema,
   skillCreator: skillCreatorIntegrationStateSchema,
   pageRecovery: pageRecoveryIntegrationStateSchema,
-  mcp: mcpIntegrationStateSchema,
-  extensions: extensionIntegrationStateSchema,
   runtime: z.object({ runningJobs: z.number().int().nonnegative(), queuedJobs: z.number().int().nonnegative(), failures: z.number().int().nonnegative() })
 });
 export type IntegrationState = z.infer<typeof integrationStateSchema>;
 
-export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "extension_audit", "visual_material_analysis", "sub_agent_default", "sub_agent_researcher", "sub_agent_critic", "sub_agent_synthesizer", "sub_agent_writer", "sub_agent_custom"]);
+export const taskModelTypeSchema = z.enum(["ordinary_conversation", "web_research", "document_generation", "dream", "independent_evidence", "memory_aware_reflection", "visual_material_analysis", "sub_agent_default", "sub_agent_researcher", "sub_agent_critic", "sub_agent_synthesizer", "sub_agent_writer", "sub_agent_custom"]);
 export type TaskModelType = z.infer<typeof taskModelTypeSchema>;
 export const taskModelAssignmentSchema = z.object({ taskType: taskModelTypeSchema, profileId: z.string().min(1), updatedAt: z.string().datetime() });
 export type TaskModelAssignment = z.infer<typeof taskModelAssignmentSchema>;
@@ -242,7 +191,6 @@ export const MODEL_EXECUTION_KINDS = [
   "memory_aware_reflection",
   "dream_scope",
   "dream_synthesis",
-  "extension_audit",
   "internal_model_stage"
 ] as const;
 export const modelExecutionKindSchema = z.enum(MODEL_EXECUTION_KINDS);
@@ -537,7 +485,7 @@ const ipcTrajectoryActivitySchema = z.object({
   label: z.string().min(1),
   status: z.enum(["started", "completed", "failed", "unknown_outcome"]),
   content: z.string(),
-  runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
+  runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "pi_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
   artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
 });
 
@@ -556,19 +504,13 @@ const exportRecoveryStateCommandSchema = commandMetadataSchema.extend({ command:
 const createPersonalCognitionBackupCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.backup.create") });
 const restorePersonalCognitionCommandSchema = commandMetadataSchema.extend({ command: z.literal("personal_cognition.restore") });
 const listProfilesCommandSchema = commandMetadataSchema.extend({ command: z.literal("profile.list") });
-const listSkillsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.list") });
-const importSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.import") });
-const installAcademicSkillsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.academic.install") });
-const inspectSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.inspect"), payload: z.object({ revisionId: z.string().uuid() }) });
-const activateSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.activate"), payload: z.object({ revisionId: z.string().uuid() }) });
-const disableSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("skills.disable"), payload: z.object({ packageId: z.string().min(1) }) });
 const loadIntegrationStateCommandSchema = commandMetadataSchema.extend({ command: z.literal("integration.state.load") });
 const prepareOfficeTaskCommandSchema = commandMetadataSchema.extend({
   command: z.literal("office.task.prepare"),
   payload: z.object({
     kind: z.enum(["create", "edit", "review"]), format: z.enum(["docx", "pptx", "xlsx", "pdf"]), projectId: z.string().min(1), projectPath: z.string().min(1),
     threadId: z.string().min(1), turnId: z.string().min(1), profile: modelProfileSchema.pick({ id: true, provider: true, model: true }),
-    skillRevisionId: z.string().uuid(), outputDirectory: z.string().min(1), outputFileName: z.string().min(1).optional(), sourcePath: z.string().min(1).optional(),
+    skillName: z.string().min(1).optional(), skillPath: z.string().min(1).optional(), outputDirectory: z.string().min(1), outputFileName: z.string().min(1).optional(), sourcePath: z.string().min(1).optional(),
     sourceReferences: z.array(z.string().min(1)).max(100).optional(), renderPreview: z.boolean().optional(), explicitIntent: z.literal(true)
   })
 });
@@ -590,7 +532,7 @@ const replaceOfficeOriginalCommandSchema = commandMetadataSchema.extend({
 const listSkillCreatorDraftsCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.list") });
 const prepareSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({
   command: z.literal("skill_creator.prepare"),
-  payload: z.object({ operation: z.enum(["create", "update"]), explicitIntent: z.literal(true), packageId: z.string().min(1), profileId: z.string().min(1).optional(), files: z.record(z.string().min(1), z.string().max(200_000)), dependencies: z.array(z.string().min(1)).max(100).optional(), draftId: z.string().uuid().optional(), targetRevisionId: z.string().uuid().optional() })
+  payload: z.object({ operation: z.enum(["create", "update"]), explicitIntent: z.literal(true), packageId: z.string().min(1), profileId: z.string().min(1).optional(), files: z.record(z.string().min(1), z.string().max(200_000)), dependencies: z.array(z.string().min(1)).max(100).optional(), draftId: z.string().uuid().optional(), targetSkillName: z.string().min(1).optional(), targetSkillPath: z.string().min(1).optional() })
 });
 const reviewSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.review"), payload: z.object({ draftId: z.string().uuid() }) });
 const acceptSkillCreatorDraftCommandSchema = commandMetadataSchema.extend({ command: z.literal("skill_creator.handoff"), payload: z.object({ draftId: z.string().uuid(), confirmed: z.literal(true), accessMode: z.enum(["standard", "full"]).optional() }) });
@@ -601,26 +543,19 @@ const runPageRecoveryCommandSchema = commandMetadataSchema.extend({
   payload: z.object({ materialId: z.string().uuid(), projectId: z.string().uuid(), relativePath: z.string().min(1), mediaType: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), pageCount: z.number().int().positive().optional() })
 });
 const cancelPageRecoveryCommandSchema = commandMetadataSchema.extend({ command: z.literal("page_recovery.cancel"), payload: z.object({ parseId: z.string().uuid() }) });
-const listMcpServersCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.server.list") });
-const testMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.server.test"), payload: z.object({ serverId: z.string().uuid() }) });
-const saveMcpServerCommandSchema = commandMetadataSchema.extend({
-  command: z.literal("mcp.server.save"),
-  payload: z.object({ serverId: z.string().uuid().optional(), name: z.string().trim().min(1).max(120), transport: z.enum(["stdio", "http", "fixture"]), endpoint: z.string().min(1).optional(), command: z.string().min(1).optional(), args: z.array(z.string().max(400)).max(50).optional(), workingDirectory: z.string().min(1).optional(), credentialRef: z.string().min(1).optional(), enabled: z.boolean(), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), enabledToolIds: z.array(z.string().min(1)).optional(), toolSchemas: z.array(z.object({ name: z.string().min(1), description: z.string().optional(), actionClass: z.enum(["read", "write", "external_submission", "sampling", "elicitation", "local_file_upload"]), allowedScopes: z.array(z.enum(["project", "unscoped"])).min(1), inputBytes: z.number().int().nonnegative(), outputBytes: z.number().int().nonnegative(), schemaHash: z.string().min(1) })).optional() })
+
+// Pi-native resource commands deliberately expose only source-level intents.
+const loadPiResourcesCommandSchema = commandMetadataSchema.extend({ command: z.literal("pi.resources.load") });
+const openPiResourceCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("pi.resources.open"),
+  payload: z.object({ target: z.enum(["extensions_folder", "mcp_config", "skills_folder"]) })
 });
-const activateMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.activate"), payload: z.object({ serverId: z.string().uuid(), toolIds: z.array(z.string().min(1)).max(100), scope: z.enum(["project", "unscoped"]), threadId: z.string().min(1), connect: z.boolean().optional() }) });
-const disconnectMcpServerCommandSchema = commandMetadataSchema.extend({ command: z.literal("mcp.disconnect"), payload: z.object({ serverId: z.string().uuid() }) });
-const executeMcpToolCommandSchema = commandMetadataSchema.extend({
-  command: z.literal("mcp.permission.resolve"),
-  payload: z.object({ activationId: z.string().uuid(), serverId: z.string().uuid(), toolName: z.string().min(1), arguments: z.record(z.string(), z.unknown()), threadId: z.string().min(1), turnId: z.string().min(1), scope: z.enum(["project", "unscoped"]), accessMode: z.enum(["standard", "full"]), confirmed: z.boolean().optional(), expectedSchemaRevision: z.string().min(1) })
+const reloadPiResourcesCommandSchema = commandMetadataSchema.extend({ command: z.literal("pi.resources.reload") });
+const importPiSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("pi.resources.import_skill") });
+const setPiProjectTrustCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("pi.resources.project_trust.set"),
+  payload: z.object({ trusted: z.boolean() })
 });
-const listExtensionsCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.list") });
-const stageExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.stage") });
-const inspectExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.inspect"), payload: z.object({ stagedRevisionId: z.string().uuid() }) });
-const auditExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.audit"), payload: z.object({ stagedRevisionId: z.string().uuid(), profileId: z.string().min(1).optional(), providerAvailable: z.boolean().optional() }) });
-const approveExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.approve"), payload: z.object({ stagedRevisionId: z.string().uuid(), reportId: z.string().uuid(), expectedArtifactHash: z.string().regex(/^[a-f0-9]{64}$/), acceptedFindingIds: z.array(z.string().min(1)).optional(), userConfirmed: z.literal(true) }) });
-const prepareExtensionRevisionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.revision.prepare"), payload: z.object({ action: z.enum(["enable", "update", "disable"]), extensionId: z.string().min(1), approvedRevisionId: z.string().uuid().optional() }) });
-const activateExtensionRevisionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.revision.activate"), payload: z.object({ revisionId: z.string().uuid(), mode: z.enum(["idle", "immediate"]).optional() }) });
-const rollbackExtensionCommandSchema = commandMetadataSchema.extend({ command: z.literal("extension.rollback"), payload: z.object({ approvedRevisionId: z.string().uuid() }) });
 const setAccessModeCommandSchema = commandMetadataSchema.extend({
   command: z.literal("access.mode.set"),
   payload: z.object({ mode: z.enum(["standard", "full"]) })
@@ -851,12 +786,6 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   restorePersonalCognitionCommandSchema,
   setAccessModeCommandSchema,
   listProfilesCommandSchema,
-  listSkillsCommandSchema,
-  importSkillCommandSchema,
-  installAcademicSkillsCommandSchema,
-  inspectSkillCommandSchema,
-  activateSkillCommandSchema,
-  disableSkillCommandSchema,
   loadIntegrationStateCommandSchema,
   chooseOfficeSourceCommandSchema,
   prepareOfficeTaskCommandSchema,
@@ -873,20 +802,11 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   inspectPageRecoveryCommandSchema,
   runPageRecoveryCommandSchema,
   cancelPageRecoveryCommandSchema,
-  listMcpServersCommandSchema,
-  testMcpServerCommandSchema,
-  saveMcpServerCommandSchema,
-  activateMcpServerCommandSchema,
-  disconnectMcpServerCommandSchema,
-  executeMcpToolCommandSchema,
-  listExtensionsCommandSchema,
-  stageExtensionCommandSchema,
-  inspectExtensionCommandSchema,
-  auditExtensionCommandSchema,
-  approveExtensionCommandSchema,
-  prepareExtensionRevisionCommandSchema,
-  activateExtensionRevisionCommandSchema,
-  rollbackExtensionCommandSchema,
+  loadPiResourcesCommandSchema,
+  openPiResourceCommandSchema,
+  reloadPiResourcesCommandSchema,
+  importPiSkillCommandSchema,
+  setPiProjectTrustCommandSchema,
   createProfileCommandSchema,
   updateProfileCommandSchema,
   setProfileCredentialCommandSchema,
@@ -1083,14 +1003,11 @@ const profileUpdatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("profile.updated"),
   payload: z.object({ profile: modelProfileSchema })
 });
-const skillsUpdatedEventSchema = eventMetadataSchema.extend({
-  event: z.literal("skills.updated"),
+const piResourcesUpdatedEventSchema = eventMetadataSchema.extend({
+  event: z.literal("pi.resources.updated"),
   payload: z.object({
-    root: z.string().min(1),
-    packages: z.array(skillInventoryItemSchema),
-    action: z.enum(["listed", "imported", "bundled_installed", "inspected", "activated", "disabled"]),
-    selectedRevisionId: z.string().uuid().optional(),
-    report: skillCompatibilityReportSchema.optional()
+    state: piResourcesSettingsStateSchema,
+    action: z.enum(["loaded", "opened", "reloaded", "imported", "project_trust_changed"])
   })
 });
 const integrationStateUpdatedEventSchema = eventMetadataSchema.extend({
@@ -1099,11 +1016,11 @@ const integrationStateUpdatedEventSchema = eventMetadataSchema.extend({
 });
 const integrationJobUpdatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("integration.job.updated"),
-  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery", "mcp", "extension"]), job: integrationJobSummarySchema })
+  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery"]), job: integrationJobSummarySchema })
 });
 const integrationDiagnosticEventSchema = eventMetadataSchema.extend({
   event: z.literal("integration.diagnostic"),
-  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery", "mcp", "extension"]), code: z.string().min(1), message: z.string().min(1).max(1_200), recoverable: z.boolean() })
+  payload: z.object({ workflow: z.enum(["office", "skill_creator", "page_recovery"]), code: z.string().min(1), message: z.string().min(1).max(1_200), recoverable: z.boolean() })
 });
 const officeSourceSelectedEventSchema = eventMetadataSchema.extend({
   event: z.literal("office.source.selected"),
@@ -1393,7 +1310,7 @@ const capabilityExecutionUpdatedEventSchema = eventMetadataSchema.extend({
     capabilityId: z.string().min(1),
     status: z.enum(["started", "completed", "rejected", "failed", "unknown_outcome"]),
     content: z.string().max(20_000),
-    runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "approved_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
+    runtime: z.object({ sourceClass: z.enum(["host", "pi_builtin", "bundled_extension", "pi_extension", "mcp"]), sourceId: z.string().min(1), sourceRevision: z.string().min(1), activationReason: z.string().min(1), actionClass: z.enum(["none", "local_read", "network_read", "local_write", "external_write", "destructive"]), confirmationState: z.enum(["not_required", "required", "approved", "rejected"]), durationMs: z.number().int().nonnegative().optional(), truncated: z.boolean().optional() }).optional(),
     artifact: z.object({ id: z.string().min(1), mediaType: z.string().min(1), destination: z.string().min(1) }).optional()
   })
 });
@@ -1445,7 +1362,7 @@ export const hostEventSchema = z.discriminatedUnion("event", [
   profileCreatedEventSchema,
   profileUpdatedEventSchema,
   academicCredentialsUpdatedEventSchema,
-  skillsUpdatedEventSchema,
+  piResourcesUpdatedEventSchema,
   integrationStateUpdatedEventSchema,
   integrationJobUpdatedEventSchema,
   integrationDiagnosticEventSchema,

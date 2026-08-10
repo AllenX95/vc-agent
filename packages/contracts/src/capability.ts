@@ -19,7 +19,6 @@ export const capabilityTurnKindSchema = z.enum([
   "reflection_independent",
   "reflection_dialogue",
   "dream",
-  "extension_audit",
   "sub_agent",
   "compaction"
 ]);

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { LocalJobSupervisor, type LocalJobManifest, type LocalJobResult } from "./agent-runtime-supervisor.js";
-import { SkillPackageManager } from "./skills-directory.js";
+import { VcSkillsDirectoryAdapter, type VcSkillMetadata } from "./vc-skills-directory.js";
 
 export type OfficeFormat = "docx" | "pptx" | "xlsx" | "pdf";
 export type OfficeTaskKind = "create" | "edit" | "review";
@@ -15,7 +15,12 @@ export interface OfficeTaskRequest {
   readonly threadId: string;
   readonly turnId: string;
   readonly profile: { readonly id: string; readonly provider: string; readonly model: string };
-  readonly skillRevisionId: string;
+  /** Preferred stable source selector. */
+  readonly skillName?: string;
+  /** Preferred explicit source path, constrained to the dedicated directory. */
+  readonly skillPath?: string;
+  /** Frozen content identity for protected-runner provenance, derived at prepare time. */
+  readonly skillIdentity?: string;
   readonly outputDirectory: string;
   readonly outputFileName?: string;
   readonly sourcePath?: string;
@@ -28,8 +33,12 @@ export interface OfficeExecutionPlan {
   readonly planId: string;
   readonly task: OfficeTaskRequest;
   readonly job: LocalJobManifest;
-  /** Effective app-owned root of the imported Skill revision selected by I1. */
+  /** Effective dedicated Skill root selected at prepare time. */
   readonly skillRoot: string;
+  /** Full package hash frozen for this protected workflow. */
+  readonly skillHash: string;
+  /** Hash of the progressive-disclosure instruction body. */
+  readonly skillInstructionHash: string;
   readonly stagedOutputPath: string;
   readonly expectedSourceHash?: string;
 }
@@ -56,7 +65,7 @@ export interface ProjectOfficeOutput {
   readonly mediaType: string;
   readonly destination: string;
   readonly relativePath: string;
-  readonly producer: { readonly skillRevisionId: string; readonly threadId: string; readonly turnId: string; readonly profileId: string; readonly provider: string; readonly model: string };
+  readonly producer: { readonly skillRevisionId: string; readonly skillName?: string; readonly skillHash?: string; readonly threadId: string; readonly turnId: string; readonly profileId: string; readonly provider: string; readonly model: string };
   readonly sourceReferences: readonly string[];
   readonly warnings: readonly string[];
   readonly hash: string;
@@ -96,7 +105,7 @@ interface StoredOfficeTask {
 }
 
 export class OfficeSkillOrchestrator {
-  readonly #manager: SkillPackageManager;
+  readonly #skills: VcSkillsDirectoryAdapter;
   readonly #jobs: LocalJobSupervisor;
   readonly #adapter: OfficeSkillJobAdapter;
   readonly #root: string;
@@ -105,14 +114,14 @@ export class OfficeSkillOrchestrator {
   readonly #registerOutput: ((output: ProjectOfficeOutput) => void) | undefined;
 
   constructor(input: {
-    skills: SkillPackageManager;
+    skills: VcSkillsDirectoryAdapter | { readonly root: string };
     adapter: OfficeSkillJobAdapter;
     root: string;
     jobCapacity?: number;
     now?: () => string;
     registerOutput?: (output: ProjectOfficeOutput) => void;
   }) {
-    this.#manager = input.skills;
+    this.#skills = asAdapter(input.skills);
     this.#adapter = input.adapter;
     this.#root = resolve(input.root);
     this.#now = input.now ?? (() => new Date().toISOString());
@@ -131,10 +140,10 @@ export class OfficeSkillOrchestrator {
     if (!request.explicitIntent) throw new Error("OFFICE_JOB_REJECTED");
     if (!request.projectId || !request.threadId || !request.turnId) throw new Error("OFFICE_JOB_REJECTED");
     if (!/^[a-z0-9-]+$/iu.test(request.format)) throw new Error("OFFICE_JOB_REJECTED");
-    const skill = this.#manager.getRevision(request.skillRevisionId);
-    if (skill === undefined || !skill.enabled || skill.state !== "active") throw new Error("OFFICE_SKILL_UNAVAILABLE");
-    const skillRoot = this.#manager.activePath(skill);
-    if (!existsSync(skillRoot)) throw new Error("OFFICE_SKILL_UNAVAILABLE");
+    const selectedSkill = this.resolveSkill(request);
+    const skillRoot = selectedSkill.metadata.baseDir;
+    const skillHash = hashDirectory(skillRoot);
+    const skillInstructionHash = hashFile(selectedSkill.filePath);
     if (request.kind !== "create" && (request.sourcePath === undefined || !existsSync(request.sourcePath))) throw new Error("OFFICE_SOURCE_CHANGED");
     if (request.kind === "create" && request.sourcePath !== undefined) throw new Error("OFFICE_JOB_REJECTED");
     const planId = randomUUID();
@@ -148,6 +157,13 @@ export class OfficeSkillOrchestrator {
       copyFileSync(request.sourcePath, inputSnapshotPath);
       if (hashFile(request.sourcePath) !== expectedSourceHash) throw new Error("OFFICE_SOURCE_CHANGED");
     }
+    const skillIdentity = `skill:${skillHash.slice(0, 24)}`;
+    const task: OfficeTaskRequest = {
+      ...request,
+      skillName: selectedSkill.metadata.name,
+      skillPath: skillRoot,
+      skillIdentity
+    };
     const job: LocalJobManifest = {
       jobId,
       kind: "isolated",
@@ -157,9 +173,9 @@ export class OfficeSkillOrchestrator {
       timeoutMs: 300_000,
       maxOutputBytes: 100_000_000,
       cancellationToken: randomUUID(),
-      metadata: { format: request.format, skillRevisionId: request.skillRevisionId }
+      metadata: { format: request.format, skillName: selectedSkill.metadata.name, skillHash, skillInstructionHash }
     };
-    const plan: OfficeExecutionPlan = { planId, task: { ...request, ...(expectedSourceHash === undefined ? {} : {}) }, job, skillRoot, stagedOutputPath, ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }) };
+    const plan: OfficeExecutionPlan = { planId, task, job, skillRoot, skillHash, skillInstructionHash, stagedOutputPath, ...(expectedSourceHash === undefined ? {} : { expectedSourceHash }) };
     this.#tasks.set(jobId, { plan });
     this.save();
     return plan;
@@ -169,6 +185,9 @@ export class OfficeSkillOrchestrator {
     const stored = this.findByPlan(planId);
     if (stored === undefined) throw new Error("OFFICE_JOB_REJECTED");
     const plan = stored.plan;
+    if (!existsSync(plan.skillRoot) || hashDirectory(plan.skillRoot) !== plan.skillHash || hashFile(join(plan.skillRoot, "SKILL.md")) !== plan.skillInstructionHash) {
+      return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, previewPaths: [], warnings: ["OFFICE_SKILL_CHANGED"] }, "OFFICE_SKILL_CHANGED");
+    }
     if (plan.task.kind !== "create" && (plan.task.sourcePath === undefined || hashFile(plan.task.sourcePath) !== plan.expectedSourceHash)) return this.saveResult(plan, { resultId: randomUUID(), planId, status: "failed", format: plan.task.format, ...(plan.task.sourcePath === undefined ? {} : { sourcePath: plan.task.sourcePath }), previewPaths: [], warnings: ["OFFICE_SOURCE_CHANGED"] }, "OFFICE_SOURCE_CHANGED");
     let job: LocalJobResult;
     try {
@@ -224,7 +243,7 @@ export class OfficeSkillOrchestrator {
     const output: ProjectOfficeOutput = {
       schemaVersion: 1, id: randomUUID(), projectId: plan.task.projectId, mediaType: mediaType(plan.task.format), destination,
       relativePath: relative(plan.task.projectPath, destination).split(sep).join("/"),
-      producer: { skillRevisionId: plan.task.skillRevisionId, threadId: plan.task.threadId, turnId: plan.task.turnId, profileId: plan.task.profile.id, provider: plan.task.profile.provider, model: plan.task.profile.model },
+      producer: { skillRevisionId: plan.task.skillIdentity ?? `skill:${plan.skillHash.slice(0, 24)}`, ...(plan.task.skillName === undefined ? {} : { skillName: plan.task.skillName }), skillHash: plan.skillHash, threadId: plan.task.threadId, turnId: plan.task.turnId, profileId: plan.task.profile.id, provider: plan.task.profile.provider, model: plan.task.profile.model },
       sourceReferences: [...(plan.task.sourceReferences ?? [])], warnings: [...result.warnings], hash: hashFile(destination), createdAt: this.#now(),
       relatedArtifacts: [
         ...(result.changeSummaryPath === undefined ? [] : [{ id: randomUUID(), kind: "change_summary" as const, path: result.changeSummaryPath }]),
@@ -284,6 +303,22 @@ export class OfficeSkillOrchestrator {
 
   async shutdown(): Promise<void> { await this.#jobs.shutdown(10_000); }
 
+  private resolveSkill(request: OfficeTaskRequest): { readonly metadata: VcSkillMetadata; readonly filePath: string } {
+    const snapshot = this.#skills.discover();
+    let metadata: VcSkillMetadata | undefined;
+    if (request.skillPath !== undefined) {
+      const candidate = resolve(request.skillPath);
+      metadata = snapshot.skills.find((skill) => skill.baseDir === candidate || skill.filePath === candidate);
+      if (metadata === undefined && this.#skills.isContained(candidate)) {
+        metadata = snapshot.skills.find((skill) => skill.baseDir === candidate || skill.filePath === join(candidate, "SKILL.md"));
+      }
+    }
+    if (metadata === undefined && request.skillName !== undefined) metadata = snapshot.skills.find((skill) => skill.name === request.skillName);
+    if (metadata === undefined) throw new Error("OFFICE_SKILL_UNAVAILABLE");
+    if (!this.#skills.isContained(metadata.baseDir) || !this.#skills.isContained(metadata.filePath)) throw new Error("OFFICE_SKILL_UNAVAILABLE");
+    return { metadata, filePath: metadata.filePath };
+  }
+
   private findByPlan(planId: string): StoredOfficeTask | undefined { return [...this.#tasks.values()].find((item) => item.plan.planId === planId); }
 
   private saveResult(plan: OfficeExecutionPlan, result: OfficeStagedResult, failureCode?: string): OfficeStagedResult {
@@ -325,6 +360,33 @@ function mediaType(format: OfficeFormat): string {
 
 function hashFile(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function hashDirectory(root: string): string {
+  const hash = createHash("sha256");
+  const files: string[] = [];
+  visit(resolve(root));
+  files.sort((left, right) => left.localeCompare(right));
+  for (const file of files) {
+    hash.update(relative(resolve(root), file).split(sep).join("/"), "utf8");
+    hash.update(readFileSync(file));
+  }
+  return hash.digest("hex");
+
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) files.push(path);
+      else throw new Error("OFFICE_SKILL_UNAVAILABLE");
+    }
+  }
+}
+
+function asAdapter(source: (VcSkillsDirectoryAdapter | { readonly root: string }) | undefined): VcSkillsDirectoryAdapter {
+  if (source === undefined) throw new Error("VC_SKILLS_DIRECTORY_REQUIRED");
+  if (source instanceof VcSkillsDirectoryAdapter) return source;
+  return new VcSkillsDirectoryAdapter({ root: source.root });
 }
 
 function isWithin(root: string, candidate: string): boolean {

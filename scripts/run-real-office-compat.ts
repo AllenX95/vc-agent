@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import {
   USER_OFFICE_SKILL_FORMATS,
   OfficeSkillOrchestrator,
-  SkillPackageManager,
+  VcSkillsDirectoryAdapter,
   provisionUserOfficeSkills,
   type OfficeExecutionPlan,
   type OfficeFormat,
@@ -58,8 +58,8 @@ async function main(): Promise<void> {
   const workRoot = mkdtempSync(join(tmpdir(), "vc-agent-real-office-"));
   const activeChildren = new Map<string, ChildProcessWithoutNullStreams>();
   try {
-    const skills = new SkillPackageManager({ root: join(workRoot, "skills") });
-    const imported = await provisionUserOfficeSkills({ sourceRoot, manager: skills, packageIds: [format] });
+    const skills = new VcSkillsDirectoryAdapter({ root: join(workRoot, "skills") });
+    const imported = await provisionUserOfficeSkills({ sourceRoot, skills, packageIds: [format] });
     const selected = imported[0];
     if (selected === undefined) throw new Error("OFFICE_SKILL_UNAVAILABLE");
     const projectPath = join(workRoot, "project");
@@ -79,7 +79,8 @@ async function main(): Promise<void> {
       projectPath,
       threadId: "real-office-thread",
       profile: { id: "real-office-runner", provider: "external-runner", model: "user-supplied" },
-      skillRevisionId: selected.overlay.revisionId,
+      skillName: selected.skill.name,
+      skillPath: selected.skill.baseDir,
       outputDirectory,
       explicitIntent: true as const
     };
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
       schemaVersion: 1,
       sanitized: true,
       kind: "office-compatibility",
-      sourceContentHash: selected.overlay.contentHash,
+      sourceContentHash: selected.skillHash,
       packageIds: [selected.packageId],
       formats: [format],
       runner: { mode: "external-stdin-manifest", status: "ready" },
@@ -112,7 +113,7 @@ async function main(): Promise<void> {
     };
     mkdirSync(resolve(evidencePath, ".."), { recursive: true });
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + "\n", "utf8");
-    console.log(JSON.stringify({ status: "pass", evidencePath: `external/office/compatibility.json`, packageId: selected.packageId, sourceContentHash: selected.overlay.contentHash }, null, 2));
+    console.log(JSON.stringify({ status: "pass", evidencePath: `external/office/compatibility.json`, packageId: selected.packageId, sourceContentHash: selected.skillHash }, null, 2));
   } finally {
     for (const child of activeChildren.values()) terminateChild(child);
     rmSync(workRoot, { recursive: true, force: true });
@@ -133,7 +134,7 @@ async function runExternalOffice(plan: OfficeExecutionPlan, runner: RunnerSpec, 
     jobId: plan.job.jobId,
     kind: plan.task.kind,
     format: plan.task.format,
-    skillRevisionId: plan.task.skillRevisionId,
+    skillRevisionId: plan.task.skillIdentity ?? `skill:${plan.skillHash.slice(0, 24)}`,
     skillRoot: plan.skillRoot,
     inputPaths: plan.job.inputPaths,
     stagingDirectory: plan.job.stagingDirectory,

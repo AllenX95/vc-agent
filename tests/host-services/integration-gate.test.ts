@@ -17,11 +17,11 @@ describe("Integration Gate report", () => {
       agentRuntime: { status: "ready", message: "Worker supervisor is available." },
       utilityRuntime: { status: "ready", message: "Utility runtime is available." },
       isolatedRuntime: { status: "ready", message: "Isolated job runtime is available." },
-      skills: { status: "ready", message: "Skills inventory is local and disabled by default." },
+      skills: { status: "ready", message: "Skills are isolated to the VC Agent directory." },
       office: { status: "unavailable", message: "No real User-supplied Office Skill was configured." },
       ocr: { status: "attention", message: "Optional local OCR dependencies are not installed." },
       mcp: { status: "ready", message: "Pinned adapter is available; no server was connected." },
-      extensionRevision: { status: "ready", message: "Global Extension revision is empty and dormant." },
+      extensions: { status: "ready", message: "Pi-native Extension files are statically inspectable and dormant." },
       backup: { status: "ready", message: "Backup status is inspectable." }
     });
     expect(doctorIsActivationFree(doctor)).toBe(true);
@@ -33,7 +33,7 @@ describe("Integration Gate report", () => {
         { testId: "G3-T-003", scenario: "Skill Creator staged handoff", status: "pass", durationMs: 3, evidencePath: join(outputRoot, "evidence", "creator.json") },
         { testId: "G3-T-004", scenario: "Mixed PDF page recovery", status: "pass", durationMs: 2 },
         { testId: "G3-T-005", scenario: "Lazy MCP read/write/failure fixture", status: "pass", durationMs: 2 },
-        { testId: "G3-T-006", scenario: "Extension admission and revision fixture", status: "pass", durationMs: 3 },
+        { testId: "G3-T-006", scenario: "Pi-native resource loading fixture", status: "pass", durationMs: 3 },
         { testId: "G3-T-010", scenario: "External sanitized dependency evidence", status: "pass", durationMs: 1, evidencePath: "external/ocr/compatibility.json" },
         { testId: "G3-T-011", scenario: "Personal Build real Office Skill", status: "blocked", durationMs: 0, warning: "Requires an explicit User-supplied package and dependency run." }
       ],

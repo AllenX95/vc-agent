@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { USER_OFFICE_SKILL_FORMATS, SkillPackageManager, provisionUserOfficeSkills, resolveVcAgentSkillsRoot, type UserOfficeSkillFormat } from "../packages/host-services/src/index.ts";
+import { USER_OFFICE_SKILL_FORMATS, VcSkillsDirectoryAdapter, provisionUserOfficeSkills, resolveVcAgentSkillsRoot, type UserOfficeSkillFormat } from "../packages/host-services/src/index.ts";
 
 /**
  * Provisions user-selected local Office skill packages. A source directory is
@@ -13,12 +13,12 @@ async function main(): Promise<void> {
   const requested = flags.skills?.split(",").map((value) => value.trim()).filter(Boolean);
   const selected = requested === undefined ? undefined : requested.filter((value): value is UserOfficeSkillFormat => (USER_OFFICE_SKILL_FORMATS as readonly string[]).includes(value));
   if (requested !== undefined && (selected === undefined || selected.length !== requested.length)) throw new Error("OFFICE_SKILL_FORMAT_UNSUPPORTED");
-  const manager = new SkillPackageManager({ root: skillsRoot });
-  const results = await provisionUserOfficeSkills({ sourceRoot, manager, ...(selected === undefined ? {} : { packageIds: selected }) });
+  const skills = new VcSkillsDirectoryAdapter({ root: skillsRoot });
+  const results = await provisionUserOfficeSkills({ sourceRoot, skills, ...(selected === undefined ? {} : { packageIds: selected }) });
   console.log(JSON.stringify({
     source: { kind: "user_supplied_local" },
     skillsRoot,
-    packages: results.map((result) => ({ packageId: result.packageId, revisionId: result.overlay.revisionId, active: result.overlay.enabled && result.overlay.state === "active", contentHash: result.overlay.contentHash, activeHash: result.overlay.activeHash, compatibility: result.report.status }))
+    packages: results.map((result) => ({ packageId: result.packageId, skillName: result.skill.name, destinationPath: result.destinationPath, skillHash: result.skillHash, available: true }))
   }, null, 2));
 }
 

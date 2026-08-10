@@ -69,7 +69,17 @@ test("launches the empty shell without activating execution resources", async ()
     await expect(openAlexCredential).toHaveValue("");
     await expect(window.getByText("Remote content telemetry", { exact: true })).toBeVisible();
     for (const item of ["Pi SDK", "Provider", "Parsers", "Credentials", "Storage", "Migration", "Bundled Extensions"]) await expect(window.getByText(item, { exact: true })).toBeVisible();
-    for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "MCP", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
+    const piResources = window.getByTestId("pi-resources-settings");
+    await expect(piResources).toBeVisible();
+    await expect(piResources.getByText("Extensions, MCP, and Skills", { exact: true })).toBeVisible();
+    await expect(piResources.getByText(/trusted Worker code|trusted Worker/i)).toBeVisible();
+    await expect(piResources.getByText(/dedicated VC Agent Skills directory/i)).toBeVisible();
+    await expect(piResources.getByTestId("pi-extensions-open-folder")).toBeVisible();
+    await expect(piResources.getByTestId("pi-mcp-open-config")).toBeVisible();
+    await expect(piResources.getByTestId("pi-skills-open-folder")).toBeVisible();
+    await expect(piResources.getByTestId("pi-resources-reload")).toBeVisible();
+    await expect(piResources.getByTestId("pi-project-resources-trusted")).toBeVisible();
+    for (const unavailable of ["Dream", "Reflection", "Long-term Memory", "Sub-Agent", "Office", "OCR", "Extension Audit"]) await expect(window.getByRole("button", { name: unavailable, exact: true })).toHaveCount(0);
 
     await window.evaluate(async () => {
       await (window as unknown as { vcAgent: { invoke(command: unknown): Promise<unknown> } }).vcAgent.invoke({
@@ -148,33 +158,25 @@ test("opens newer local state in visible read-only recovery without changing it"
   }
 });
 
-test("imports, inspects, activates, and restores a Skill through Settings", async () => {
+test("imports a complete Skill copy into the dedicated Pi directory", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-skills-e2e-"));
   const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-skill-source-e2e-"));
-  writeFileSync(join(skillSource, "SKILL.md"), ["---", "name: Fixture Skill", "description: A bounded fixture", "keywords: fixture, document", "---", "# Fixture Skill", "Use the bounded fixture."].join("\n"), "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), ["---", "name: fixture-skill", "description: A bounded fixture", "keywords: fixture, document", "---", "# Fixture Skill", "Use the bounded fixture."].join("\n"), "utf8");
   writeFileSync(join(skillSource, "LICENSE"), "fixture license", "utf8");
   const root = resolve(import.meta.dirname, "../..");
-  let application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_SKILL_SOURCE: skillSource });
+  const application = await launchApplication(root, userDataDirectory, { VC_AGENT_TEST_SKILL_SOURCE: skillSource });
   try {
-    let window = await application.firstWindow();
+    const window = await application.firstWindow();
     await window.getByRole("button", { name: "Settings" }).click();
-    await expect(window.getByTestId("skills-settings")).toBeVisible();
-    await expect(window.getByText("No imported Skill packages", { exact: true })).toBeVisible();
-    await window.getByRole("button", { name: "Import Skill" }).click();
-    const row = window.locator("[data-testid=skills-settings] .profile-row");
-    await expect(row).toBeVisible();
-    await expect(row).toContainText("copied");
-    await row.getByRole("button", { name: "Inspect" }).click();
-    await expect(row).toContainText("awaiting_activation");
-    await row.getByRole("button", { name: "Activate" }).click();
-    await expect(row).toContainText("active");
-    expect(existsSync(join(userDataDirectory, "skills", "inventory.json"))).toBe(true);
-    await application.close();
-    application = await launchApplication(root, userDataDirectory);
-    window = await application.firstWindow();
-    await window.getByRole("button", { name: "Settings" }).click();
-    const restoredRow = window.locator(".profile-row").filter({ hasText: "Fixture Skill" });
-    await expect(restoredRow).toContainText("active");
+    const resources = window.getByTestId("pi-resources-settings");
+    await expect(resources).toBeVisible();
+    await resources.getByTestId("pi-skills-import-copy").click();
+    await expect.poll(() => {
+      const skillsDirectory = join(userDataDirectory, "pi-agent", "skills");
+      const entries = readdirSync(skillsDirectory, { withFileTypes: true });
+      return entries.some((entry) => entry.isDirectory() && existsSync(join(skillsDirectory, entry.name, "SKILL.md")));
+    }).toBe(true);
+    await expect(resources.getByText(/Only the dedicated VC Agent Skills directory/i)).toBeVisible();
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -204,20 +206,10 @@ test("completes Skills and Project file mentions from the composer", async () =>
     await window.getByRole("button", { name: "Composer Commands", exact: true }).click();
     await window.getByRole("combobox", { name: "Active Model Profile" }).selectOption(primaryProfile.payload.profile.id);
     await window.getByRole("button", { name: "Settings" }).click();
-    await window.getByRole("button", { name: "Import Skill" }).click();
-    const row = window.locator("[data-testid=skills-settings] .profile-row");
-    await row.getByRole("button", { name: "Inspect" }).click();
-    await row.getByRole("button", { name: "Activate" }).click();
+    await window.getByTestId("pi-skills-import-copy").click();
     await window.getByRole("button", { name: "Settings" }).click();
 
     const composer = window.getByRole("textbox", { name: "Message" });
-    await composer.fill("/");
-    const skills = window.getByRole("listbox", { name: "Slash commands" });
-    const skillPackageId = skillSource.split(/[\\/]/u).at(-1)!.toLocaleLowerCase();
-    await expect(skills).toContainText(`/skill:${skillPackageId}`);
-    await skills.getByRole("option", { name: new RegExp(`/skill:${skillPackageId}`, "u") }).click();
-    await expect(composer).toHaveValue(`/skill:${skillPackageId} `);
-
     await composer.fill("Review @");
     const files = window.getByRole("listbox", { name: "Project files" });
     await expect(files).toContainText("@Investment Memo.md");
@@ -252,7 +244,7 @@ test("completes Skills and Project file mentions from the composer", async () =>
   }
 });
 
-test("exposes lazy Integration status and keeps MCP disconnected after configuration", async () => {
+test("exposes Pi-native resource sources without eager external activation", async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-integrations-e2e-"));
   const extensionSource = mkdtempSync(join(tmpdir(), "vc-agent-extension-source-e2e-"));
   writeFileSync(join(extensionSource, "package.json"), JSON.stringify({ name: "fixture-extension", version: "1.0.0", license: "MIT", main: "index.js" }), "utf8");
@@ -263,15 +255,23 @@ test("exposes lazy Integration status and keeps MCP disconnected after configura
   try {
     const window = await application.firstWindow();
     await window.getByRole("button", { name: "Settings" }).click();
-    await expect(window.getByTestId("integrations-settings")).toBeVisible();
-    await expect(window.getByRole("heading", { name: "Integrations" })).toBeVisible();
-    await expect(window.getByText("Pinned MCP adapter is dormant; no server connection is open.", { exact: true })).toBeVisible();
-    await expect(window.getByTestId("integration-task-context")).toContainText("Project: Not selected");
-    await expect(window.getByRole("button", { name: "Prepare Office task" })).toBeDisabled();
-    const serverId = crypto.randomUUID();
-    const saved = await invokeRaw(window, "mcp.server.save", { serverId, name: "Fixture MCP", transport: "fixture", enabled: true, allowedScopes: ["project"] });
-    expect(saved).toMatchObject({ event: "integration.state.updated", payload: { state: { mcp: { servers: [{ serverId, connectionStatus: "disconnected" }] } } } });
-    expect(existsSync(join(userDataDirectory, "integrations", "mcp", "mcp-servers.json"))).toBe(true);
+    const resources = window.getByTestId("pi-resources-settings");
+    await expect(resources).toBeVisible();
+    await expect(resources.getByTestId("pi-extensions-settings")).toBeVisible();
+    await expect(resources.getByTestId("pi-mcp-settings")).toBeVisible();
+    await expect(resources.getByTestId("pi-skills-settings")).toBeVisible();
+    await expect(resources.getByText(/trusted Worker code|trusted Worker/i)).toBeVisible();
+    await expect(resources.getByText(/MCP servers.*trusted as a set/i)).toBeVisible();
+    await expect(resources.getByText(/Only the dedicated VC Agent Skills directory/i)).toBeVisible();
+    await resources.getByTestId("pi-extensions-open-folder").click();
+    await resources.getByTestId("pi-mcp-open-config").click();
+    await resources.getByTestId("pi-skills-open-folder").click();
+    await resources.getByTestId("pi-resources-reload").click();
+    await resources.getByTestId("pi-project-resources-trusted").check();
+    await expect(resources.getByTestId("pi-project-resources-trusted")).toBeChecked();
+    for (const legacy of ["Stage Extension", "Test Connection", "Activate", "Audit", "Approve", "Save config"]) {
+      await expect(window.getByRole("button", { name: legacy, exact: true })).toHaveCount(0);
+    }
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -313,10 +313,7 @@ test("completes the desktop C1 fixture paths without eager external activation",
     await expect(window.locator(".user-message")).toContainText("Establish the selected integration parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
-    await window.getByRole("button", { name: "Import Skill" }).click();
-    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
-    await skillRow.getByRole("button", { name: "Inspect" }).click();
-    await skillRow.getByRole("button", { name: "Activate" }).click();
+    await window.getByTestId("pi-skills-import-copy").click();
     const integration = window.getByTestId("integrations-settings");
     const officeCard = integration.locator(".integration-card").filter({ hasText: "Office Skills" });
     await officeCard.getByLabel("Office Skill revision").selectOption({ index: 1 });
@@ -350,25 +347,9 @@ test("completes the desktop C1 fixture paths without eager external activation",
     await pageRecoveryCard.getByRole("button", { name: "Run Page Recovery" }).click();
     await expect(pageRecoveryCard).toContainText("completed");
     await expect(pageRecoveryCard).toContainText("Last Parse · per-page retained result");
-    await invokeRaw(window, "mcp.server.save", { serverId: crypto.randomUUID(), name: "Fixture MCP", transport: "fixture", enabled: true, allowedScopes: ["project"], enabledToolIds: ["fixture.search", "fixture.write"], toolSchemas: [{ name: "fixture.search", description: "Bounded fixture read", actionClass: "read", allowedScopes: ["project"], inputBytes: 4_000, outputBytes: 20_000, schemaHash: "fixture-search-v1" }, { name: "fixture.write", description: "Explicitly confirmed fixture write", actionClass: "write", allowedScopes: ["project"], inputBytes: 4_000, outputBytes: 20_000, schemaHash: "fixture-write-v1" }] });
-    await window.reload();
-    await window.getByRole("button", { name: "Thread 1", exact: true }).click();
-    await window.getByRole("button", { name: "Settings" }).click();
-    await expect(integration.getByText("Fixture MCP", { exact: false })).toBeVisible();
-    await integration.getByRole("button", { name: "Test Connection" }).click();
-    await integration.getByRole("button", { name: "Activate", exact: true }).click();
-    await expect(integration.getByRole("button", { name: "Run read" })).toBeVisible();
-    await integration.getByRole("button", { name: "Run read" }).click();
-    await integration.getByRole("button", { name: "Confirm action" }).click();
-    await integration.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await integration.getByRole("button", { name: "Stage Extension" }).click();
-    const extensionCard = integration.locator(".integration-card").filter({ hasText: "Extension Admission" });
-    await extensionCard.getByRole("button", { name: "Inspect" }).click();
-    await extensionCard.getByRole("button", { name: "Audit" }).click();
-    await extensionCard.getByRole("button", { name: "Approve" }).click();
-    await extensionCard.getByRole("button", { name: "Prepare enable" }).click();
-    await extensionCard.getByRole("button", { name: "Activate pending revision" }).click();
-    await expect(extensionCard).toContainText("1 enabled");
+    await expect(window.getByTestId("pi-extensions-settings")).toBeVisible();
+    await expect(window.getByTestId("pi-mcp-settings")).toBeVisible();
+    await expect(window.getByTestId("pi-skills-settings")).toBeVisible();
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -411,10 +392,7 @@ test("executes an explicitly configured Office runner through the Utility Worker
     await expect(window.locator(".user-message")).toContainText("Establish the Office runner parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
-    await window.getByRole("button", { name: "Import Skill" }).click();
-    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
-    await skillRow.getByRole("button", { name: "Inspect" }).click();
-    await skillRow.getByRole("button", { name: "Activate" }).click();
+    await window.getByTestId("pi-skills-import-copy").click();
     const integration = window.getByTestId("integrations-settings");
     const officeCard = integration.locator(".integration-card").filter({ hasText: "Office Skills" });
     await officeCard.getByLabel("Office Skill revision").selectOption({ index: 1 });
@@ -464,10 +442,7 @@ test("cancels a running Office runner and reports an interrupted job", async () 
     await expect(window.locator(".user-message")).toContainText("Establish the Office cancellation parent Turn.");
     await expect(window.locator(".assistant-message.completed")).toBeVisible({ timeout: 20_000 });
     await window.getByRole("button", { name: "Settings" }).click();
-    await window.getByRole("button", { name: "Import Skill" }).click();
-    const skillRow = window.locator("[data-testid=skills-settings] .profile-row");
-    await skillRow.getByRole("button", { name: "Inspect" }).click();
-    await skillRow.getByRole("button", { name: "Activate" }).click();
+    await window.getByTestId("pi-skills-import-copy").click();
     const officeCard = window.getByTestId("integrations-settings").locator(".integration-card").filter({ hasText: "Office Skills" });
     await officeCard.getByLabel("Office Skill revision").selectOption({ index: 1 });
     await officeCard.getByRole("button", { name: "Prepare Office task" }).click();

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch, type FSWatcher } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, shell, type IpcMainInvokeEvent } from "electron";
 import {
@@ -28,37 +28,31 @@ import {
   type TrajectoryProfile,
   type WorkerCommand,
   type WorkerEvent,
-  type ExtensionInventorySnapshot,
-  type RuntimeSkillSnapshot as ContractRuntimeSkillSnapshot,
-  type SkillCompatibilityReport as ContractSkillCompatibilityReport,
-  type SkillInventoryItem as ContractSkillInventoryItem,
   type IntegrationState,
   type IntegrationJobSummary,
   type SubAgentProfileSnapshot,
   type SubAgentRole,
   type RuntimeResourceSnapshot,
-  type FrozenMcpActivation,
+  type PiResourcesSettingsState,
   type SubAgentContextBoundary,
   type TaskModelType
 } from "@vc-agent/contracts";
 import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createRuntimeExtensionCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore, type CapabilityExecutionContext } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { RuntimeCapabilityAssembler } from "@vc-agent/pi-adapter/runtime-capability-assembler";
-import { bundledPiWebAccessEntry, inspectExtensionEntries } from "@vc-agent/pi-adapter/extension-preflight";
 import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
-import { BUNDLED_ACADEMIC_SKILL_IDS, BoundedExecutionScheduler, ExtensionAdmissionManager, GlobalExtensionRevisionManager, McpIntegrationManager, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SkillPackageManager, SkillResourceProjector, SubAgentContextCompiler, SubAgentRuntime, installBundledAcademicSkills, isUserOfficeSkillPackage, resolveVcAgentUserDataRoot, type RuntimeSkillSnapshot, type SkillCompatibilityReport, type SkillInventoryItem, type SkillDraft, type SkillDraftReview, type McpActivationDecision, type McpServerStatus, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
+import { BoundedExecutionScheduler, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SubAgentContextCompiler, SubAgentRuntime, VcSkillsDirectoryAdapter, resolveVcAgentUserDataRoot, type SkillDraft, type SkillDraftReview, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
+import { PiIntegrationMigration, type PiIntegrationMigrationDiagnostic } from "@vc-agent/host-services";
 import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
-import { ExtensionAuditWorkerExecutor } from "./extension-audit-worker.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
 import { BundledArxivFulltextClient } from "./arxiv-fulltext-client.js";
 import { ProtectedCredentialService } from "./protected-credential-service.js";
 import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
-import { createDesktopExtensionAuditAdapter, createDesktopMcpAdapter, createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
+import { createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
 import { HostTurnExecutionModule, type DreamExecutionContext, type DreamSynthesisExecutionContext, type ReflectionExecutionContext, type TurnContext } from "./turn-execution.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
@@ -83,15 +77,13 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "state.recovery.export",
   "profile.list",
   "academic.credentials.list",
-  "skills.list",
-  "skills.inspect",
   "integration.state.load",
+  "pi.resources.load",
+  "pi.resources.open",
   "office.source.choose",
   "office.artifact.open",
   "skill_creator.list",
   "page_recovery.inspect",
-  "mcp.server.list",
-  "extension.list",
   "prompt.revision.list",
   "task_model_assignment.list",
   "reflection.list",
@@ -131,7 +123,6 @@ let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
 let turnExecution: HostTurnExecutionModule | null = null;
-let extensionAuditWorker: ExtensionAuditWorkerExecutor | null = null;
 let capabilityGateway: CapabilityGateway | null = null;
 let utilityJobRunner: UtilityJobRunner | null = null;
 let capabilityRegistry: CapabilityRegistry | null = null;
@@ -144,15 +135,10 @@ let dreamReviews: DreamReviewStore | null = null;
 let dreamCommits: DreamCommitStore | null = null;
 let personalCognition: PersonalCognitionBackupService | null = null;
 let executionScheduler: BoundedExecutionScheduler | null = null;
-let extensionAdmission: ExtensionAdmissionManager | null = null;
-let globalExtensionRevisions: GlobalExtensionRevisionManager | null = null;
-let skillsDirectory: SkillPackageManager | null = null;
-let skillProjector: SkillResourceProjector | null = null;
-let bundledAcademicSkillsRoot: string | null = null;
+let vcSkillsDirectory: VcSkillsDirectoryAdapter | null = null;
 let officeOrchestrator: OfficeSkillOrchestrator | null = null;
 let skillCreatorWorkflow: SkillCreationWorkflow | null = null;
 let pageRecoveryPipeline: PageRecoveryPipeline | null = null;
-let mcpIntegration: McpIntegrationManager | null = null;
 let subAgentRuntime: SubAgentRuntime | null = null;
 let subAgentProviderExecutor: DesktopSubAgentProviderExecutor | null = null;
 let lastPageRecoveryParse: IntegrationState["pageRecovery"]["lastParse"] | undefined;
@@ -160,22 +146,14 @@ let externalNetworkRequests = 0;
 let shuttingDown = false;
 let shutdownPromise: Promise<void> | null = null;
 let allowQuitAfterShutdown = false;
+let piResourcesGeneration = 0;
+let piResourcesReloadPending = false;
+let projectPiResourcesTrusted = false;
+let piResourceMigrationDiagnostics: readonly PiIntegrationMigrationDiagnostic[] = [];
 const sequenceByThread = new Map<string, number>();
 const integrationJobs = new Map<string, IntegrationJobSummary>();
-type PendingMcpActivation = {
-  readonly activationId: string;
-  readonly serverId: string;
-  readonly schemaRevision: string;
-  readonly toolIds: readonly string[];
-  readonly toolSchemas: McpActivationDecision["toolSchemas"];
-  readonly scope: "project" | "unscoped";
-  readonly reason: McpActivationDecision["reason"];
-  readonly threadId: string;
-};
-const mcpActivations = new Map<string, PendingMcpActivation>();
 let integrationJobsPath: string | undefined;
 const capabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest }>();
-const mcpCapabilityRequests = new Map<string, { context: TurnContext; request: CapabilityExecutionRequest; activation: FrozenMcpActivation; schema: FrozenMcpActivation["toolSchemas"][number] }>();
 const pendingProjectCollisions = new Map<string, { projectId: string; existingPath: string; selectedPath: string }>();
 const loadedPromptByThread = new Map<string, SystemPromptRevision>();
 const materialWatchers = new Map<string, { path: string; watcher: FSWatcher; timer?: ReturnType<typeof setTimeout>; contextTimer?: ReturnType<typeof setTimeout>; memoryTimer?: ReturnType<typeof setTimeout> }>();
@@ -189,7 +167,14 @@ let longTermMemoryWatcher: FSWatcher | null = null;
 let longTermMemoryWatchTimer: ReturnType<typeof setTimeout> | undefined;
 const projectOutputs = new ProjectOutputRegistry();
 
-const EMPTY_RUNTIME_SKILLS: RuntimeSkillSnapshot = {
+type NativeSkillCompatibilitySnapshot = {
+  readonly schemaVersion: 1;
+  readonly revisionId: string;
+  readonly decisions: readonly { readonly packageId: string }[];
+  readonly instructions: readonly Record<string, unknown>[];
+  readonly resources: readonly unknown[];
+};
+const EMPTY_RUNTIME_SKILLS: NativeSkillCompatibilitySnapshot = {
   schemaVersion: 1,
   revisionId: "skills-empty-v1",
   decisions: [],
@@ -197,171 +182,223 @@ const EMPTY_RUNTIME_SKILLS: RuntimeSkillSnapshot = {
   resources: []
 };
 
-function runtimeSkillsForTask(task: string, scope: "project" | "unscoped"): ContractRuntimeSkillSnapshot {
-  const snapshot = skillProjector === null ? EMPTY_RUNTIME_SKILLS : skillProjector.project(skillProjector.resolve({ task, scope }));
-  return {
-    schemaVersion: 1,
-    revisionId: snapshot.revisionId,
-    decisions: snapshot.decisions.map((decision) => ({ ...decision, resources: [...decision.resources], capabilities: [...decision.capabilities] })),
-    // Pi's ResourceLoader receives only bounded Skill metadata. It reads the
-    // exact revision's SKILL.md through the registered Skill resource when
-    // the model invokes /skill, so a new Turn never carries a second body copy.
-    instructions: snapshot.instructions.map((instruction) => {
-      const { content: _content, ...metadata } = instruction;
-      return metadata;
-    }),
-    resources: []
-  };
+function runtimeSkillsForTask(_task: string, _scope: "project" | "unscoped"): NativeSkillCompatibilitySnapshot {
+  // Skill discovery and progressive disclosure now belong to Pi's native
+  // ResourceLoader. Keep the transitional Worker field empty so Host never
+  // projects or selects a legacy Skill revision.
+  return EMPTY_RUNTIME_SKILLS;
 }
 
-function runtimeSkillMetadataText(skills: ContractRuntimeSkillSnapshot): string {
+function runtimeSkillMetadataText(skills: NativeSkillCompatibilitySnapshot): string {
   return JSON.stringify({
     revisionId: skills.revisionId,
     decisions: skills.decisions,
-    instructions: skills.instructions.map(({ content: _content, ...metadata }) => metadata)
+    instructions: skills.instructions
   });
 }
 
 function skillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
-  const inventory = skillsDirectory?.inventory() ?? [];
-  const active = inventory.filter((item) => item.enabled && item.state === "active");
-  const office = active.filter((item) => isUserOfficeSkillPackage(item.packageId));
-  const academic = active.filter((item) => BUNDLED_ACADEMIC_SKILL_IDS.some((packageId) => packageId === item.packageId));
-  if (inventory.length === 0) return { status: "attention", message: "No imported Skill package is configured; the app-owned directory remains dormant." };
-  return { status: "ready", message: `${inventory.length} imported Skill package(s), ${active.length} active, ${office.length} user-supplied Office package(s), ${academic.length}/${BUNDLED_ACADEMIC_SKILL_IDS.length} VC academic package(s); no package was activated by Doctor.` };
+  const snapshot = vcSkillsDirectory?.discover();
+  if (snapshot === undefined || snapshot.skills.length === 0) return { status: "attention", message: "No Skill was found in the dedicated VC Agent directory; the directory remains dormant." };
+  const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+  return { status: errors === 0 ? "ready" : "attention", message: `${snapshot.skills.length} Skill(s) discovered in the dedicated VC Agent directory${errors === 0 ? "." : `; ${errors} validation diagnostic(s) require attention.`}` };
 }
 
-function skillPackageProjection(item: SkillInventoryItem): ContractSkillInventoryItem {
+function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
+  const imported = vcSkillsDirectory?.discover().skills ?? [];
+  if (imported.length === 0) return { status: "attention", message: "No compatible Office Skill was found in the dedicated VC Agent directory; import a local Skill from Settings." };
+  const runnerConfigured = (process.env.VC_AGENT_OFFICE_RUNNER?.trim() ?? "") !== "";
+  const status = runnerConfigured ? "ready" : "attention";
+  const dependencyMessage = runnerConfigured ? "an explicit Office runner is configured" : "VC_AGENT_OFFICE_RUNNER is not configured";
+  return { status, message: `${imported.length} dedicated Office Skill(s) discovered; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
+}
+
+function piResourcesConfig(): NonNullable<Extract<WorkerCommand, { command: "turn.execute" }>["piResources"]> {
+  const userData = app.getPath("userData");
+  const agentDir = join(userData, "pi-agent");
   return {
-    ...item,
-    declaredDependencies: [...item.declaredDependencies],
-    files: [...item.files],
-    findings: item.findings.map((finding) => ({ ...finding })),
-    metadata: { ...item.metadata }
+    agentDir,
+    skillsRoot: join(agentDir, "skills"),
+    mcpConfigPath: join(agentDir, "mcp.json"),
+    projectResourcesTrusted: projectPiResourcesTrusted
   };
 }
 
-function skillReportProjection(report: SkillCompatibilityReport): ContractSkillCompatibilityReport {
+function piResourcePaths(): {
+  readonly agentDir: string;
+  readonly extensions: string;
+  readonly mcpConfig: string;
+  readonly skills: string;
+  readonly settings: string;
+} {
+  const agentDir = join(app.getPath("userData"), "pi-agent");
   return {
-    ...report,
-    package: skillPackageProjection(report.package),
-    files: [...report.files],
-    missingReferences: [...report.missingReferences],
-    unsupportedDirectives: [...report.unsupportedDirectives],
-    undeclaredExecutables: [...report.undeclaredExecutables],
-    findings: report.findings.map((finding) => ({ ...finding }))
+    agentDir,
+    extensions: join(agentDir, "extensions"),
+    mcpConfig: join(agentDir, "mcp.json"),
+    skills: join(agentDir, "skills"),
+    settings: join(agentDir, "vc-agent-resources.json")
   };
 }
 
-function skillsStateEvent(correlationId: string, action: "listed" | "imported" | "bundled_installed" | "inspected" | "activated" | "disabled", selectedRevisionId?: string, report?: SkillCompatibilityReport): HostEvent {
-  if (skillsDirectory === null) return diagnostic(correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
+function loadPiResourceSettings(): void {
+  const paths = piResourcePaths();
+  mkdirSync(paths.agentDir, { recursive: true });
+  try {
+    const parsed = JSON.parse(readFileSync(paths.settings, "utf8")) as { projectResourcesTrusted?: unknown };
+    projectPiResourcesTrusted = parsed.projectResourcesTrusted === true;
+  } catch {
+    projectPiResourcesTrusted = false;
+  }
+}
+
+function persistPiResourceSettings(): void {
+  const paths = piResourcePaths();
+  mkdirSync(paths.agentDir, { recursive: true });
+  writeFileSync(paths.settings, `${JSON.stringify({ schemaVersion: 1, projectResourcesTrusted: projectPiResourcesTrusted }, null, 2)}\n`, "utf8");
+}
+
+function ensureNativePiResourceFiles(): void {
+  const paths = piResourcePaths();
+  mkdirSync(paths.extensions, { recursive: true });
+  mkdirSync(paths.skills, { recursive: true });
+  if (!existsSync(paths.mcpConfig)) writeFileSync(paths.mcpConfig, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`, "utf8");
+}
+
+function migrateLegacyPiResources(): void {
+  const userData = app.getPath("userData");
+  const paths = piResourcePaths();
+  const migration = new PiIntegrationMigration({
+    oldExtensionRoot: join(userData, "integrations", "extensions"),
+    oldMcpRoot: join(userData, "integrations", "mcp"),
+    oldSkillsRoot: join(userData, "skills"),
+    newAgentDir: paths.agentDir,
+    newExtensionRoot: paths.extensions,
+    newMcpConfigPath: paths.mcpConfig,
+    newSkillsRoot: paths.skills
+  });
+  try {
+    const result = migration.migrate();
+    piResourceMigrationDiagnostics = result.diagnostics;
+  } catch (error) {
+    piResourceMigrationDiagnostics = error instanceof Error
+      ? [{ code: "MIGRATION_COMMIT_FAILED", severity: "error", message: error.message }]
+      : [{ code: "MIGRATION_COMMIT_FAILED", severity: "error", message: "Pi resource migration failed." }];
+  } finally {
+    ensureNativePiResourceFiles();
+  }
+}
+
+function piResourcesSettingsSnapshot(): PiResourcesSettingsState {
+  const paths = piResourcePaths();
+  const skillSnapshot = new VcSkillsDirectoryAdapter({ root: paths.skills }).discover();
+  const diagnostics: PiResourcesSettingsState["diagnostics"] = [
+    ...piResourceMigrationDiagnostics.map((diagnostic) => ({
+      type: diagnostic.severity === "error" ? "error" as const : "warning" as const,
+      source: "runtime" as const,
+      code: diagnostic.code,
+      message: diagnostic.message,
+      ...(diagnostic.path === undefined ? {} : { path: diagnostic.path }),
+      blocking: diagnostic.severity === "error"
+    })),
+    ...skillSnapshot.diagnostics.map((diagnostic) => ({
+      type: diagnostic.severity === "error" ? "error" as const : "warning" as const,
+      source: "skill" as const,
+      code: diagnostic.code,
+      message: diagnostic.message,
+      ...(diagnostic.path === undefined ? {} : { path: diagnostic.path }),
+      blocking: diagnostic.severity === "error"
+    }))
+  ];
+  let serverCount = 0;
+  try {
+    const parsed = JSON.parse(readFileSync(paths.mcpConfig, "utf8")) as { mcpServers?: unknown };
+    if (parsed.mcpServers !== null && typeof parsed.mcpServers === "object" && !Array.isArray(parsed.mcpServers)) {
+      serverCount = Object.keys(parsed.mcpServers).length;
+    } else throw new Error("mcpServers must be an object");
+  } catch (error) {
+    diagnostics.push({ type: "error", source: "mcp", code: "MCP_CONFIGURATION_INVALID", message: error instanceof Error ? error.message : "mcp.json is invalid", path: paths.mcpConfig, blocking: true });
+  }
+  const extensionCount = existsSync(paths.extensions)
+    ? readdirSync(paths.extensions, { withFileTypes: true }).filter((entry) => entry.isDirectory() || entry.isFile()).length
+    : 0;
+  const statusFor = (source: "extension" | "mcp" | "skill"): "ready" | "attention" => diagnostics.some((diagnostic) => diagnostic.source === source && (diagnostic.type === "error" || diagnostic.type === "warning")) ? "attention" : "ready";
   return {
-    ...eventMetadata(correlationId),
-    event: "skills.updated",
-    payload: {
-      root: skillsDirectory.root,
-      packages: skillsDirectory.inventory().map(skillPackageProjection),
-      action,
-      ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
-      ...(report === undefined ? {} : { report: skillReportProjection(report) })
+    schemaVersion: 1,
+    generation: piResourcesGeneration,
+    reloadPending: piResourcesReloadPending,
+    diagnostics,
+    extensions: {
+      status: statusFor("extension"),
+      diagnostics: diagnostics.filter((diagnostic) => diagnostic.source === "extension"),
+      trustDisclosure: "Files in this directory are Trusted Worker Code with the Agent Worker process authority.",
+      directoryPath: paths.extensions,
+      loadedCount: extensionCount,
+      projectResourcesTrusted: projectPiResourcesTrusted
+    },
+    mcp: {
+      status: statusFor("mcp"),
+      diagnostics: diagnostics.filter((diagnostic) => diagnostic.source === "mcp"),
+      trustDisclosure: "Servers listed in effective mcp.json and their tools are trusted as a set.",
+      configPath: paths.mcpConfig,
+      serverCount,
+      connectedServerCount: 0
+    },
+    skills: {
+      status: statusFor("skill"),
+      diagnostics: diagnostics.filter((diagnostic) => diagnostic.source === "skill"),
+      trustDisclosure: "Skill instructions are trusted when copied into the dedicated VC Agent directory.",
+      directoryPath: paths.skills,
+      loadedCount: skillSnapshot.skills.length,
+      sourceIsolationDisclosure: "Only this dedicated directory is read; ambient Pi, Codex, Claude Code, .agents, and project Skill roots are ignored."
     }
   };
 }
 
-function officeSkillsDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
-  const inventory = skillsDirectory?.inventory() ?? [];
-  const imported = inventory.filter((item) => isUserOfficeSkillPackage(item.packageId));
-  const active = imported.filter((item) => item.enabled && item.state === "active");
-  if (imported.length === 0) return { status: "attention", message: "No compatible user-supplied Office Skill package is imported; import a local package from Settings." };
-  const runnerConfigured = (process.env.VC_AGENT_OFFICE_RUNNER?.trim() ?? "") !== "";
-  const status = active.length === imported.length && runnerConfigured ? "ready" : "attention";
-  const dependencyMessage = runnerConfigured ? "an explicit Office runner is configured" : "VC_AGENT_OFFICE_RUNNER is not configured";
-  return { status, message: `${active.length}/${imported.length} imported user-supplied Office package(s) are active; ${dependencyMessage}. Runtime dependencies are checked again at explicit Skill job admission; no fallback is used.` };
+function piResourcesEvent(
+  correlationId: string,
+  action: "loaded" | "opened" | "reloaded" | "imported" | "project_trust_changed"
+): HostEvent {
+  return { ...eventMetadata(correlationId), event: "pi.resources.updated", payload: { state: piResourcesSettingsSnapshot(), action } };
 }
 
-function extensionRuntimeSnapshot(): ExtensionInventorySnapshot {
-  return globalExtensionRevisions?.runtimeSnapshot() ?? { schemaVersion: 1, revisionId: "bundled-empty-v1", enabled: [] };
+function requestPiResourcesReload(): void {
+  if ((workerSupervisor?.activity.activeSessions ?? 0) > 0) {
+    piResourcesReloadPending = true;
+    return;
+  }
+  workerSupervisor?.closeAll();
+  piResourcesReloadPending = false;
+  piResourcesGeneration += 1;
+}
+
+function applyPendingPiResourcesReload(): void {
+  if (!piResourcesReloadPending || (workerSupervisor?.activity.activeSessions ?? 0) > 0) return;
+  requestPiResourcesReload();
+  if (!shuttingDown) emit(piResourcesEvent(randomUUID(), "reloaded"));
 }
 
 function runtimeCapabilityDoctorMessage(): { readonly status: "ready" | "attention"; readonly message: string } {
-  try {
-    const extensions = extensionRuntimeSnapshot();
-    const entries = extensions.enabled.some((entry) => entry.id === "pi-web-access") ? extensions.enabled : [...extensions.enabled, bundledPiWebAccessEntry()];
-    const preflight = inspectExtensionEntries(extensions.revisionId, entries, true);
-    const assembly = new RuntimeCapabilityAssembler().assemble({
-      hostSurface: { schemaVersion: 1, revision: createHash("sha256").update("doctor-local-v1").digest("hex"), kind: "ordinary", scope: "unscoped", visibleCapabilityIds: [], executableCapabilityIds: [], requestableCatalog: [], initialToolSchemaEstimatedTokens: 0 },
-      extensionRevision: extensions,
-      skills: undefined,
-      hostToolNames: [],
-      extensionTools: preflight.accepted.flatMap((entry) => (entry.toolNames ?? []).map((name) => ({
-        name,
-        source: entry.trust === "bundled-reviewed" ? "bundled_extension" as const : "approved_extension" as const,
-        sourceId: entry.id,
-        sourceRevision: entry.version
-      })))
-    });
-    const status = preflight.diagnostics.length === 0 ? "ready" : "attention";
-    return { status, message: `Pi 0.80.8; pi-web-access 0.17.0; pi-mcp-adapter 1.5.1; Extension revision ${extensions.revisionId}; ${preflight.accepted.length} admitted source(s); assembly ${assembly.revision.slice(0, 12)}; preflight executed no Extension code${preflight.diagnostics.length === 0 ? "." : `; ${preflight.diagnostics.map((item) => item.code).join(", ")}.`}` };
-  } catch (error) {
-    return { status: "attention", message: `Runtime capability preflight failed without executing integrations: ${error instanceof Error ? error.message.slice(0, 240) : "unknown local failure"}` };
-  }
-}
-
-function takeMcpActivationForTurn(scope: "project" | "unscoped", threadId: string): FrozenMcpActivation | undefined {
-  for (const [serverId, activation] of mcpActivations) {
-    if (activation.scope !== scope) continue;
-    if (activation.threadId !== threadId) continue;
-    mcpActivations.delete(serverId);
-    return {
-      schemaVersion: 1,
-      activationId: activation.activationId,
-      serverId: activation.serverId,
-      schemaRevision: activation.schemaRevision,
-      scope: activation.scope,
-      reason: activation.reason,
-      toolSchemas: activation.toolSchemas.map((schema) => ({
-        name: schema.name,
-        ...(schema.description === undefined ? {} : { description: schema.description }),
-        actionClass: schema.actionClass,
-        allowedScopes: [...schema.allowedScopes],
-        inputBytes: schema.inputBytes,
-        outputBytes: schema.outputBytes,
-        schemaHash: schema.schemaHash,
-        ...(schema.inputSchema === undefined ? {} : { inputSchema: { ...schema.inputSchema } })
-      }))
-    };
-  }
-  return undefined;
+  const state = piResourcesSettingsSnapshot();
+  const blocking = state.diagnostics.filter((diagnostic) => diagnostic.blocking === true);
+  return {
+    status: blocking.length === 0 ? "ready" : "attention",
+    message: `Pi 0.80.8; pi-web-access 0.17.0; pi-mcp-adapter 1.5.1; ${state.extensions.loadedCount} Extension source(s), ${state.mcp.serverCount} MCP server(s), ${state.skills.loadedCount} isolated Skill(s). Doctor executed no integration code${blocking.length === 0 ? "." : `; ${blocking.map((item) => item.code ?? item.source).join(", ")}.`}`
+  };
 }
 
 function integrationStateSnapshot(): IntegrationState {
   const officeStatus = officeSkillsDoctorMessage();
   const officeJobs = [...integrationJobs.values()].filter((job) => job.kind.startsWith("office:"));
-  const creatorStatus = skillsDirectory === null ? { status: "unavailable" as const, message: "Skill Creator is unavailable in Read-only Recovery or before Host initialization." } : { status: "ready" as const, message: "Explicit Creator drafts are staged, reviewed, and handed off disabled." };
+  const creatorStatus = vcSkillsDirectory === null ? { status: "unavailable" as const, message: "Skill Creator is unavailable in Read-only Recovery or before Host initialization." } : { status: "ready" as const, message: "Explicit Creator drafts are staged, reviewed, and handed off disabled." };
   const page = pageRecoveryPipeline?.inspectAvailability() ?? { native: { status: "unavailable" as const, message: "Native page recovery is not initialized." }, paddle: { status: "unavailable" as const, message: "PaddleOCR local runtime is not configured." }, ovis: { status: "unavailable" as const, message: "OvisOCR2 local runtime is not configured." }, policyRevision: "page-quality-v1" };
   const pageTelemetry = pageRecoveryPipeline?.telemetry() ?? { policyRevision: page.policyRevision, pageCount: 0, nativePages: 0, paddlePages: 0, ovisPages: 0, retainedEarlierPages: 0, failures: 0, durationMs: 0, lastStatus: "failed" as const };
-  const mcpTelemetry = mcpIntegration?.telemetry() ?? { adapterVersion: "not-initialized", connectedServers: 0, activeTools: 0, failureCount: 0, retiredTurns: 0 };
-  const activeMcpActivation = mcpActivations.values().next().value as { readonly activationId: string; readonly serverId: string; readonly schemaRevision: string; readonly toolIds: readonly string[]; readonly scope: "project" | "unscoped" } | undefined;
-  const extensionState = globalExtensionRevisions?.snapshot();
-  const admissionState = extensionAdmission?.snapshot();
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
-    office: { status: officeStatus, activeSkillCount: (skillsDirectory?.inventory() ?? []).filter((item) => item.enabled && item.state === "active").length, supportedFormats: ["docx", "pptx", "xlsx", "pdf"], jobs: officeJobs },
+    office: { status: officeStatus, activeSkillCount: vcSkillsDirectory?.discover().skills.length ?? 0, supportedFormats: ["docx", "pptx", "xlsx", "pdf"], jobs: officeJobs },
     skillCreator: { status: creatorStatus, drafts: (skillCreatorWorkflow?.listDrafts() ?? []).map((draft) => ({ draftId: draft.draftId, packageId: draft.packageId, operation: draft.operation, state: draft.state, files: [...draft.files], dependencies: [...draft.dependencies], updatedAt: draft.updatedAt, ...(draft.failureCode === undefined ? {} : { failureCode: draft.failureCode }) })) },
     pageRecovery: { status: page.native.status === "ready" ? { status: "ready", message: "Native parsing is available; OCR stages remain explicit and local." } : { status: "attention", message: page.native.message }, availability: page, telemetry: pageTelemetry, parses: [...integrationJobs.values()].filter((job) => job.kind.startsWith("page_recovery:")), ...(lastPageRecoveryParse === undefined ? {} : { lastParse: lastPageRecoveryParse }) },
-     mcp: { status: { status: "ready", message: mcpTelemetry.connectedServers === 0 ? "Pinned MCP adapter is dormant; no server connection is open." : `${mcpTelemetry.connectedServers} MCP server connection(s) are active for an explicit task.` }, adapterVersion: mcpTelemetry.adapterVersion, servers: (mcpIntegration?.inventory() ?? []).map((server) => ({ ...server, enabledToolIds: [...server.enabledToolIds], toolSchemas: server.toolSchemas.map((schema) => ({ ...schema, allowedScopes: [...schema.allowedScopes] })) })), connectedServers: mcpTelemetry.connectedServers, activeTools: mcpTelemetry.activeTools, failureCount: mcpTelemetry.failureCount, ...(activeMcpActivation === undefined ? {} : { activeActivation: { ...activeMcpActivation, toolIds: [...activeMcpActivation.toolIds] } }) },
-    extensions: {
-      status: { status: "ready", message: "Extension staging, inspection, audit, approval, and enablement remain separate Host actions." },
-      stagedCount: admissionState?.staged.length ?? 0, inspectionCount: admissionState?.reports.length ?? 0, auditCount: admissionState?.audits.length ?? 0, approvedCount: admissionState?.approved.length ?? 0,
-      effectiveRevisionId: extensionState?.effectiveRevisionId ?? "global-extension-r0", enabledCount: extensionState?.effectiveExtensions.length ?? 0,
-      ...(extensionState?.pending === undefined ? {} : { pendingRevisionId: extensionState.pending.revisionId }),
-      invalidatedRevisionIds: (admissionState?.approved ?? []).filter((item) => item.invalidated).map((item) => item.approvedRevisionId),
-      staged: (admissionState?.staged ?? []).map((item) => ({ stagedRevisionId: item.stagedRevisionId, extensionId: item.extensionId, name: item.name, state: item.state, artifactHash: item.artifactHash, createdAt: item.createdAt })),
-      reports: (admissionState?.reports ?? []).map((item) => ({ reportId: item.reportId, stagedRevisionId: item.stagedRevisionId, status: item.status, artifactHash: item.artifactHash, findingCount: item.findings.length, blockerCount: item.blockers.length, generatedAt: item.generatedAt })),
-      audits: (admissionState?.audits ?? []).map((item) => ({ auditRunId: item.auditRunId, stagedRevisionId: item.stagedRevisionId, status: item.status, updatedAt: item.updatedAt, ...(item.failureCode === undefined ? {} : { failureCode: item.failureCode }) })),
-      approved: (admissionState?.approved ?? []).map((item) => ({ approvedRevisionId: item.approvedRevisionId, extensionId: item.extensionId, name: item.name, version: item.version, artifactHash: item.artifactHash, enabled: item.enabled, invalidated: item.invalidated, approvedAt: item.approvedAt }))
-    },
     runtime: { runningJobs: [...integrationJobs.values()].filter((job) => ["running", "queued"].includes(job.state)).length, queuedJobs: [...integrationJobs.values()].filter((job) => job.state === "queued").length, failures: [...integrationJobs.values()].filter((job) => ["failed", "unknown_outcome"].includes(job.state)).length }
   };
 }
@@ -370,13 +407,13 @@ function integrationStateEvent(correlationId: string, action: "loaded" | "change
   return { ...eventMetadata(correlationId), event: "integration.state.updated", payload: { state: integrationStateSnapshot(), action } };
 }
 
-function integrationJobEvent(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery" | "mcp" | "extension", job: IntegrationJobSummary): HostEvent {
+function integrationJobEvent(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery", job: IntegrationJobSummary): HostEvent {
   integrationJobs.set(job.id, job);
   persistIntegrationJobs();
   return { ...eventMetadata(correlationId), event: "integration.job.updated", payload: { workflow, job } };
 }
 
-function integrationDiagnostic(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery" | "mcp" | "extension", error: unknown): HostEvent {
+function integrationDiagnostic(correlationId: string, workflow: "office" | "skill_creator" | "page_recovery", error: unknown): HostEvent {
   const code = error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : error instanceof Error ? error.message : "INTEGRATION_FAILURE";
   return { ...eventMetadata(correlationId), event: "integration.diagnostic", payload: { workflow, code: code.slice(0, 120), message: error instanceof Error ? error.message.slice(0, 1_200) : "Integration workflow failed.", recoverable: true } };
 }
@@ -399,7 +436,7 @@ function officeJobProjection(planId: string, state: IntegrationJobSummary["state
     ...(result === undefined ? {} : { previewPaths: [...result.previewPaths] }),
     ...(task?.output?.relativePath === undefined ? {} : { committedRelativePath: task.output.relativePath }),
     ...(task?.plan.task.format === undefined ? {} : { format: task.plan.task.format }),
-    ...(task?.plan.task.skillRevisionId === undefined ? {} : { skillRevisionId: task.plan.task.skillRevisionId }),
+    ...(task?.plan.task.skillIdentity === undefined ? {} : { skillRevisionId: task.plan.task.skillIdentity }),
     ...(task?.plan.task.sourceReferences === undefined ? {} : { sourceReferences: [...task.plan.task.sourceReferences] })
   };
 }
@@ -755,7 +792,7 @@ function startDreamScopeExtraction(correlationId: string, batchId: string, scope
     prompt,
     profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_EXTRACTION_STAGE_INSTRUCTIONS] },
-    extensions: extensionRuntimeSnapshot()
+    piResources: piResourcesConfig()
   };
   turnExecution!.start({ kind: "dream", context }, workerCommand, () => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
@@ -802,7 +839,7 @@ function startDreamGlobalSynthesis(correlationId: string, batchId: string): Host
     activeCapabilities: [], expectedStateVersion: 1, executionScope: { kind: "unscoped", threadId: executionThreadId }, prompt,
     profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS] },
-    extensions: extensionRuntimeSnapshot()
+    piResources: piResourcesConfig()
   };
   turnExecution!.start({ kind: "dream_synthesis", context }, workerCommand, () => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
   return dreamStateEvent(correlationId);
@@ -866,7 +903,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
               office: recovery ? { status: "attention", message: "Office Skills are unavailable in Read-only Recovery." } : officeSkillsDoctorMessage(),
               ocr: { status: "attention", message: "Local page recovery dependencies are checked only when configured." },
               mcp: { status: "ready", message: "Pinned MCP adapter is lazy; no server connection was opened." },
-              extensionRevision: runtimeCapabilityDoctor,
+              extensions: runtimeCapabilityDoctor,
               backup: { status: "ready", message: "Personal Cognition Backup is local and credential-free." }
             }
           }
@@ -923,39 +960,41 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         return { ...eventMetadata(command.correlationId), event: "profiles.listed", payload: { profiles: stateStore.listModelProfiles() } };
       case "academic.credentials.list":
         return { ...eventMetadata(command.correlationId), event: "academic.credentials.updated", payload: { credentials: stateStore.listAcademicCredentialStatuses(), action: "listed" } };
-      case "skills.list":
-        return skillsStateEvent(command.correlationId, "listed");
-      case "skills.import": {
-        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill import requires explicit User action and an initialized Skills Directory.");
+      case "pi.resources.load":
+        return piResourcesEvent(command.correlationId, "loaded");
+      case "pi.resources.open": {
+        const paths = piResourcePaths();
+        ensureNativePiResourceFiles();
+        const target = command.payload.target === "extensions_folder"
+          ? paths.extensions
+          : command.payload.target === "skills_folder"
+            ? paths.skills
+            : paths.mcpConfig;
+        const error = await shell.openPath(target);
+        if (error !== "") return diagnostic(command.correlationId, "HOST_FAILURE", error);
+        return piResourcesEvent(command.correlationId, "opened");
+      }
+      case "pi.resources.reload":
+        requestPiResourcesReload();
+        return piResourcesEvent(command.correlationId, "reloaded");
+      case "pi.resources.import_skill": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "INVALID_COMMAND", "Skill import requires explicit User action.");
         let sourceDirectory = process.env.VC_AGENT_TEST_SKILL_SOURCE;
         if (sourceDirectory === undefined) {
-          const selection = await dialog.showOpenDialog(mainWindow!, { title: "Import Skill Package", properties: ["openDirectory"] });
+          const selection = await dialog.showOpenDialog(mainWindow!, { title: "Import Skill into VC Agent", properties: ["openDirectory"] });
           sourceDirectory = selection.canceled ? undefined : selection.filePaths[0];
         }
         if (sourceDirectory === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill import was canceled.");
-        const imported = await skillsDirectory.importLocalDirectory({ sourceDirectory });
-        return skillsStateEvent(command.correlationId, "imported", imported.package.revisionId);
+        new VcSkillsDirectoryAdapter({ root: piResourcePaths().skills }).importSkill({ sourceDirectory });
+        requestPiResourcesReload();
+        return piResourcesEvent(command.correlationId, "imported");
       }
-      case "skills.academic.install": {
-        if (command.actor.actorType !== "user" || skillsDirectory === null || bundledAcademicSkillsRoot === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Bundled academic Skill installation requires explicit User action and an initialized Skills Directory.");
-        await installBundledAcademicSkills({ manager: skillsDirectory, sourceRoot: bundledAcademicSkillsRoot });
-        return skillsStateEvent(command.correlationId, "bundled_installed");
-      }
-      case "skills.inspect": {
-        if (skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "The Skills Directory is not initialized.");
-        const report = await skillsDirectory.inspect(command.payload.revisionId);
-        return skillsStateEvent(command.correlationId, "inspected", command.payload.revisionId, report);
-      }
-      case "skills.activate": {
-        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill activation requires explicit User action and an initialized Skills Directory.");
-        await skillsDirectory.activate(command.payload.revisionId);
-        return skillsStateEvent(command.correlationId, "activated", command.payload.revisionId);
-      }
-      case "skills.disable": {
-        if (command.actor.actorType !== "user" || skillsDirectory === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Skill disable requires explicit User action and an initialized Skills Directory.");
-        const disabled = await skillsDirectory.disable(command.payload.packageId);
-        return skillsStateEvent(command.correlationId, "disabled", disabled.revisionId);
-      }
+      case "pi.resources.project_trust.set":
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "INVALID_COMMAND", "Project resource trust requires explicit User action.");
+        projectPiResourcesTrusted = command.payload.trusted;
+        persistPiResourceSettings();
+        requestPiResourcesReload();
+        return piResourcesEvent(command.correlationId, "project_trust_changed");
       case "integration.state.load":
         return integrationStateEvent(command.correlationId, "loaded");
       case "office.source.choose": {
@@ -1023,9 +1062,9 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const draft = command.payload.operation === "create"
             ? await skillCreatorWorkflow.createDraft({ explicitIntent: true, packageId: command.payload.packageId, files: command.payload.files, ...(command.payload.dependencies === undefined ? {} : { dependencies: command.payload.dependencies }) })
-            : command.payload.targetRevisionId === undefined
+            : command.payload.targetSkillName === undefined && command.payload.targetSkillPath === undefined
               ? (() => { throw new Error("SKILL_DRAFT_STALE"); })()
-              : await skillCreatorWorkflow.updateDraft({ explicitIntent: true, packageId: command.payload.packageId, targetRevisionId: command.payload.targetRevisionId, files: command.payload.files, ...(command.payload.dependencies === undefined ? {} : { dependencies: command.payload.dependencies }), ...(command.payload.draftId === undefined ? {} : { draftId: command.payload.draftId }) });
+              : await skillCreatorWorkflow.updateDraft({ explicitIntent: true, packageId: command.payload.packageId, ...(command.payload.targetSkillName === undefined ? {} : { targetSkillName: command.payload.targetSkillName }), ...(command.payload.targetSkillPath === undefined ? {} : { targetSkillPath: command.payload.targetSkillPath }), files: command.payload.files, ...(command.payload.dependencies === undefined ? {} : { dependencies: command.payload.dependencies }), ...(command.payload.draftId === undefined ? {} : { draftId: command.payload.draftId }) });
           emit(integrationJobEvent(command.correlationId, "skill_creator", { id: draft.draftId, kind: `skill_creator:${draft.operation}`, state: draft.state === "draft_ready" ? "completed" : draft.state === "running" ? "running" : "failed", message: `Skill Creator draft is ${draft.state}.`, updatedAt: draft.updatedAt }));
           return integrationStateEvent(command.correlationId, "changed");
         } catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
@@ -1037,7 +1076,14 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "skill_creator.handoff": {
         if (command.actor.actorType !== "user" || skillCreatorWorkflow === null) return integrationDiagnostic(command.correlationId, "skill_creator", new Error("SKILL_CREATOR_UNAVAILABLE"));
-        try { const result = await skillCreatorWorkflow.accept(command.payload.draftId, command.payload.accessMode === undefined ? { confirmed: true } : { confirmed: true, accessMode: command.payload.accessMode }); emit(integrationJobEvent(command.correlationId, "skill_creator", { id: command.payload.draftId, kind: "skill_creator:handoff", state: "completed", message: `Draft handed off to I1 as ${result.package.packageId}; activation remains disabled.`, updatedAt: new Date().toISOString(), resultId: result.package.revisionId })); emit(skillsStateEvent(command.correlationId, "imported", result.package.revisionId)); return integrationStateEvent(command.correlationId, "changed"); }
+        try {
+          const result = await skillCreatorWorkflow.accept(command.payload.draftId, command.payload.accessMode === undefined ? { confirmed: true } : { confirmed: true, accessMode: command.payload.accessMode });
+          const importedSkill = result.skills[0];
+          const importedName = importedSkill?.name ?? basename(result.destinationPath);
+          emit(integrationJobEvent(command.correlationId, "skill_creator", { id: command.payload.draftId, kind: "skill_creator:handoff", state: "completed", message: `Draft copied into the dedicated Skills directory as ${importedName}.`, updatedAt: new Date().toISOString(), resultId: result.destinationPath }));
+          emit(piResourcesEvent(command.correlationId, "imported"));
+          return integrationStateEvent(command.correlationId, "changed");
+        }
         catch (error) { return integrationDiagnostic(command.correlationId, "skill_creator", error); }
       }
       case "skill_creator.discard": {
@@ -1067,16 +1113,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         if (command.actor.actorType !== "user" || pageRecoveryPipeline === null) return integrationDiagnostic(command.correlationId, "page_recovery", new Error("PAGE_RECOVERY_UNAVAILABLE"));
         try { await pageRecoveryPipeline.cancel(command.payload.parseId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "page_recovery", error); }
       }
-      case "mcp.server.list":
-        return integrationStateEvent(command.correlationId, "loaded");
-      case "mcp.server.test": {
-        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        try {
-          const status = await mcpIntegration.testConnection(command.payload.serverId);
-          emit(integrationJobEvent(command.correlationId, "mcp", { id: command.payload.serverId, kind: "mcp:test-connection", state: "completed", message: status.lastStatusMessage ?? "MCP connection test completed and the connection was closed.", updatedAt: new Date().toISOString() }));
-          return integrationStateEvent(command.correlationId, "changed");
-        } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
-      }
       case "office.artifact.open": {
         if (officeOrchestrator === null) return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_INTEGRATION_UNAVAILABLE"));
         const stored = officeOrchestrator.getResult(command.payload.resultId);
@@ -1089,70 +1125,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const error = await shell.openPath(target);
         if (error !== "") return integrationDiagnostic(command.correlationId, "office", new Error("OFFICE_ARTIFACT_OPEN_FAILED"));
         return { ...eventMetadata(command.correlationId), event: "office.artifact.opened", payload: { resultId: command.payload.resultId, artifact: command.payload.artifact } };
-      }
-      case "mcp.server.save": {
-        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        if (command.payload.transport === "fixture" && process.env.NODE_ENV !== "test") return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_FIXTURE_TRANSPORT_TEST_ONLY"));
-        try { if (command.payload.serverId !== undefined) mcpActivations.delete(command.payload.serverId); const configured = mcpIntegration.configure(command.payload as Parameters<McpIntegrationManager["configure"]>[0]); mcpActivations.delete(configured.serverId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
-      }
-      case "mcp.activate": {
-        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        try {
-          const activation = await mcpIntegration.resolveActivation({ serverId: command.payload.serverId, toolIds: command.payload.toolIds, scope: command.payload.scope, reason: "task_preactivation", ...(command.payload.connect === undefined ? {} : { connect: command.payload.connect }) });
-          mcpActivations.set(activation.serverId, {
-            activationId: activation.activationId,
-            serverId: activation.serverId,
-            schemaRevision: activation.schemaRevision,
-            toolIds: activation.toolSchemas.map((schema) => schema.name),
-            toolSchemas: activation.toolSchemas,
-            scope: command.payload.scope,
-            reason: activation.reason,
-            threadId: command.payload.threadId
-          });
-          emit(integrationJobEvent(command.correlationId, "mcp", { id: activation.activationId, kind: "mcp:activation", state: "completed", message: `MCP activation admitted ${activation.toolSchemas.length} tool schema(s); provenance is pinned to ${activation.schemaRevision}. It will be attached to the next matching Turn only.`, updatedAt: new Date().toISOString(), resultId: activation.activationId }));
-          return integrationStateEvent(command.correlationId, "changed");
-        } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
-      }
-      case "mcp.disconnect": {
-        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        try { await mcpIntegration.disconnect(command.payload.serverId); mcpActivations.delete(command.payload.serverId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
-      }
-      case "mcp.permission.resolve": {
-        if (command.actor.actorType !== "user" || mcpIntegration === null) return integrationDiagnostic(command.correlationId, "mcp", new Error("MCP_INTEGRATION_UNAVAILABLE"));
-        try { const result = await mcpIntegration.execute(command.payload as Parameters<McpIntegrationManager["execute"]>[0]); const state = result.status === "completed" ? "completed" : result.status === "unknown_outcome" ? "unknown_outcome" : "failed"; emit(integrationJobEvent(command.correlationId, "mcp", { id: command.payload.activationId, kind: "mcp:tool", state, message: `MCP tool execution ${result.status}; response bodies remain bounded and task-scoped.`, updatedAt: new Date().toISOString() })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "mcp", error); }
-      }
-      case "extension.list":
-        return integrationStateEvent(command.correlationId, "loaded");
-      case "extension.stage": {
-        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
-        let sourcePath = process.env.VC_AGENT_TEST_EXTENSION_SOURCE;
-        if (sourcePath === undefined) { const selection = await dialog.showOpenDialog(mainWindow!, { title: "Stage Extension", properties: ["openDirectory"] }); sourcePath = selection.canceled ? undefined : selection.filePaths[0]; }
-        if (sourcePath === undefined) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_STAGE_CANCELLED"));
-        try { const staged = await extensionAdmission.stage({ sourcePath }); emit(integrationJobEvent(command.correlationId, "extension", { id: staged.stagedRevisionId, kind: "extension:stage", state: "completed", message: "Extension bytes are staged for non-executing inspection.", updatedAt: staged.createdAt, resultId: staged.stagedRevisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.inspect": {
-        if (extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
-        try { const report = await extensionAdmission.inspect(command.payload.stagedRevisionId); emit(integrationJobEvent(command.correlationId, "extension", { id: report.reportId, kind: "extension:inspect", state: "completed", message: `Deterministic inspection is ${report.status}; approval remains a separate action.`, updatedAt: report.generatedAt, resultId: report.reportId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.audit": {
-        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
-        try { const audit = await extensionAdmission.startAudit({ stagedRevisionId: command.payload.stagedRevisionId, ...(command.payload.profileId === undefined ? {} : { profileId: command.payload.profileId }), ...(command.payload.providerAvailable === undefined ? {} : { providerAvailable: command.payload.providerAvailable }) }); emit(integrationJobEvent(command.correlationId, "extension", { id: audit.auditRunId, kind: "extension:audit", state: audit.status === "audit_complete" ? "completed" : audit.status === "audit_paused" ? "pending" : "failed", message: `Extension Audit is ${audit.status}; no approval was manufactured.`, updatedAt: audit.updatedAt, resultId: audit.auditRunId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.approve": {
-        if (command.actor.actorType !== "user" || extensionAdmission === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_ADMISSION_UNAVAILABLE"));
-        try { const approved = await extensionAdmission.approve(command.payload as Parameters<ExtensionAdmissionManager["approve"]>[0]); emit(integrationJobEvent(command.correlationId, "extension", { id: approved.approvedRevisionId, kind: "extension:approve", state: "completed", message: "Extension is approved but remains disabled until a separate revision activation.", updatedAt: approved.approvedAt, resultId: approved.approvedRevisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.revision.prepare": {
-        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
-        try { const pending = command.payload.action === "disable" ? await globalExtensionRevisions.propose({ action: "disable", extensionId: command.payload.extensionId }) : command.payload.approvedRevisionId === undefined ? (() => { throw new Error("EXTENSION_NOT_APPROVED"); })() : await globalExtensionRevisions.propose({ action: command.payload.action, extensionId: command.payload.extensionId, approvedRevisionId: command.payload.approvedRevisionId }); emit(integrationJobEvent(command.correlationId, "extension", { id: pending.revisionId, kind: "extension:revision", state: "pending", message: "Global Extension Revision awaits explicit activation at an idle boundary.", updatedAt: pending.createdAt, resultId: pending.revisionId })); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.revision.activate": {
-        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
-        try { if ((command.payload.mode ?? "idle") === "immediate") await globalExtensionRevisions.activateImmediately(command.payload.revisionId); else await globalExtensionRevisions.activateWhenIdle(command.payload.revisionId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
-      }
-      case "extension.rollback": {
-        if (command.actor.actorType !== "user" || globalExtensionRevisions === null) return integrationDiagnostic(command.correlationId, "extension", new Error("EXTENSION_REVISION_UNAVAILABLE"));
-        try { await globalExtensionRevisions.rollback(command.payload.approvedRevisionId); return integrationStateEvent(command.correlationId, "changed"); } catch (error) { return integrationDiagnostic(command.correlationId, "extension", error); }
       }
       case "profile.create": {
         const profile = stateStore.createModelProfile({
@@ -2040,7 +2012,7 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
     prompt,
     profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [stageInstructions] },
-    extensions: extensionRuntimeSnapshot()
+    piResources: piResourcesConfig()
   };
   turnExecution!.start({ kind: "reflection", context }, workerCommand, () => failReflectionExecution(context, {
     kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before the Independent Evidence Pass completed.", provider: profile.provider, model: profile.model
@@ -2544,7 +2516,6 @@ function submitTurn(
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
   const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
   if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
-  const mcpActivation = takeMcpActivationForTurn(thread.scope, input.threadId);
   const context: TurnContext = {
     correlationId,
     threadId: input.threadId,
@@ -2558,7 +2529,6 @@ function submitTurn(
     activeCapabilities,
     executableCapabilityIds: [...capabilitySurface.executableCapabilityIds],
     capabilitySurface,
-    ...(mcpActivation === undefined ? {} : { mcpActivation }),
     citations: new CitationRegistry(),
     expectedStateVersion: thread.stateVersion,
     promptRevision,
@@ -2601,7 +2571,6 @@ function submitTurn(
     estimatedInputTokens: budget.estimatedInputTokens,
     currentInputTokens: promptTelemetry.contributions.promptEstimatedTokens + promptTelemetry.contributions.toolSchemaEstimatedTokens + promptTelemetry.contributions.taskEstimatedTokens,
     capabilitySurface,
-    ...(mcpActivation === undefined ? {} : { mcpActivation }),
     activeCapabilities: [...context.activeCapabilities],
     expectedStateVersion: context.expectedStateVersion,
     executionScope: thread.scope === "project"
@@ -2613,10 +2582,9 @@ function submitTurn(
       schemaVersion: 1,
       revisionId: promptRevision.id,
       systemPrompt: promptRevision.content,
-      appendSystemPrompt: [...(context.appendSystemPrompt ?? [])],
-      skills: runtimeSkills
+      appendSystemPrompt: [...(context.appendSystemPrompt ?? [])]
     },
-    extensions: extensionRuntimeSnapshot()
+    piResources: piResourcesConfig()
   };
   turnExecution!.start({ kind: "turn", context }, workerCommand, () => interruptTurn(context, "worker_exit", 0));
   return {
@@ -2765,7 +2733,7 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
     prompt: "Manual Thread Compaction",
     profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
     resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [] },
-    extensions: extensionRuntimeSnapshot()
+    piResources: piResourcesConfig()
   };
   turnExecution!.start({ kind: "turn", context }, command, () => {
     finishTurn(context);
@@ -2775,7 +2743,9 @@ function compactThread(correlationId: string, threadId: string): HostEvent {
 }
 
 function handleWorkerEvent(workerEvent: WorkerEvent): void {
-  if (extensionAuditWorker?.handleEvent(workerEvent) === true) return;
+  if (workerEvent.event === "turn.completed" || workerEvent.event === "turn.failed" || workerEvent.event === "turn.interrupted") {
+    queueMicrotask(() => applyPendingPiResourcesReload());
+  }
   if (subAgentProviderExecutor?.handleEvent(workerEvent) === true) return;
   if (workerEvent.event === "trajectory.acknowledged") {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
@@ -3329,52 +3299,6 @@ async function processCapabilityRequest(
     payload: { threadId: context.threadId, turnId: context.turnId, requestId: request.requestId, capabilityId: request.capabilityId, status: "started", content: "Capability execution requested." }
   });
 
-  const mcpTarget = parseMcpCapabilityId(request.capabilityId);
-  if (mcpTarget !== undefined) {
-    const activation = context.mcpActivation;
-    const schema = activation?.serverId === mcpTarget.serverId
-      ? activation.toolSchemas.find((item) => item.name === mcpTarget.toolName)
-      : undefined;
-    const scopeMatches = activation !== undefined
-      && ((request.scope.kind === "project" && activation.scope === "project") || (request.scope.kind === "unscoped" && activation.scope === "unscoped"));
-    if (activation !== undefined && schema !== undefined && scopeMatches && mcpIntegration !== null && schema.actionClass !== "read" && stateStore!.getAccessMode() === "standard") {
-      mcpCapabilityRequests.set(request.requestId, { context, request, activation, schema });
-      emit({
-        ...eventMetadata(context.correlationId, context.threadId),
-        event: "capability.confirmation.required",
-        payload: {
-          threadId: context.threadId,
-          turnId: context.turnId,
-          requestId: request.requestId,
-          capabilityId: request.capabilityId,
-          decisionClass: "G3",
-          action: `Execute MCP ${schema.actionClass} action`,
-          target: `${activation.serverId}:${schema.name}`,
-          reason: "Standard Access requires scoped confirmation for a protected MCP action.",
-          expectedEffect: "The connected MCP server may change external or local state using the reviewed arguments.",
-          preview: JSON.stringify(summarizeCapabilityArguments(request.arguments))
-        }
-      });
-      return;
-    }
-    const result = activation === undefined || mcpIntegration === null || schema === undefined || !scopeMatches
-      ? { schemaVersion: 1 as const, requestId: request.requestId, status: "rejected" as const, code: "MCP_TOOL_INACTIVE", content: "The MCP tool is not active for this Turn." }
-      : await mcpIntegration.execute({
-          requestId: request.requestId,
-          activationId: activation.activationId,
-          serverId: activation.serverId,
-          toolName: mcpTarget.toolName,
-          arguments: request.arguments,
-          threadId: context.threadId,
-          turnId: context.turnId,
-          scope: activation.scope,
-          accessMode: stateStore!.getAccessMode(),
-          expectedSchemaRevision: activation.schemaRevision
-        });
-    finalizeCapability(context, request, result, true, mcpRuntimeActivity(activation, schema, "not_required", result));
-    return;
-  }
-
   capabilityRequests.set(request.requestId, { context, request });
 
   const decision = await capabilityGateway!.request(request, capabilityAuthorization(context));
@@ -3389,54 +3313,7 @@ async function processCapabilityRequest(
   finalizeCapability(context, request, decision.result, true);
 }
 
-function parseMcpCapabilityId(capabilityId: string): { readonly serverId: string; readonly toolName: string } | undefined {
-  if (!capabilityId.startsWith("mcp:")) return undefined;
-  const separator = capabilityId.indexOf(":", 4);
-  if (separator <= 4 || separator === capabilityId.length - 1) return undefined;
-  const serverId = capabilityId.slice(4, separator);
-  const toolName = capabilityId.slice(separator + 1);
-  return serverId.length === 0 || toolName.length === 0 ? undefined : { serverId, toolName };
-}
-
-function mcpRuntimeActivity(activation: FrozenMcpActivation | undefined, schema: FrozenMcpActivation["toolSchemas"][number] | undefined, confirmationState: "not_required" | "required" | "approved" | "rejected", result?: CapabilityExecutionResult) {
-  if (activation === undefined || schema === undefined) return undefined;
-  return {
-    sourceClass: "mcp" as const,
-    sourceId: `${activation.serverId}:${schema.name}`,
-    sourceRevision: activation.schemaRevision,
-    activationReason: activation.reason,
-    actionClass: schema.actionClass === "read" ? "network_read" as const : schema.actionClass === "local_file_upload" ? "local_write" as const : "external_write" as const,
-    confirmationState,
-    truncated: result?.code === "MCP_RESULT_TRUNCATED"
-  };
-}
-
 async function resolveCapabilityConfirmation(correlationId: string, requestId: string, approved: boolean): Promise<HostEvent> {
-  const pendingMcp = mcpCapabilityRequests.get(requestId);
-  if (pendingMcp !== undefined) {
-    mcpCapabilityRequests.delete(requestId);
-    const { context, request, activation, schema } = pendingMcp;
-    if (!approved) return finalizeCapability(context, request, { schemaVersion: 1, requestId, status: "rejected", code: "USER_REJECTED", content: "The User rejected this MCP action." }, false, mcpRuntimeActivity(activation, schema, "rejected"));
-    const stillCurrent = context.mcpActivation?.activationId === activation.activationId
-      && context.mcpActivation.schemaRevision === activation.schemaRevision
-      && context.mcpActivation.toolSchemas.some((item) => item.name === schema.name && item.schemaHash === schema.schemaHash);
-    const result = !stillCurrent || mcpIntegration === null
-      ? { schemaVersion: 1 as const, requestId, status: "rejected" as const, code: "MCP_TOOL_INACTIVE", content: "The scoped MCP activation is no longer current." }
-      : await mcpIntegration.execute({
-          requestId,
-          activationId: activation.activationId,
-          serverId: activation.serverId,
-          toolName: schema.name,
-          arguments: request.arguments,
-          threadId: context.threadId,
-          turnId: context.turnId,
-          scope: activation.scope,
-          accessMode: stateStore!.getAccessMode(),
-          confirmed: true,
-          expectedSchemaRevision: activation.schemaRevision
-        });
-    return finalizeCapability(context, request, result, false, mcpRuntimeActivity(activation, schema, "approved", result));
-  }
   const pending = capabilityRequests.get(requestId);
   if (pending === undefined || capabilityGateway === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The scoped capability confirmation is no longer active.");
@@ -3700,17 +3577,11 @@ function interruptTurn(
 }
 
 function finishTurn(context: TurnContext): void {
-  if (context.mcpActivation !== undefined) mcpIntegration?.retireTurn(context.turnId);
   for (const [requestId, pending] of capabilityRequests) {
     if (pending.context.turnId !== context.turnId) continue;
     const result = capabilityGateway?.cancel(requestId);
     if (result !== undefined) resolveCapabilityInWorker(context, result);
     capabilityRequests.delete(requestId);
-  }
-  for (const [requestId, pending] of mcpCapabilityRequests) {
-    if (pending.context.turnId !== context.turnId) continue;
-    resolveCapabilityInWorker(context, { schemaVersion: 1, requestId, status: "rejected", code: "TURN_INTERRUPTED", content: "The pending MCP confirmation expired with its owning Turn." });
-    mcpCapabilityRequests.delete(requestId);
   }
   inflight!.complete(context.turnId);
   turnExecution?.finish({ kind: "turn", context });
@@ -3911,7 +3782,7 @@ app.whenReady().then(() => {
     resourcesPath: process.resourcesPath,
     mainDirectory: __dirname
   });
-  bundledAcademicSkillsRoot = runtimePaths.bundledAcademicSkillsRoot;
+  const bundledAcademicSkillsRoot = runtimePaths.bundledAcademicSkillsRoot;
   if (app.isPackaged) {
     const missingRuntimeComponents = validatePackagedRuntimePaths(runtimePaths);
     if (missingRuntimeComponents.length > 0) {
@@ -3926,16 +3797,13 @@ app.whenReady().then(() => {
   stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"), {
     failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
   });
+  loadPiResourceSettings();
+  migrateLegacyPiResources();
   loadIntegrationJobs(join(app.getPath("userData"), "integrations", "jobs.json"));
-  skillsDirectory = new SkillPackageManager({ root: join(app.getPath("userData"), "skills") });
-  skillProjector = new SkillResourceProjector({ manager: skillsDirectory });
+  vcSkillsDirectory = new VcSkillsDirectoryAdapter({ root: piResourcePaths().skills });
   executionScheduler = new BoundedExecutionScheduler({ capacity: EXECUTION_CAPACITY, store: stateStore });
   workerSupervisor = new AgentWorkerSupervisor(runtimePaths.agentWorkerEntry, handleWorkerEvent);
   turnExecution = new HostTurnExecutionModule((command) => workerSupervisor!.execute(command));
-  extensionAuditWorker = new ExtensionAuditWorkerExecutor({
-    supervisor: workerSupervisor,
-    root: join(app.getPath("userData"), "integrations", "extensions", "audit-sessions")
-  });
   subAgentProviderExecutor = new DesktopSubAgentProviderExecutor({
     supervisor: workerSupervisor,
     root: app.getPath("userData"),
@@ -3956,7 +3824,7 @@ app.whenReady().then(() => {
         appendSystemPrompt: [CITATION_OUTPUT_INSTRUCTIONS]
       };
     },
-    extensions: () => extensionRuntimeSnapshot(),
+    piResources: () => piResourcesConfig(),
     resolveCapability: resolveSubAgentCapability
   });
   const subAgentContextCompiler = new SubAgentContextCompiler({ resolve: resolveSubAgentContextReference });
@@ -3969,38 +3837,15 @@ app.whenReady().then(() => {
     readOnly: stateStore.isReadOnlyRecovery,
     onEvent: (runtimeEvent) => { if (!shuttingDown) emit(subAgentHostEvent(runtimeEvent)); }
   });
-  extensionAdmission = new ExtensionAdmissionManager({ root: join(app.getPath("userData"), "integrations", "extensions"), scheduler: executionScheduler, auditAdapter: createDesktopExtensionAuditAdapter({ resolveProfile: (profileId) => {
-    const store = stateStore;
-    if (store === null) return undefined;
-    const profile = store.getModelProfile(profileId);
-    if (profile === undefined) return undefined;
-    const encrypted = store.getEncryptedCredential(profile.credentialRef);
-    if (encrypted === undefined) return undefined;
-    try { return { provider: profile.provider, model: profile.model, apiKey: credentials.decrypt(encrypted), thinkingLevel: profile.thinkingLevel }; } catch { return undefined; }
-  }, executeAudit: (input) => {
-    if (extensionAuditWorker === null) throw new Error("EXTENSION_AUDIT_PROVIDER_UNAVAILABLE");
-    return extensionAuditWorker.execute(input);
-  } }) });
-  globalExtensionRevisions = new GlobalExtensionRevisionManager({
-    root: join(app.getPath("userData"), "integrations", "extensions"),
-    admission: extensionAdmission,
-    isGloballyIdle: () => (executionScheduler?.telemetry().runningCount ?? 0) === 0 && (workerSupervisor?.activity.activeSessions ?? 0) === 0,
-    terminateWorkers: () => { workerSupervisor?.closeAll(); }
-  });
   utilityJobRunner = new UtilityJobRunner(runtimePaths.utilityWorkerEntry);
-  officeOrchestrator = new OfficeSkillOrchestrator({ skills: skillsDirectory, adapter: createDesktopOfficeAdapter({ runner: utilityJobRunner }), root: join(app.getPath("userData"), "integrations", "office") });
-  skillCreatorWorkflow = new SkillCreationWorkflow({ manager: skillsDirectory, root: join(app.getPath("userData"), "integrations", "skill-creator") });
+  officeOrchestrator = new OfficeSkillOrchestrator({ skills: vcSkillsDirectory!, adapter: createDesktopOfficeAdapter({ runner: utilityJobRunner }), root: join(app.getPath("userData"), "integrations", "office") });
+  skillCreatorWorkflow = new SkillCreationWorkflow({ skills: vcSkillsDirectory!, root: join(app.getPath("userData"), "integrations", "skill-creator") });
   const ocrRuntimeRoot = resolve(process.env.VC_AGENT_OCR_RUNTIME_ROOT ?? join(process.env.LOCALAPPDATA ?? app.getPath("userData"), "vc-agent", "runtimes", "ocr"));
   const localOcrOptions = { runner: utilityJobRunner, runtimeRoot: ocrRuntimeRoot, stagingRoot: join(app.getPath("userData"), "integrations", "page-recovery", "staging") };
   const useFixtureOcr = process.env.NODE_ENV === "test" && process.env.VC_AGENT_REAL_OCR !== "1";
   pageRecoveryPipeline = new PageRecoveryPipeline(useFixtureOcr
     ? { native: createDesktopNativePdfAdapter(), paddle: createDesktopPaddleAdapter(), ovis: createDesktopOvisAdapter() }
     : { native: createDesktopNativePdfAdapter(localOcrOptions), paddle: createDesktopPaddleAdapter(localOcrOptions), ovis: createDesktopOvisAdapter(localOcrOptions) });
-  mcpIntegration = new McpIntegrationManager({
-    root: join(app.getPath("userData"), "integrations", "mcp"),
-    adapter: createDesktopMcpAdapter(),
-    credentials: { resolve: (reference) => { const encrypted = stateStore?.getEncryptedCredential(reference); if (encrypted === undefined) return undefined; try { return credentials.decrypt(encrypted); } catch { return undefined; } } }
-  });
   const readOnlyRecovery = stateStore.isReadOnlyRecovery;
   if (!readOnlyRecovery) stateStore.recoverInterruptedReflections();
   if (!readOnlyRecovery) stateStore.recoverQueuedExecutionAsDrafts();
@@ -4032,7 +3877,7 @@ app.whenReady().then(() => {
       "cognitive-evolution-history.md": longTermMemories.historyPath,
       "long-term-maintenance.json": join(app.getPath("userData"), "memory", "long-term-maintenance.json")
     },
-    skillsRoot: join(app.getPath("userData"), "skills")
+    skillsRoot: piResourcePaths().skills
   });
   capabilityRegistry = new CapabilityRegistry();
   const textOutputStore = new TextOutputStore();
@@ -4040,7 +3885,7 @@ app.whenReady().then(() => {
   capabilityRegistry.register(createTextEditCapability(textOutputStore));
   capabilityRegistry.register(createFileDownloadCapability(new BinaryOutputStore(), new FetchFileDownloadClient()));
   capabilityRegistry.register(createWorkspaceWriteCapability(new WorkspaceWriteStore()));
-  if (bundledAcademicSkillsRoot !== null && utilityJobRunner !== null) {
+  if (bundledAcademicSkillsRoot !== undefined && utilityJobRunner !== null) {
     capabilityRegistry.register(createArxivFulltextCapability(
       new WorkspaceWriteStore(MAX_ARXIV_BUNDLE_BYTES, 4),
       new BundledArxivFulltextClient({ skillRoot: bundledAcademicSkillsRoot, stagingRoot: join(app.getPath("userData"), "academic-research", "staging"), runner: utilityJobRunner })
@@ -4367,19 +4212,12 @@ async function shutdownApplication(): Promise<void> {
   const utilityShutdown = officeShutdown.then(() => utilityRuntime?.shutdown(5_000) ?? Promise.resolve(), () => utilityRuntime?.shutdown(5_000) ?? Promise.resolve());
   utilityJobRunner = null;
   const skillCreatorShutdown = skillCreatorWorkflow?.shutdown() ?? Promise.resolve();
-  const mcpShutdown = mcpIntegration?.shutdown() ?? Promise.resolve();
   officeOrchestrator = null;
   skillCreatorWorkflow = null;
   pageRecoveryPipeline = null;
-  mcpIntegration = null;
+  vcSkillsDirectory = null;
   persistIntegrationJobs();
   integrationJobsPath = undefined;
-  const extensionShutdown = extensionAdmission?.shutdown() ?? Promise.resolve();
-  extensionAdmission = null;
-  globalExtensionRevisions = null;
-  skillProjector = null;
-  bundledAcademicSkillsRoot = null;
-  skillsDirectory = null;
   for (const state of materialWatchers.values()) {
     state.watcher.close();
     if (state.timer !== undefined) clearTimeout(state.timer);
@@ -4393,11 +4231,10 @@ async function shutdownApplication(): Promise<void> {
   longTermMemoryWatchTimer = undefined;
   workerSupervisor = null;
   turnExecution = null;
-  extensionAuditWorker = null;
   stateStore?.close();
   stateStore = null;
   projectMemories = null;
   longTermMemories = null;
   memoryCandidates = null;
-  await Promise.allSettled([subAgentShutdown, workerShutdown, utilityShutdown, officeShutdown, skillCreatorShutdown, mcpShutdown, extensionShutdown]);
+  await Promise.allSettled([subAgentShutdown, workerShutdown, utilityShutdown, officeShutdown, skillCreatorShutdown]);
 }

@@ -48,7 +48,7 @@ describe("DesktopSubAgentProviderExecutor", () => {
       root,
       resolveCredential: (profileId) => profileId === "profile-1" ? "secret" : undefined,
       resources: () => ({ schemaVersion: 1, revisionId: "prompt-1", systemPrompt: "VC system", appendSystemPrompt: [] }),
-      extensions: () => ({ schemaVersion: 1, revisionId: "extensions-empty", enabled: [] })
+      piResources: () => ({ agentDir: join(root, "pi-agent"), skillsRoot: join(root, "pi-agent", "skills"), mcpConfigPath: join(root, "pi-agent", "mcp.json") })
     });
     const pending = executor.execute(input(root));
     await Promise.resolve();
@@ -85,7 +85,7 @@ describe("DesktopSubAgentProviderExecutor", () => {
       root,
       resolveCredential: () => "secret",
       resources: () => ({ schemaVersion: 1, revisionId: "prompt-1", systemPrompt: "VC system", appendSystemPrompt: [] }),
-      extensions: () => ({ schemaVersion: 1, revisionId: "extensions-empty", enabled: [] })
+      piResources: () => ({ agentDir: join(root, "pi-agent"), skillsRoot: join(root, "pi-agent", "skills"), mcpConfigPath: join(root, "pi-agent", "mcp.json") })
     });
     const pending = executor.execute(input(root));
     await Promise.resolve();
@@ -113,7 +113,7 @@ describe("DesktopSubAgentProviderExecutor", () => {
       root,
       resolveCredential: () => "secret",
       resources: () => ({ schemaVersion: 1, revisionId: "prompt-1", systemPrompt: "VC system", appendSystemPrompt: [] }),
-      extensions: () => ({ schemaVersion: 1, revisionId: "extensions-empty", enabled: [] }),
+      piResources: () => ({ agentDir: join(root, "pi-agent"), skillsRoot: join(root, "pi-agent", "skills"), mcpConfigPath: join(root, "pi-agent", "mcp.json") }),
       resolveCapability: async (context) => {
         brokerContext = { taskId: context.taskId, parentThreadId: context.parentThreadId, capability: context.request.capabilityId };
         return {

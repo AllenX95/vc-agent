@@ -80,9 +80,65 @@ describe("versioned IPC contracts", () => {
     expect(hostCommandSchema.parse(command)).toEqual(command);
   });
 
-  it("accepts the explicit bundled academic Skill installation command", () => {
+  it("rejects the retired bundled academic Skill activation command", () => {
     const command = { ...createBootstrapCommand(), command: "skills.academic.install" };
-    expect(hostCommandSchema.parse(command)).toEqual(command);
+    expect(hostCommandSchema.safeParse(command).success).toBe(false);
+  });
+
+  it("accepts the Pi-native resource source commands and state event", () => {
+    const metadata = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      commandId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      actor: { actorType: "user", actorId: "local-user" },
+      sentAt: new Date().toISOString()
+    };
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.load" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.reload" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.import_skill" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.open", payload: { target: "mcp_config" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.project_trust.set", payload: { trusted: true } }).success).toBe(true);
+
+    const now = new Date().toISOString();
+    const eventMetadata = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 1,
+      actor: { actorType: "host", actorId: "desktop-host" },
+      provenance: { producerType: "host", producerId: "desktop-host" },
+      occurredAt: now
+    };
+    const state = {
+      schemaVersion: 1,
+      generation: 1,
+      reloadPending: false,
+      extensions: {
+        status: "ready",
+        directoryPath: "C:/vc-agent/pi/extensions",
+        loadedCount: 1,
+        diagnostics: [],
+        trustDisclosure: "Extensions are trusted Worker code."
+      },
+      mcp: {
+        status: "ready",
+        configPath: "C:/vc-agent/pi/mcp.json",
+        serverCount: 0,
+        connectedServerCount: 0,
+        diagnostics: [],
+        trustDisclosure: "Configured MCP servers are trusted as a set."
+      },
+      skills: {
+        status: "ready",
+        directoryPath: "C:/vc-agent/skills",
+        loadedCount: 2,
+        diagnostics: [],
+        trustDisclosure: "Skills are trusted instructions.",
+        sourceIsolationDisclosure: "Only this dedicated directory is searched."
+      },
+      diagnostics: []
+    };
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "pi.resources.updated", payload: { state, action: "reloaded" } }).success).toBe(true);
   });
 
   it("rejects unsupported schema versions", () => {
@@ -228,20 +284,19 @@ describe("versioned IPC contracts", () => {
     expect(hostEventSchema.parse(event).event).toBe("execution_queue.updated");
   });
 
-  it("supports explicit Skills Directory lifecycle commands and projections", () => {
+  it("rejects retired generic Skill management commands", () => {
     const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
     const revisionId = crypto.randomUUID();
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.list" }).success).toBe(true);
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.import" }).success).toBe(true);
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.inspect", payload: { revisionId } }).success).toBe(true);
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.activate", payload: { revisionId } }).success).toBe(true);
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.disable", payload: { packageId: "office-docs" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.list" }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.import" }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.inspect", payload: { revisionId } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.activate", payload: { revisionId } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "skills.disable", payload: { packageId: "office-docs" } }).success).toBe(false);
   });
 
-  it("supports the typed C1 Integration command families", () => {
+  it("supports the protected workflow command families and rejects retired integration governance", () => {
     const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
     const revisionId = crypto.randomUUID();
-    const serverId = crypto.randomUUID();
     const stagedRevisionId = crypto.randomUUID();
     const draftId = crypto.randomUUID();
     const sourceHash = "a".repeat(64);
@@ -256,14 +311,15 @@ describe("versioned IPC contracts", () => {
       { command: "skill_creator.handoff", payload: { draftId, confirmed: true } },
       { command: "page_recovery.inspect" },
       { command: "page_recovery.run", payload: { materialId: crypto.randomUUID(), projectId: crypto.randomUUID(), relativePath: "fixture.pdf", mediaType: "application/pdf", sourceHash } },
-      { command: "mcp.server.list" },
-      { command: "mcp.server.save", payload: { serverId, name: "Fixture", transport: "fixture", enabled: true, allowedScopes: ["project"] } },
-      { command: "mcp.activate", payload: { serverId, toolIds: [], scope: "project", threadId: "thread-1" } },
-      { command: "extension.list" },
-      { command: "extension.stage" },
-      { command: "extension.inspect", payload: { stagedRevisionId } }
+      { command: "pi.resources.reload" }
     ] as const;
     for (const command of commands) expect(hostCommandSchema.safeParse({ ...metadata, ...command }).success, command.command).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "mcp.server.list" }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "mcp.server.save", payload: { name: "Fixture", transport: "fixture", enabled: true, allowedScopes: ["project"] } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "mcp.activate", payload: { serverId: crypto.randomUUID(), toolIds: [], scope: "project", threadId: "thread-1" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "extension.list" }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "extension.stage" }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "extension.inspect", payload: { stagedRevisionId } }).success).toBe(false);
   });
 
   it("requires explicit current-task evidence for D1 delegation and exposes a bounded task tree", () => {

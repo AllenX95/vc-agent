@@ -24,7 +24,7 @@ The current project is a Personal Build for one User. It is not a multi-user Saa
 | Model execution | Pi SDK-based streaming conversations, Model Profiles, Provider changes, context budgets, Thread Compaction, execution queues, and visible failure states. |
 | Investment workflows | Ordinary VC dialogue, public research, Investment Reflection, Investment Retrospective, and explicitly authorized Sub-Agent work. |
 | Memory and review | Project Context, Project Memory, Long-term Memory, Memory Evolution, and two-stage Dream review; durable writes require separate User confirmation. |
-| Optional integrations | Skills Directory, Office workflows, MCP, Academic Research, and local Page Recovery / OCR. External runtimes are connected through explicit configuration and Host boundaries. |
+| Optional integrations | Pi-native Extensions, `mcp.json`, an isolated VC Agent Skills Directory, Office workflows, Academic Research, and local Page Recovery / OCR. Extensions and MCP use Pi semantics inside the Agent Worker; durable product state remains Host-owned. |
 | Local reliability | SQLite state, Thread Trajectory, versioned migrations, recovery mode, Personal Cognition Backup, and inspectable local outputs. |
 
 ## Design principles
@@ -101,11 +101,13 @@ Typical contents include:
 state.db        # SQLite application state and indexes
 threads/        # Thread Trajectory
 memory/         # Long-term Memory, Project Memory, Dream, and related state
-skills/         # Imported and active Skills
-integrations/   # Office, MCP, Extension, and related integration state
+pi-agent/       # App-owned Pi directory: Extensions, mcp.json, isolated Skills
+integrations/   # Host-managed protected workflow state such as Office and OCR
 ```
 
 `VC_AGENT_USER_DATA_DIR` can override the User data location. Project files, Context, Memory, Outputs, and parse artifacts remain ordinary local files for inspection, backup, and recovery. Provider credentials are stored through operating-system protection; application state keeps references and non-sensitive metadata rather than raw credentials.
+
+Place Extensions directly in `pi-agent/extensions/`, define MCP servers in `pi-agent/mcp.json`, and place Skills only in `pi-agent/skills/`; Settings provides Open and Reload actions. Installing an Extension or configuring an MCP server is the trust decision: they run as trusted Worker code or a trusted tool set. Skills are never discovered from ambient Pi, Codex, Claude Code, Project, or other agent directories; Import copies the complete Skill into the dedicated directory instead of retaining a live link to its source.
 
 The application provides **Standard Access** and **Full Access** modes. Full Access reduces subsequent tool confirmations, but it does not bypass product-level review for Reflection, Dream, Memory commits, or Thread scope changes. The User remains responsible for securing the operating-system account, device, and backup destinations.
 

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, relative, resolve, sep } from "node:path";
 
-export type DoctorComponent = "piAdapter" | "profiles" | "credentialReferences" | "storage" | "migration" | "scheduler" | "agentRuntime" | "utilityRuntime" | "isolatedRuntime" | "skills" | "office" | "ocr" | "mcp" | "extensionRevision" | "backup";
+export type DoctorComponent = "piAdapter" | "profiles" | "credentialReferences" | "storage" | "migration" | "scheduler" | "agentRuntime" | "utilityRuntime" | "isolatedRuntime" | "skills" | "office" | "ocr" | "mcp" | "extensions" | "backup";
 export type DoctorStatus = "ready" | "attention" | "unavailable";
 
 export interface EnvironmentDoctorEntry {
@@ -60,7 +60,7 @@ export interface IntegrationGateArtifacts {
   readonly report: IntegrationGateReport;
 }
 
-const DOCTOR_COMPONENTS: readonly DoctorComponent[] = ["piAdapter", "profiles", "credentialReferences", "storage", "migration", "scheduler", "agentRuntime", "utilityRuntime", "isolatedRuntime", "skills", "office", "ocr", "mcp", "extensionRevision", "backup"];
+const DOCTOR_COMPONENTS: readonly DoctorComponent[] = ["piAdapter", "profiles", "credentialReferences", "storage", "migration", "scheduler", "agentRuntime", "utilityRuntime", "isolatedRuntime", "skills", "office", "ocr", "mcp", "extensions", "backup"];
 
 /** Read-only, activation-free Environment Doctor projection for the Integration Gate and Settings surfaces. */
 export function inspectEnvironmentDoctor(input: EnvironmentDoctorInput): EnvironmentDoctorInventory {

@@ -23,7 +23,7 @@ describe("HostStateStore", () => {
   it("bootstraps the Host schema with no product entities", () => {
     const { store, databasePath } = createStore();
     expect(store.getBootstrapState("0.1.0", idleActivity)).toMatchObject({
-      stateSchemaVersion: 16,
+      stateSchemaVersion: 17,
       accessMode: "standard",
       entityCounts: { projects: 0, threads: 0, modelProfiles: 0, taskAssignments: 0 },
       runtimeActivity: idleActivity
@@ -41,6 +41,21 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
+    old.prepare("DELETE FROM schema_migrations WHERE version = 17").run();
+    old.exec(`
+      ALTER TABLE execution_leases RENAME TO execution_leases_v16;
+      CREATE TABLE execution_leases (
+        id TEXT PRIMARY KEY,
+        scope_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'extension_audit', 'internal_model_stage')),
+        acquired_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO execution_leases(id, scope_key, kind, acquired_at)
+        SELECT id, scope_key, kind, acquired_at FROM execution_leases_v16;
+      DROP TABLE execution_leases_v16;
+    `);
+    old.prepare("INSERT INTO execution_leases(id, scope_key, kind, acquired_at) VALUES (?, ?, ?, ?)").run("extension-audit", "global", "extension_audit", new Date().toISOString());
+    old.prepare("INSERT INTO execution_leases(id, scope_key, kind, acquired_at) VALUES (?, ?, ?, ?)").run("ordinary-lease", "global", "ordinary_turn", new Date().toISOString());
     old.prepare("DELETE FROM schema_migrations WHERE version = 16").run();
     old.exec("ALTER TABLE model_profiles DROP COLUMN max_output_tokens");
     old.exec("ALTER TABLE model_profiles DROP COLUMN context_window");
@@ -49,15 +64,15 @@ describe("HostStateStore", () => {
     old.close();
 
     const migrated = new HostStateStore(databasePath);
-    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 16, rollbackAvailable: true });
-    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(16);
-    expect(migrated.acquireExecutionLease({ id: "extension-audit", scopeKey: "global", kind: "extension_audit" }).kind).toBe("extension_audit");
-    migrated.releaseExecutionLease("extension-audit");
+    expect(migrated.statePreparation).toMatchObject({ status: "migrated", mode: "read_write", storedVersion: 17, rollbackAvailable: true });
+    expect(migrated.getBootstrapState("0.1.0", idleActivity).stateSchemaVersion).toBe(17);
+    expect(migrated.listExecutionLeases()).toEqual([expect.objectContaining({ id: "ordinary-lease", kind: "ordinary_turn" })]);
     migrated.setAccessMode("full");
     migrated.close();
     expect(listRollbackFiles(databasePath)).toContain("state.db");
     const verified = new DatabaseSync(databasePath, { readOnly: true });
-    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 16 });
+    expect(verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({ version: 17 });
+    expect((verified.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'execution_leases'").get() as { sql: string }).sql).not.toContain("extension_audit");
     verified.close();
   });
 
@@ -65,7 +80,7 @@ describe("HostStateStore", () => {
     const { store, databasePath } = createStore();
     store.close();
     const old = new DatabaseSync(databasePath);
-    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14, 15, 16)").run();
+    old.prepare("DELETE FROM schema_migrations WHERE version IN (10, 11, 12, 13, 14, 15, 16, 17)").run();
     old.close();
     const before = sqliteBundle(databasePath);
 
@@ -89,13 +104,13 @@ describe("HostStateStore", () => {
     const before = sqliteBundle(databasePath);
 
     const recovery = new HostStateStore(databasePath);
-    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 16 });
+    expect(recovery.statePreparation).toMatchObject({ status: "newer_state", mode: "read_only_recovery", storedVersion: 99, supportedVersion: 17 });
     expect(recovery.listThreads()).toEqual([]);
     expect(() => recovery.createUnscopedThread("Blocked")).toThrow();
     recovery.close();
     expect(sqliteBundle(databasePath)).toEqual(before);
     const destination = join(databasePath, "..", "raw-export");
-    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 16 })).toContain("manifest.json");
+    expect(exportRawStateBundle(databasePath, destination, { storedVersion: 99, supportedVersion: 17 })).toContain("manifest.json");
     expect(readFileSync(join(destination, "state.db")).toString("base64")).toBe(before[""]);
     const manifest = readFileSync(join(destination, "manifest.json"), "utf8");
     expect(manifest).toContain('"storedSchemaVersion": 99');

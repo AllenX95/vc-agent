@@ -10,4 +10,4 @@ export * from "./academic-research.js";
 export * from "./reflection-workflow.js";
 export * from "./dream-workflow.js";
 export * from "./citation.js";
-export * from "./runtime-capability.js";
+export * from "./pi-resources.js";

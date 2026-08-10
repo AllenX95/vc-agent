@@ -35,7 +35,7 @@ describe("Learning Build architecture gate", () => {
     expect(renderer).toContain("Partial Dream Coverage");
     expect(renderer).toContain("failure");
     expect(renderer).toContain("outputReserveEstimatedTokens");
-    expect(read("packages/pi-adapter/src/pi-session.ts")).toContain("enableInstallTelemetry: false");
+    expect(read("packages/pi-adapter/src/pi-resource-runtime.ts")).toContain("DefaultResourceLoader");
   });
 
   it("does not expose Integration or Delegation controls before their stages", () => {

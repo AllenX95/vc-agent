@@ -7,29 +7,29 @@ import {
   defineTool,
   ModelRuntime,
   SessionManager,
-  SettingsManager,
   type AgentSession
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CAPABILITY_INPUT_LIMITS, CAPABILITY_RESULT_CONTENT_MAX_CHARS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type FrozenMcpActivation, type PhysicalContextHistoryItem } from "@vc-agent/contracts";
-import {
-  SnapshotResourceLoader,
-  type ExtensionInventorySnapshot,
-  type RuntimeResourceSnapshot
-} from "./snapshot-resource-loader.js";
+import { CAPABILITY_INPUT_LIMITS, CAPABILITY_RESULT_CONTENT_MAX_CHARS, type CapabilityExecutionResult, type CapabilitySurfaceSnapshot, type PhysicalContextHistoryItem, type PiResources, type RuntimeResourceSnapshot } from "@vc-agent/contracts";
 import {
   createProjectReadToolDefinitions
 } from "./project-read-tools.js";
 import { isProjectReadToolName, type ProjectReadToolName } from "./project-read-tool-metadata.js";
 import {
-  mcpCapabilityId,
-  providerToolNameForCapability,
-  providerToolNameForMcp,
-  RuntimeCapabilityAssembler,
-  type RuntimeCapabilityAssembly,
-  type RuntimeExtensionToolInput
-} from "./runtime-capability-assembler.js";
-import { preflightExtensionTools, runtimeExtensionTools } from "./snapshot-resource-loader.js";
+  PiResourceRuntime,
+  resolveBundledPiMcpAdapterPath,
+  resolveBundledPiWebAccessPath,
+  type PiResourceRuntimeSnapshot
+} from "./pi-resource-runtime.js";
+
+type RuntimeExtensionToolInput = {
+  readonly name: string;
+  readonly source: "bundled_extension" | "pi_extension";
+  readonly sourceId: string;
+  readonly sourceRevision: string;
+};
+
+export type { RuntimeResourceSnapshot } from "@vc-agent/contracts";
 
 export interface PiSessionProfile {
   readonly provider: string;
@@ -63,9 +63,8 @@ export interface PiSessionConfig {
   readonly contextHistory: readonly PhysicalContextHistoryItem[];
   readonly profile: PiSessionProfile;
   readonly resources: RuntimeResourceSnapshot;
-  readonly extensions: ExtensionInventorySnapshot;
-  /** Frozen schemas for the explicitly activated MCP server owned by this Turn. */
-  readonly mcpActivation?: FrozenMcpActivation;
+  /** Application-owned Pi resource roots for the native loading path. */
+  readonly piResources?: PiResources;
   /** Enabled by default; test-only callers may disable the bundled web extension. */
   readonly usePiWebAccess?: boolean;
   readonly turnIdleTimeoutMs?: number;
@@ -105,6 +104,8 @@ export interface PiSessionHandle {
   abort(): Promise<void>;
   acknowledge(eventId: string, sequence: number): string;
   dispose(): void;
+  /** Native resource sessions expose an awaitable shutdown for Worker rollover. */
+  disposeAsync?: () => Promise<void>;
 }
 
 export type PiSessionReconciliation = "resumed" | "missing" | "host_ahead" | "pi_ahead" | "irreconcilable";
@@ -232,27 +233,58 @@ export async function createPiSessionUsingRuntime(
     throw new Error(`Invalid model limits: max output tokens (${model.maxTokens}) must be smaller than context window (${model.contextWindow})`);
   }
 
-  const resourceLoader = new SnapshotResourceLoader({
-    cwd: config.cwd,
-    resources: config.resources,
-    extensions: config.extensions,
-    loadBundledExtensions: config.usePiWebAccess !== false
-  });
-  const capabilityAssembler = new RuntimeCapabilityAssembler();
+  if (config.piResources === undefined) throw new Error("PI_NATIVE_RESOURCES_REQUIRED");
+  return createNativePiSession(config, onEvent, modelRuntime, model);
+}
 
-  const settingsManager = SettingsManager.inMemory(
-    {
-      retry: { enabled: false, maxRetries: 0 },
-      enableAnalytics: false,
-      enableInstallTelemetry: false
-    },
-    { projectTrusted: false }
-  );
+/**
+ * Create a session backed by Pi's native resource loader.
+ *
+ * Extension and MCP tools are deliberately treated as the Pi-native base
+ * tool set. Host capability activation can add/remove only Host tools; it
+ * must never clear this set.
+ */
+async function createNativePiSession(
+  config: PiSessionConfig,
+  onEvent: (event: PiSessionEvent) => void,
+  modelRuntime: ModelRuntime,
+  model: Model<any>
+): Promise<PiSessionHandle> {
+  const nativeConfig = config.piResources;
+  if (nativeConfig === undefined) throw new Error("Native Pi resource configuration is missing.");
+
+  const bundledExtensionPaths = [
+    ...(config.usePiWebAccess === false ? [] : optionalPath(resolveBundledPiWebAccessPath())),
+    ...optionalPath(resolveBundledPiMcpAdapterPath())
+  ];
+  const resourceRuntime = new PiResourceRuntime({
+    cwd: config.cwd,
+    agentDir: nativeConfig.agentDir,
+    skillsRoot: nativeConfig.skillsRoot,
+    extensionPaths: [...bundledExtensionPaths, ...(nativeConfig.extensionPaths ?? [])],
+    mcpConfigPath: nativeConfig.mcpConfigPath,
+    projectResourcesTrusted: nativeConfig.projectResourcesTrusted ?? false,
+    // Existing VC prompts are still Host-owned. Do not implicitly pull in
+    // ambient prompt/theme/context files while the sender migrates.
+    systemPrompt: config.resources.systemPrompt,
+    appendSystemPrompt: config.resources.appendSystemPrompt,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true
+  });
+  const loaded = await resourceRuntime.reload();
+  if (loaded.hasBlockingDiagnostics) {
+    throw new Error(formatBlockingPiResourceDiagnostics(loaded));
+  }
+
+  const nativeExtensionTools = nativeRuntimeExtensionTools(loaded, bundledExtensionPaths);
+  const nativeExtensionToolNames = nativeExtensionTools.map((tool) => tool.name);
+  const settingsManager = resourceRuntime.settingsManager;
   const physicalContext = reconcilePhysicalContext(config, model);
   let sessionRef: AgentSession | undefined;
-  let activeAssembly: RuntimeCapabilityAssembly | undefined;
   let activeToolNames = new Set<string>();
   let activeCapabilityIds = new Set<string>();
+  let activeHostToolNames = new Set<string>();
   let refreshTurnIdleTimeout = (): void => {};
   const capabilityProxy = config.capabilityProxy === undefined
     ? undefined
@@ -261,8 +293,8 @@ export async function createPiSessionUsingRuntime(
         try {
           const capabilityId = args[1];
           if (capabilityId !== "capability_request") {
-            const descriptor = activeAssembly?.tools.find((tool) => tool.capabilityId === capabilityId || tool.name === providerToolNameForCapability(capabilityId) || tool.name === capabilityId);
-            if (descriptor === undefined || !activeCapabilityIds.has(capabilityId)) {
+            const providerName = providerToolNameForCapability(capabilityId);
+            if (!activeCapabilityIds.has(capabilityId) || !activeHostToolNames.has(providerName)) {
               return {
                 schemaVersion: 1 as const,
                 requestId: args[0],
@@ -278,76 +310,76 @@ export async function createPiSessionUsingRuntime(
         }
       };
   const activateAssembledCapabilities = (capabilityIds: readonly string[]): void => {
-    if (activeAssembly === undefined || sessionRef === undefined) return;
-    activeToolNames = new Set(capabilityAssembler.activate(activeAssembly, capabilityIds));
+    if (sessionRef === undefined) return;
+    const next = new Set(activeToolNames);
+    for (const capabilityId of capabilityIds) {
+      const name = providerToolNameForCapability(capabilityId);
+      if (hostToolNames.has(name)) next.add(name);
+      activeCapabilityIds.add(capabilityId);
+      activeHostToolNames.add(name);
+    }
+    // Pi-native extension and MCP tools are always part of the base set.
+    for (const name of nativeExtensionToolNames) next.add(name);
+    activeToolNames = next;
     activeCapabilityIds = new Set([...activeCapabilityIds, ...capabilityIds]);
     sessionRef.setActiveToolsByName([...activeToolNames]);
   };
-  const mcpToolNames = new Set((config.mcpActivation?.toolSchemas ?? []).map((schema) => providerToolNameForMcp(config.mcpActivation!.serverId, schema.name)));
   const customTools = [
     ...(config.projectReadRoot === undefined ? [] : createProjectReadToolDefinitions(config.projectReadRoot)),
     ...(capabilityProxy === undefined ? [] : createCapabilityProxies(capabilityProxy, {
       includeHostWebFallback: config.usePiWebAccess === false,
       onCapabilitiesActivated: activateAssembledCapabilities
-    })),
-    ...(capabilityProxy === undefined || config.mcpActivation === undefined ? [] : createMcpToolDefinitions(config.mcpActivation, capabilityProxy))
+    }))
   ];
-  const hostToolNames = customTools
+  assertNativeToolCollisions(nativeExtensionToolNames, customTools.map((tool) => tool.name));
+  const hostToolNames = new Set(customTools
     .map((tool) => tool.name)
-    .filter((name) => !mcpToolNames.has(name) && !isProjectReadToolName(name));
-  // Collision preflight uses approved metadata only. No Extension module has
-  // been imported at this point, so a conflicting artifact cannot execute.
-  capabilityAssembler.assemble({
-    hostSurface: fallbackCapabilitySurface([], config.projectReadRoot === undefined ? "unscoped" : "project"),
-    extensionRevision: config.extensions,
-    ...(config.mcpActivation === undefined ? {} : { mcpActivation: config.mcpActivation }),
-    ...(config.projectReadRoot === undefined ? {} : { projectReadRoot: config.projectReadRoot }),
-    skills: config.resources.skills,
-    hostToolNames,
-    extensionTools: preflightExtensionTools(resourceLoader)
-  });
-  await resourceLoader.reload();
-  const extensionTools = runtimeExtensionTools(resourceLoader);
-  const extensionToolByName = new Map(extensionTools.map((tool) => [tool.name, tool]));
-  const { session } = await createAgentSession({
-    cwd: config.cwd,
-    modelRuntime,
-    model,
-    thinkingLevel: config.profile.thinkingLevel ?? "off",
-    noTools: "builtin",
-    customTools,
-    resourceLoader,
-    sessionManager: physicalContext.sessionManager,
-    settingsManager
-  });
-  sessionRef = session;
-  session.setAutoCompactionEnabled(true);
-  // Capabilities are activated per turn from the Host surface. Extension
-  // registration must not make network tools implicitly active at session
-  // creation time.
-  session.setActiveToolsByName([]);
-  activeToolNames = new Set();
-  activeCapabilityIds = new Set();
-
-  const assembleForTurn = (surface: CapabilitySurfaceSnapshot): RuntimeCapabilityAssembly => {
-    const assembly = capabilityAssembler.assemble({
-      hostSurface: surface,
-      extensionRevision: config.extensions,
-      ...(config.mcpActivation === undefined ? {} : { mcpActivation: config.mcpActivation }),
-      ...(config.projectReadRoot === undefined ? {} : { projectReadRoot: config.projectReadRoot }),
-      skills: config.resources.skills,
-      hostToolNames,
-      extensionTools
-    });
-    activeAssembly = assembly;
-    activeToolNames = new Set(assembly.initialActiveToolNames);
-    activeCapabilityIds = new Set([
-      ...surface.executableCapabilityIds,
-      ...assembly.tools.filter((tool) => activeToolNames.has(tool.name)).flatMap((tool) => tool.capabilityId === undefined ? [] : [tool.capabilityId])
-    ]);
-    session.setActiveToolsByName([...activeToolNames]);
-    return assembly;
+    .filter((name) => !isProjectReadToolName(name)));
+  const extensionToolByName = new Map(nativeExtensionTools.map((tool) => [tool.name, tool]));
+  const assembleForTurn = (surface: CapabilitySurfaceSnapshot): void => {
+    const next = new Set(nativeExtensionToolNames);
+    activeHostToolNames = new Set();
+    activeCapabilityIds = new Set(surface.executableCapabilityIds);
+    for (const capabilityId of surface.visibleCapabilityIds) {
+      const name = providerToolNameForCapability(capabilityId);
+      if (hostToolNames.has(name)) {
+        next.add(name);
+        activeHostToolNames.add(name);
+      }
+    }
+    if (config.projectReadRoot !== undefined && surface.scope === "project") {
+      for (const name of ["read", "ls", "find", "grep"] as const) next.add(name);
+    }
+    activeToolNames = next;
+    sessionRef?.setActiveToolsByName([...next]);
   };
+
+  let session: AgentSession;
+  try {
+    const created = await createAgentSession({
+      cwd: config.cwd,
+      agentDir: resourceRuntime.agentDir,
+      modelRuntime,
+      model,
+      thinkingLevel: config.profile.thinkingLevel ?? "off",
+      noTools: "builtin",
+      customTools,
+      resourceLoader: resourceRuntime.resourceLoader,
+      sessionManager: physicalContext.sessionManager,
+      settingsManager
+    });
+    session = created.session;
+    sessionRef = session;
+    session.setAutoCompactionEnabled(true);
+    // This emits Pi's session_start lifecycle event (MCP begins connecting
+    // here, never during settings/Doctor/app startup). `mode` alone avoids
+    // making AgentSession.reload start a replacement session on shutdown.
+    await session.bindExtensions({ mode: "print" });
+    session.setActiveToolsByName(nativeExtensionToolNames);
+  } catch (error) {
+    await resourceRuntime.close().catch(() => undefined);
+    throw error;
+  }
 
   let failureEmitted = false;
   let activeTimeoutError: Error | undefined;
@@ -365,6 +397,21 @@ export async function createPiSessionUsingRuntime(
       onEvent({ ...effectiveEvent, reason: compactionReasonOverride });
     } else onEvent(effectiveEvent);
   }, extensionToolByName);
+
+  let disposePromise: Promise<void> | undefined;
+  const disposeNative = async (): Promise<void> => {
+    if (disposePromise !== undefined) return disposePromise;
+    disposePromise = (async () => {
+      // Pi's public dispose() invalidates extension contexts but does not emit
+      // session_shutdown. A reload emits that event, allowing pi-mcp-adapter
+      // to gracefully close child processes before the session is discarded.
+      try { await session.reload(); } catch { /* cleanup continues below */ }
+      await resourceRuntime.close().catch(() => undefined);
+      session.dispose();
+    })();
+    return disposePromise;
+  };
+
   return {
     provider: model.provider,
     model: model.id,
@@ -394,9 +441,6 @@ export async function createPiSessionUsingRuntime(
       refreshTurnIdleTimeout = armIdleTimeout;
       armIdleTimeout();
       try {
-        // Pi's SDK expands task-scoped prompt templates and `/skill:<name>`
-        // commands here. Interactive-only commands remain unavailable because
-        // this app owns the surrounding UI and session lifecycle.
         await session.prompt(prompt, { expandPromptTemplates: true });
         if (activeTimeoutError !== undefined) throw activeTimeoutError;
       } catch (error) {
@@ -415,8 +459,62 @@ export async function createPiSessionUsingRuntime(
     },
     abort: () => session.abort(),
     acknowledge: (eventId, sequence) => session.sessionManager.appendCustomEntry("vc-agent.trajectory-high-water", { eventId, sequence }),
-    dispose: () => session.dispose()
+    dispose: () => { void disposeNative(); },
+    disposeAsync: disposeNative
   };
+}
+
+function optionalPath(path: string | undefined): string[] {
+  return path === undefined ? [] : [path];
+}
+
+const PROVIDER_TOOL_NAME_BY_CAPABILITY_ID: Readonly<Record<string, string>> = Object.freeze({
+  "output.write_text": "output_write_text",
+  "output.edit_text": "output_edit_text",
+  "workspace.write_batch": "workspace_write_batch",
+  "arxiv.fulltext": "arxiv_fulltext"
+});
+
+function providerToolNameForCapability(capabilityId: string): string {
+  return PROVIDER_TOOL_NAME_BY_CAPABILITY_ID[capabilityId] ?? capabilityId;
+}
+
+function nativeRuntimeExtensionTools(
+  snapshot: PiResourceRuntimeSnapshot,
+  bundledPaths: readonly string[]
+): RuntimeExtensionToolInput[] {
+  const bundled = new Set(bundledPaths.map((path) => resolve(path)));
+  const tools: RuntimeExtensionToolInput[] = [];
+  for (const extension of snapshot.extensions.extensions) {
+    const source = bundled.has(resolve(extension.path)) ? "bundled_extension" as const : "pi_extension" as const;
+    for (const name of extension.tools.keys()) {
+      tools.push({
+        name,
+        source,
+        sourceId: extension.path,
+        sourceRevision: extension.resolvedPath
+      });
+    }
+  }
+  return tools.sort((left, right) => `${left.name}:${left.sourceId}`.localeCompare(`${right.name}:${right.sourceId}`));
+}
+
+function assertNativeToolCollisions(extensionToolNames: readonly string[], customToolNames: readonly string[]): void {
+  const builtinNames = new Set(["read", "ls", "find", "grep", "bash", "edit", "write"]);
+  const custom = new Set(customToolNames);
+  const duplicateCustom = customToolNames.find((name, index) => customToolNames.indexOf(name) !== index);
+  const extensionBuiltin = extensionToolNames.find((name) => builtinNames.has(name));
+  const extensionCustom = extensionToolNames.find((name) => custom.has(name));
+  const duplicateExtension = extensionToolNames.find((name, index) => extensionToolNames.indexOf(name) !== index);
+  const collision = extensionBuiltin ?? extensionCustom ?? duplicateExtension ?? duplicateCustom;
+  if (collision !== undefined) {
+    throw new Error(`RUNTIME_CAPABILITY_COLLISION: native Pi tool '${collision}' conflicts with another tool source.`);
+  }
+}
+
+function formatBlockingPiResourceDiagnostics(snapshot: PiResourceRuntimeSnapshot): string {
+  const messages = snapshot.diagnostics.filter((diagnostic) => diagnostic.blocking === true).map((diagnostic) => diagnostic.message);
+  return `PI_RESOURCE_LOAD_BLOCKED: ${messages.join("; ") || "unknown resource diagnostic"}`;
 }
 
 function createCapabilityProxies(
@@ -628,20 +726,6 @@ function createCapabilityProxies(
     createTextOutputProxy(proxy),
     createTextEditProxy(proxy)
   ];
-}
-
-function createMcpToolDefinitions(
-  activation: FrozenMcpActivation,
-  proxy: NonNullable<PiSessionConfig["capabilityProxy"]>
-) {
-  return activation.toolSchemas.map((schema) => defineTool({
-    name: providerToolNameForMcp(activation.serverId, schema.name),
-    label: `MCP ${schema.name}`,
-    description: schema.description ?? `Call the explicitly activated MCP tool '${schema.name}'. Results remain bounded and Host-mediated.`,
-    parameters: Type.Unsafe<Record<string, unknown>>(schema.inputSchema as any ?? Type.Record(Type.String(), Type.Unknown())),
-    executionMode: "sequential",
-    execute: async (toolCallId, params, signal) => toolResult(await proxy(toolCallId, mcpCapabilityId(activation.serverId, schema.name), asToolArguments(params), signal))
-  }));
 }
 
 function fallbackCapabilitySurface(visibleCapabilityIds: readonly string[], scope: "project" | "unscoped"): CapabilitySurfaceSnapshot {

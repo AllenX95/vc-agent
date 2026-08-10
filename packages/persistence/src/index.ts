@@ -417,28 +417,13 @@ export class HostStateStore {
         CREATE TABLE IF NOT EXISTS execution_leases (
           id TEXT PRIMARY KEY,
           scope_key TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'extension_audit', 'internal_model_stage')),
+          kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'internal_model_stage')),
           acquired_at TEXT NOT NULL
         ) STRICT;
       `);
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (13, ?)")
         .run(new Date().toISOString());
-      const executionLeaseTable = this.#database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'execution_leases'").get() as { sql?: string } | undefined;
-      if (executionLeaseTable?.sql?.includes("extension_audit") !== true) {
-        this.#database.exec(`
-          ALTER TABLE execution_leases RENAME TO execution_leases_v13;
-          CREATE TABLE execution_leases (
-            id TEXT PRIMARY KEY,
-            scope_key TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'extension_audit', 'internal_model_stage')),
-            acquired_at TEXT NOT NULL
-          ) STRICT;
-          INSERT INTO execution_leases(id, scope_key, kind, acquired_at)
-            SELECT id, scope_key, kind, acquired_at FROM execution_leases_v13;
-          DROP TABLE execution_leases_v13;
-        `);
-      }
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (14, ?)")
         .run(new Date().toISOString());
@@ -450,6 +435,26 @@ export class HostStateStore {
       if (!this.#columnExists("model_profiles", "max_output_tokens")) this.#database.exec("ALTER TABLE model_profiles ADD COLUMN max_output_tokens INTEGER");
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (16, ?)")
+        .run(new Date().toISOString());
+      const legacyExecutionLeaseTable = this.#database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'execution_leases'").get() as { sql?: string } | undefined;
+      if (legacyExecutionLeaseTable?.sql?.includes("extension_audit") === true) {
+        this.#database.exec(`
+          ALTER TABLE execution_leases RENAME TO execution_leases_v17;
+          CREATE TABLE execution_leases (
+            id TEXT PRIMARY KEY,
+            scope_key TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'internal_model_stage')),
+            acquired_at TEXT NOT NULL
+          ) STRICT;
+          INSERT INTO execution_leases(id, scope_key, kind, acquired_at)
+            SELECT id, scope_key, kind, acquired_at
+            FROM execution_leases_v17
+            WHERE kind <> 'extension_audit';
+          DROP TABLE execution_leases_v17;
+        `);
+      }
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (17, ?)")
         .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
