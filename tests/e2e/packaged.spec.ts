@@ -15,6 +15,7 @@ test("launches the packaged Windows application with its bounded runtimes", asyn
   for (const path of [
     join(resources, "app.asar"),
     join(resources, "workers", "agent-worker", "dist", "index.js"),
+    join(resources, "workers", "agent-worker", "dist", "pi-mcp-adapter.js"),
     join(resources, "workers", "utility-worker", "dist", "index.js"),
     join(resources, "workers", "utility-worker", "dist", "parser.py"),
     join(resources, "parser-runtime", "python.exe"),

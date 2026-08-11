@@ -103,16 +103,28 @@ export class PiResourceRuntime {
       { projectTrusted: options.projectResourcesTrusted ?? false }
     );
 
+    const mcpAdapterUnavailable = options.mcpConfigPath !== undefined && (
+      options.mcpAdapterPath === undefined || !existsSync(resolve(options.mcpAdapterPath))
+    );
     const extensionPaths = dedupePaths([
       ...(options.extensionPaths ?? []),
       ...(options.additionalExtensionPaths ?? []),
-      ...(options.mcpAdapterPath === undefined ? [] : [options.mcpAdapterPath])
+      ...(options.mcpAdapterPath === undefined || mcpAdapterUnavailable ? [] : [options.mcpAdapterPath])
     ]);
     const flagValues = new Map(options.extensionFlagValues ?? []);
-    if (options.mcpConfigPath !== undefined) {
+    this.#mcpAdapterUnavailable = mcpAdapterUnavailable;
+    if (options.mcpConfigPath !== undefined && !this.#mcpAdapterUnavailable) {
       flagValues.set("mcp-config", resolve(options.mcpConfigPath));
     }
     this.#extensionFlagValues = flagValues;
+    if (this.#mcpAdapterUnavailable) {
+      this.#pendingFlagDiagnostics = [{
+        type: "error",
+        source: "mcp",
+        message: "MCP_ADAPTER_UNAVAILABLE: pi-mcp-adapter asset is unavailable; MCP configuration cannot be loaded.",
+        blocking: true
+      }];
+    }
 
     const nativeLoader = new DefaultResourceLoader({
       cwd: this.#cwd,
@@ -262,6 +274,7 @@ export class PiResourceRuntime {
   }
 
   #applyExtensionFlagValues(): void {
+    if (this.#mcpAdapterUnavailable) return;
     if (this.#extensionFlagValues.size === 0) return;
     const result = this.#resourceLoader.getExtensions();
     const registered = new Map<string, "boolean" | "string">();
@@ -293,6 +306,7 @@ export class PiResourceRuntime {
   }
 
   #pendingFlagDiagnostics: PiResourceDiagnostic[] = [];
+  #mcpAdapterUnavailable = false;
 
   #makeSnapshot(
     generation: number,
@@ -326,12 +340,29 @@ export class PiResourceRuntime {
   }
 }
 
-/** Resolve the pinned adapter without importing or executing it. */
-export function resolveBundledPiMcpAdapterPath(): string | undefined {
+/**
+ * Resolve the pinned adapter without importing or executing it.
+ *
+ * Production Worker bundles carry a deterministic standalone extension asset
+ * beside the bundle. Source/test execution keeps the package-resolution
+ * fallback for workspace compatibility.
+ */
+export function resolveBundledPiMcpAdapterPath(moduleUrl = import.meta.url): string | undefined {
+  const bundledAsset = filePathFromUrl(new URL("./pi-mcp-adapter.js", moduleUrl));
+  if (bundledAsset !== undefined && existsSync(bundledAsset)) return bundledAsset;
   try {
-    return createRequire(import.meta.url).resolve("pi-mcp-adapter/index.ts");
+    return createRequire(moduleUrl).resolve("pi-mcp-adapter/index.ts");
   } catch {
     return undefined;
+  }
+}
+
+function filePathFromUrl(url: URL): string | undefined {
+  if (url.protocol !== "file:") return undefined;
+  try {
+    return realpathSync(url);
+  } catch {
+    return url.pathname;
   }
 }
 

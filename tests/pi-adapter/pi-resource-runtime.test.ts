@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { PiResourceRuntime, resolveBundledPiMcpAdapterPath, resolveBundledPiWebAccessPath } from "@vc-agent/pi-adapter";
 
@@ -126,7 +127,7 @@ describe("PiResourceRuntime", () => {
 
   it("constructs with the pinned MCP adapter without connecting it", async () => {
     const adapterPath = resolveBundledPiMcpAdapterPath();
-    if (adapterPath === undefined) return;
+    expect(adapterPath).toBeDefined();
     const root = createRoot("vc-agent-pi-runtime-mcp-");
     const agentDir = join(root, "pi");
     const configPath = join(root, "mcp.json");
@@ -144,6 +145,55 @@ describe("PiResourceRuntime", () => {
     const snapshot = await runtime.reload();
     expect(snapshot.extensions.extensions.some((extension) => extension.flags.has("mcp-config"))).toBe(true);
     expect(snapshot.diagnostics.filter((diagnostic) => diagnostic.source === "mcp")).toEqual([]);
+    await runtime.close();
+  });
+
+  it("ships a deterministic MCP adapter asset beside the production Worker bundle", () => {
+    const workerBundlePath = resolve("apps/agent-worker/dist/index.js");
+    const adapterAssetPath = join(dirname(workerBundlePath), "pi-mcp-adapter.js");
+    expect(existsSync(workerBundlePath)).toBe(true);
+    expect(existsSync(adapterAssetPath)).toBe(true);
+    expect(resolveBundledPiMcpAdapterPath(pathToFileURL(workerBundlePath).href)).toBe(adapterAssetPath);
+    const workerBundle = readFileSync(workerBundlePath, "utf8");
+    expect(workerBundle).toContain("pi-mcp-adapter.js");
+  });
+
+  it("reports MCP_ADAPTER_UNAVAILABLE instead of an unknown flag when the asset is missing", async () => {
+    const root = createRoot("vc-agent-pi-runtime-mcp-missing-");
+    const configPath = join(root, "mcp.json");
+    writeFileSync(configPath, JSON.stringify({ mcpServers: {} }), "utf8");
+    const runtime = new PiResourceRuntime({
+      cwd: root,
+      agentDir: join(root, "pi"),
+      mcpConfigPath: configPath
+    });
+    const snapshot = await runtime.reload();
+    expect(snapshot.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "mcp",
+        blocking: true,
+        message: expect.stringContaining("MCP_ADAPTER_UNAVAILABLE")
+      })
+    ]));
+    expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("Unknown Extension flag"))).toBe(false);
+    await runtime.close();
+  });
+
+  it("loads the standalone Worker adapter asset and registers the MCP tool", async () => {
+    const root = createRoot("vc-agent-pi-runtime-mcp-asset-");
+    const configPath = join(root, "mcp.json");
+    writeFileSync(configPath, JSON.stringify({ mcpServers: {} }), "utf8");
+    const adapterAssetPath = resolve("apps/agent-worker/dist/pi-mcp-adapter.js");
+    const runtime = new PiResourceRuntime({
+      cwd: root,
+      agentDir: join(root, "pi"),
+      mcpAdapterPath: adapterAssetPath,
+      mcpConfigPath: configPath
+    });
+    const snapshot = await runtime.reload();
+    expect(snapshot.hasBlockingDiagnostics).toBe(false);
+    expect(snapshot.extensions.extensions.some((extension) => extension.tools.has("mcp"))).toBe(true);
+    expect(snapshot.extensions.runtime.flagValues.get("mcp-config")).toBe(configPath);
     await runtime.close();
   });
 

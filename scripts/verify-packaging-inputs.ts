@@ -11,6 +11,7 @@ const requiredFiles = [
   "apps/desktop/dist/preload/preload.js",
   "apps/desktop/dist/renderer/index.html",
   "apps/agent-worker/dist/index.js",
+  "apps/agent-worker/dist/pi-mcp-adapter.js",
   "apps/agent-worker/package.json",
   "apps/utility-worker/dist/index.js",
   "apps/utility-worker/dist/parser.py",
