@@ -253,15 +253,17 @@ async function createNativePiSession(
   const nativeConfig = config.piResources;
   if (nativeConfig === undefined) throw new Error("Native Pi resource configuration is missing.");
 
+  const mcpAdapterPath = resolveBundledPiMcpAdapterPath();
   const bundledExtensionPaths = [
     ...(config.usePiWebAccess === false ? [] : optionalPath(resolveBundledPiWebAccessPath())),
-    ...optionalPath(resolveBundledPiMcpAdapterPath())
+    ...optionalPath(mcpAdapterPath)
   ];
   const resourceRuntime = new PiResourceRuntime({
     cwd: config.cwd,
     agentDir: nativeConfig.agentDir,
     skillsRoot: nativeConfig.skillsRoot,
     extensionPaths: [...bundledExtensionPaths, ...(nativeConfig.extensionPaths ?? [])],
+    mcpAdapterPath,
     mcpConfigPath: nativeConfig.mcpConfigPath,
     projectResourcesTrusted: nativeConfig.projectResourcesTrusted ?? false,
     // Existing VC prompts are still Host-owned. Do not implicitly pull in

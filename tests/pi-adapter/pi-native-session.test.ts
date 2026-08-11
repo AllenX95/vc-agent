@@ -36,6 +36,35 @@ export default function (pi) {
 }
 
 describe("Pi-native AgentSession integration", () => {
+  it("loads the bundled MCP adapter when an MCP configuration is present", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vc-pi-native-session-mcp-"));
+    temporaryDirectories.push(root);
+    const mcpConfigPath = join(root, "mcp.json");
+    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: {} }), "utf8");
+
+    const handle = await createFauxPiSession({
+      config: {
+        cwd: root,
+        threadDirectory: root,
+        contextHistory: [],
+        resources: { schemaVersion: 1, revisionId: "native-mcp-test", systemPrompt: "VC test prompt", appendSystemPrompt: [] },
+        extensions: { schemaVersion: 1, revisionId: "legacy-unused", enabled: [] },
+        piResources: {
+          agentDir: join(root, "pi-agent"),
+          skillsRoot: join(root, "vc-skills"),
+          mcpConfigPath,
+          projectResourcesTrusted: false
+        },
+        capabilityProxy: async () => ({ schemaVersion: 1, requestId: "native-mcp-cap", status: "completed", content: "ok" })
+      },
+      responses: [fauxAssistantMessage("Done.")],
+      onEvent: () => {}
+    });
+
+    expect(handle.activeTools).toContain("mcp");
+    await handle.disposeAsync?.();
+  });
+
   it("keeps native Extension tools active while Host capability activation changes", async () => {
     const root = mkdtempSync(join(tmpdir(), "vc-pi-native-session-"));
     temporaryDirectories.push(root);
