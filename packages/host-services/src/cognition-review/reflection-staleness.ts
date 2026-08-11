@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { MaterialInventoryItem, ReflectionOutcomeDependency, ReflectionOutcomeStaleReason } from "@vc-agent/contracts";
-import { parseMaterialBlockReference } from "./reflection-evidence.js";
+import { parseMaterialBlockReference } from "../reflection-evidence.js";
 
+/** Host-owned values used while converting Reflection evidence into Review dependencies. */
 export interface ReflectionDependencyEntry {
   readonly id: string;
   readonly value: unknown;
@@ -20,6 +21,14 @@ export interface CaptureReflectionDependenciesInput {
   readonly state: ReflectionDependencyState;
 }
 
+/** Narrow dependency resolver seam used by Reflection preparation/commit. */
+export interface ReflectionDependencyResolver {
+  capture(input: CaptureReflectionDependenciesInput): ReflectionOutcomeDependency[];
+  stale(dependencies: readonly ReflectionOutcomeDependency[], state: ReflectionDependencyState): ReflectionOutcomeStaleReason[];
+  fingerprint(value: unknown): string;
+}
+
+/** Capture exact evidence and recalled Memory identities for a draft. */
 export function captureReflectionDependencies(input: CaptureReflectionDependenciesInput): ReflectionOutcomeDependency[] {
   const dependencies: ReflectionOutcomeDependency[] = [];
   for (const referenceId of input.evidenceReferenceIds) {
@@ -38,6 +47,7 @@ export function captureReflectionDependencies(input: CaptureReflectionDependenci
   return [...new Map(dependencies.map((dependency) => [`${dependency.kind}\0${dependency.referenceId}`, dependency])).values()];
 }
 
+/** Return only dependencies whose exact material or Memory value changed. */
 export function staleReflectionDependencies(dependencies: readonly ReflectionOutcomeDependency[], state: ReflectionDependencyState): ReflectionOutcomeStaleReason[] {
   const reasons: ReflectionOutcomeStaleReason[] = [];
   for (const dependency of dependencies) {
@@ -59,6 +69,15 @@ export function staleReflectionDependencies(dependencies: readonly ReflectionOut
   return reasons;
 }
 
+/** Stable content hash used for Host-captured dependency versions. */
 export function reflectionDependencyFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+export function createReflectionDependencyResolver(): ReflectionDependencyResolver {
+  return {
+    capture: captureReflectionDependencies,
+    stale: staleReflectionDependencies,
+    fingerprint: reflectionDependencyFingerprint
+  };
 }

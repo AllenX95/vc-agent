@@ -2,8 +2,6 @@ import type { WorkerCommand } from "@vc-agent/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   HostTurnExecutionModule,
-  type DreamExecutionContext,
-  type DreamSynthesisExecutionContext,
   type ReflectionExecutionContext,
   type TurnContext
 } from "../../apps/desktop/src/main/turn-execution";
@@ -27,14 +25,6 @@ function turn(turnId: string, threadId: string, correlationId = "correlation-1")
 
 function reflection(turnId: string, threadId: string, runId = "run-1"): ReflectionExecutionContext {
   return { turnId, threadId, runId, correlationId: "correlation-1" } as ReflectionExecutionContext;
-}
-
-function dream(turnId: string, executionThreadId: string): DreamExecutionContext {
-  return { turnId, executionThreadId, correlationId: "correlation-1" } as DreamExecutionContext;
-}
-
-function synthesis(turnId: string, executionThreadId: string): DreamSynthesisExecutionContext {
-  return { turnId, executionThreadId, correlationId: "correlation-1" } as DreamSynthesisExecutionContext;
 }
 
 describe("HostTurnExecutionModule", () => {
@@ -61,21 +51,31 @@ describe("HostTurnExecutionModule", () => {
     const module = new HostTurnExecutionModule(async () => undefined);
     const ordinary = turn("turn-1", "thread-1");
     const independent = reflection("turn-2", "thread-2");
-    const extraction = dream("turn-3", "dream-thread");
-    const globalSynthesis = synthesis("turn-4", "synthesis-thread");
 
     module.start({ kind: "turn", context: ordinary }, command(ordinary.turnId, ordinary.threadId), vi.fn());
     module.start({ kind: "reflection", context: independent }, command(independent.turnId, independent.threadId), vi.fn());
-    module.start({ kind: "dream", context: extraction }, command(extraction.turnId, extraction.executionThreadId), vi.fn());
-    module.start({ kind: "dream_synthesis", context: globalSynthesis }, command(globalSynthesis.turnId, globalSynthesis.executionThreadId), vi.fn());
 
     expect(module.activeExecutions().map((execution) => execution.kind)).toEqual([
       "turn",
-      "reflection",
-      "dream",
-      "dream_synthesis"
+      "reflection"
     ]);
     expect(module.findReflection("run-1")).toBe(independent);
+  });
+
+  it("permits the next isolated Reflection stage only after the prior execution is released", async () => {
+    const execute = vi.fn(async () => undefined);
+    const module = new HostTurnExecutionModule(execute);
+    const independent = reflection("turn-independent", "reflection-thread", "run-1");
+    const dialogue = turn("turn-dialogue", "reflection-thread");
+
+    module.start({ kind: "reflection", context: independent }, command(independent.turnId, independent.threadId), vi.fn());
+    expect(module.findReflection("run-1")).toBe(independent);
+    expect(module.finish({ kind: "reflection", context: independent })).toBe(true);
+
+    module.start({ kind: "turn", context: dialogue }, command(dialogue.turnId, dialogue.threadId), vi.fn());
+    expect(module.findReflection("run-1")).toBeUndefined();
+    expect(module.route(dialogue.turnId)).toEqual({ kind: "turn", context: dialogue });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
   });
 
   it("rejects a Worker command whose identity differs from its Host context", () => {

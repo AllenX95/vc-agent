@@ -41,7 +41,7 @@ describe("ExecutionLifecycleCoordinator", () => {
 
   it("reconciles worker exit and releases the orphaned lease", () => {
     const { coordinator, leases } = createHarness();
-    coordinator.admit({ id: "execution-2", scopeKey: "thread-2", kind: "dream_synthesis" });
+    coordinator.admit({ id: "execution-2", scopeKey: "thread-2", kind: "internal_model_stage" });
     coordinator.beginTurn({ executionId: "execution-2", threadId: "thread-2", turnId: "turn-2", workerId: "worker-crashed" });
 
     expect(coordinator.reconcileWorkerExit("worker-crashed")).toMatchObject({ reconciledExecutionIds: ["execution-2"] });

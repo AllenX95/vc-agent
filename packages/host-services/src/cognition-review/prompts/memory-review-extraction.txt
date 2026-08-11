@@ -1,0 +1,27 @@
+You are running one isolated Memory Review extraction chunk.
+
+Use only the scope-local sources and scope-compatible Project Memory cards supplied
+in this prompt.  Never infer or disclose a Project for an Unscoped scope.  Do not
+use materials, webpages, OCR, tool output, hidden reasoning, or ordinary assistant
+claims as personal Memory unless a source contains an attributable User signal or
+a confirmed cognitive artifact.
+
+Every supplied sourceReference MUST appear exactly once in dispositions.  A source
+may be marked no_signal, represented, or carried_over.  represented MUST include
+at least one candidate/proposal id that is declared in candidates.  Never invent a
+sourceReference outside this chunk.  Return one JSON object only:
+
+{
+  "schemaVersion": 1,
+  "chunkId": "...",
+  "dispositions": [
+    { "sourceReference": "...", "status": "no_signal|represented|carried_over", "proposalIds": ["..."], "reason": "..." }
+  ],
+  "candidates": [
+    { "id": "...", "sourceReferences": ["..."], "summary": "..." }
+  ],
+  "completedAt": "..."
+}
+
+Keep summaries bounded, de-identified, and free of raw excerpts, credentials, or
+Project names.  The Host rejects missing, duplicate, or out-of-chunk references.

@@ -9,6 +9,7 @@ export const REFLECTION_LEGACY_STATUSES = [
   "dialogue_active",
   "memory_aware_failed",
   "memory_aware_interrupted",
+  "completed",
   "discarded"
 ] as const;
 
@@ -16,6 +17,72 @@ export type ReflectionLegacyStatus = typeof REFLECTION_LEGACY_STATUSES[number];
 export type ReflectionStage = "configuration" | "independent_evidence" | "critical_dialogue" | "completed" | "discarded";
 export type ReflectionExecutionState = "idle" | "running" | "paused" | "failed";
 export type ReflectionPauseReason = "user_stop" | "application_restart" | "configuration";
+
+/**
+ * The only profile that may cross the Reflection stage boundary is the
+ * profile frozen by the explicit Reflection launch.  These small decisions
+ * keep that invariant inspectable without coupling the renderer to Host
+ * execution details.
+ */
+export interface ReflectionLaunchTransitionInput {
+  readonly profileId?: string;
+}
+
+export type ReflectionLaunchTransition =
+  | { readonly action: "start_independent"; readonly profileId: string; readonly isolated: true }
+  | { readonly action: "idle"; readonly reason: "profile_missing" };
+
+export interface ReflectionCompletionTransitionInput {
+  readonly status: ReflectionLegacyStatus;
+  readonly independentProfileId?: string;
+  readonly assessmentAvailable: boolean;
+  readonly frozenBriefAvailable: boolean;
+  readonly frozenPromptSnapshotAvailable: boolean;
+}
+
+export type ReflectionCompletionTransition =
+  | {
+      readonly action: "start_memory_aware";
+      readonly profileId: string;
+      readonly isolated: true;
+      readonly handoff: {
+        readonly source: "bounded_independent_assessment";
+        readonly brief: "frozen";
+        readonly promptSnapshot: "frozen";
+        readonly inheritIndependentContext: false;
+      };
+    }
+  | { readonly action: "idle"; readonly reason: "profile_missing" | "handoff_unavailable" }
+  | { readonly action: "none"; readonly reason: "interrupted" | "failed" | "not_completed" };
+
+export function reflectionLaunchTransition(input: ReflectionLaunchTransitionInput): ReflectionLaunchTransition {
+  const profileId = input.profileId?.trim();
+  return profileId === undefined || profileId.length === 0
+    ? { action: "idle", reason: "profile_missing" }
+    : { action: "start_independent", profileId, isolated: true };
+}
+
+export function reflectionCompletionTransition(input: ReflectionCompletionTransitionInput): ReflectionCompletionTransition {
+  if (input.status === "independent_failed") return { action: "none", reason: "failed" };
+  if (input.status === "independent_interrupted") return { action: "none", reason: "interrupted" };
+  if (input.status !== "independent_completed") return { action: "none", reason: "not_completed" };
+  const profileId = input.independentProfileId?.trim();
+  if (profileId === undefined || profileId.length === 0) return { action: "idle", reason: "profile_missing" };
+  if (!input.assessmentAvailable || !input.frozenBriefAvailable || !input.frozenPromptSnapshotAvailable) {
+    return { action: "idle", reason: "handoff_unavailable" };
+  }
+  return {
+    action: "start_memory_aware",
+    profileId,
+    isolated: true,
+    handoff: {
+      source: "bounded_independent_assessment",
+      brief: "frozen",
+      promptSnapshot: "frozen",
+      inheritIndependentContext: false
+    }
+  };
+}
 
 export interface ReflectionWorkflowState {
   readonly stage: ReflectionStage;
@@ -25,7 +92,7 @@ export interface ReflectionWorkflowState {
 
 export interface ReflectionWorkflowProjection extends ReflectionWorkflowState {
   readonly label: string;
-  readonly actions: readonly ("configure" | "start_evidence" | "retry_evidence" | "stop_evidence" | "resume_evidence" | "start_dialogue" | "retry_dialogue" | "resume_dialogue" | "prepare_outcomes" | "discard")[];
+  readonly actions: readonly ("configure" | "start_evidence" | "retry_evidence" | "stop_evidence" | "resume_evidence" | "start_dialogue" | "retry_dialogue" | "resume_dialogue" | "stop_dialogue" | "prepare_outcomes" | "discard")[];
   readonly evidenceAvailable: boolean;
   readonly recoveryAction?: "configure" | "retry_evidence" | "retry_dialogue" | "resume_evidence" | "resume_dialogue";
 }
@@ -48,6 +115,7 @@ export const REFLECTION_LEGACY_STATE_MAP: Readonly<Record<ReflectionLegacyStatus
   dialogue_active: { stage: "critical_dialogue", executionState: "idle" },
   memory_aware_failed: { stage: "critical_dialogue", executionState: "failed" },
   memory_aware_interrupted: { stage: "critical_dialogue", executionState: "paused", pauseReason: "user_stop" },
+  completed: { stage: "completed", executionState: "idle" },
   discarded: { stage: "discarded", executionState: "idle" }
 });
 
@@ -62,9 +130,9 @@ export function projectReflectionWorkflow(input: ReflectionWorkflowInput): Refle
   const actions: Array<ReflectionWorkflowProjection["actions"][number]> = [];
   let recoveryAction: ReflectionWorkflowProjection["recoveryAction"];
   if (state.stage === "configuration") {
-    // Profile configuration is the visible gate, but once a profile is
-    // selected the next authorized action is still the independent pass.
-    actions.push("configure", "start_evidence");
+    // A launch with no frozen Reflection Profile is local and idle.  Profile
+    // configuration is the one required recovery action.
+    actions.push("configure");
     recoveryAction = "configure";
   } else if (state.stage === "independent_evidence") {
     if (state.executionState === "running") actions.push("stop_evidence");
@@ -72,7 +140,7 @@ export function projectReflectionWorkflow(input: ReflectionWorkflowInput): Refle
     else if (state.executionState === "paused") { actions.push("resume_evidence", "discard"); recoveryAction = "resume_evidence"; }
     else actions.push("start_evidence");
   } else if (state.stage === "critical_dialogue") {
-    if (state.executionState === "running") actions.push("stop_evidence");
+    if (state.executionState === "running") actions.push("stop_dialogue");
     else if (state.executionState === "failed") { actions.push("retry_dialogue", "discard"); recoveryAction = "retry_dialogue"; }
     else if (state.executionState === "paused") { actions.push("resume_dialogue", "discard"); recoveryAction = "resume_dialogue"; }
     else if (input.status === "dialogue_active") actions.push("prepare_outcomes", "discard");
@@ -99,5 +167,6 @@ function reflectionWorkflowLabel(input: ReflectionWorkflowInput, state: Reflecti
   if (input.status === "dialogue_active") return "Reflection dialogue";
   if (input.status === "memory_aware_failed") return `Dialogue start failed${input.failureCode === undefined ? "" : ` · ${input.failureCode}`}`;
   if (input.status === "memory_aware_interrupted") return state.pauseReason === "application_restart" ? "Dialogue paused after restart" : "Dialogue paused";
+  if (input.status === "completed") return "Reflection completed";
   return "Discarded";
 }

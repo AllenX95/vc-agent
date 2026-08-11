@@ -232,10 +232,6 @@ test("completes Skills and Project file mentions from the composer", async () =>
     await expect(window.getByRole("dialog", { name: "Start Investment Reflection" })).toBeVisible();
     await window.getByRole("dialog", { name: "Start Investment Reflection" }).getByRole("button", { name: "Cancel" }).click();
 
-    await composer.fill("/dream");
-    await composer.press("Enter");
-    await expect(window.getByRole("dialog", { name: "Start Dream" })).toBeVisible();
-    await window.getByRole("dialog", { name: "Start Dream" }).getByRole("button", { name: "Cancel" }).click();
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -1465,7 +1461,7 @@ test("recovers the complete Dogfood failure path without provider fallback", asy
   }
 });
 
-test("runs an explicit isolated Project Reflection and restores its assessment without Pi", async () => {
+test.skip("legacy staged Project Reflection flow (superseded by Cognition Review v2)", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-e2e-"));
   const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-project-"));
@@ -1609,7 +1605,7 @@ test("runs an explicit isolated Project Reflection and restores its assessment w
   }
 });
 
-test("runs an isolated Unscoped Reflection without Project State and writes only to the selected Output Location", async () => {
+test.skip("legacy staged Unscoped Reflection flow (superseded by Cognition Review v2)", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-unscoped-reflection-e2e-"));
   const outputDirectory = mkdtempSync(join(tmpdir(), "vc-agent-unscoped-reflection-output-"));
@@ -1692,7 +1688,7 @@ test("runs an isolated Unscoped Reflection without Project State and writes only
   }
 });
 
-test("marks only unconfirmed Reflection outcomes stale after a recalled Memory target changes", async () => {
+test.skip("legacy Reflection outcome authority (superseded by Cognition Review v2)", async () => {
   test.setTimeout(90_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-e2e-"));
   const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-reflection-stale-project-"));
@@ -1760,7 +1756,7 @@ test("marks only unconfirmed Reflection outcomes stale after a recalled Memory t
   }
 });
 
-test("creates and restores a frozen Dream batch without hidden model work", async () => {
+test.skip("legacy Dream batch flow (superseded by Memory Review)", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-dream-e2e-"));
   const root = resolve(import.meta.dirname, "../..");
@@ -1830,7 +1826,7 @@ test("creates and restores a frozen Dream batch without hidden model work", asyn
   }
 });
 
-test("reviews Global Dream proposals separately from the final atomic Memory commit", async () => {
+test.skip("legacy Dream synthesis flow (superseded by Memory Review)", async () => {
   test.setTimeout(60_000);
   const userDataDirectory = mkdtempSync(join(tmpdir(), "vc-agent-dream-synthesis-e2e-"));
   const root = resolve(import.meta.dirname, "../..");

@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
-import { independentAssessmentSchema, providerFailureSchema, reflectionBriefSchema, reflectionRunSchema, type AccessMode, type AcademicCredentialSource, type AcademicCredentialStatus, type ArtifactRecord, type BootstrapState, type ExecutionQueueItem, type IndependentAssessment, type MaterialInventoryItem, type ModelExecutionKind, type ModelProfile, type Project, type ProjectThread, type ProviderFailure, type ReflectionBrief, type ReflectionRun, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
+import { autoMemoryReviewPolicySchema, taskModelAssignmentSchema, taskModelTypeSchema, type AccessMode, type AcademicCredentialSource, type AcademicCredentialStatus, type ArtifactRecord, type AutoMemoryReviewPolicy, type BootstrapState, type ExecutionQueueItem, type MaterialInventoryItem, type ModelExecutionKind, type ModelProfile, type Project, type ProjectThread, type SystemPromptRevision, type TaskModelAssignment, type TaskModelType, type ThinkingLevel, type Thread, type UnscopedThread } from "@vc-agent/contracts";
 import { immutableDatabaseUrl, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 export { ThreadTrajectoryStore } from "./thread-trajectory-store.js";
-export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
+export { exportRawStateBundle, immutableDatabaseUrl, inspectStateVersion, listRollbackFiles, prepareStateStorage, restoreStateStorageRollback, STATE_SCHEMA_VERSION, type StateMigrationTestOptions, type StatePreparation } from "./state-migration.js";
 
 const nodeRequire = createRequire(process.execPath);
 const sqliteModuleName = ["node", "sqlite"].join(":");
@@ -95,25 +95,6 @@ interface ParsedMaterialRow {
   status: "active" | "source_unavailable"; created_at: string;
 }
 
-interface ReflectionRunRow {
-  id: string; thread_id: string; scope: "project" | "unscoped"; project_id: string | null; source_thread_id: string | null; framing: "reflection" | "retrospective"; objective: string; focus: string | null;
-  status: ReflectionRun["status"]; brief_json: string; prompt_revision_id: string; prompt_hash: string; independent_profile_id: string | null;
-  launch_override_profile_id: string | null; memory_aware_profile_id: string | null; memory_initial_turn_id: string | null; assessment_json: string | null; failure_json: string | null; session_file: string | null; created_at: string; updated_at: string;
-}
-
-interface CreateReflectionRunBaseInput {
-  readonly framing: "reflection" | "retrospective";
-  readonly objective: string;
-  readonly focus?: string | undefined;
-  readonly promptRevision: SystemPromptRevision;
-  readonly independentProfileId?: string | undefined;
-  readonly launchOverrideProfileId?: string | undefined;
-}
-export type CreateReflectionRunInput = CreateReflectionRunBaseInput & (
-  | { readonly scope: "project"; readonly projectId: string; readonly brief: Extract<ReflectionBrief, { scope: "project" }> }
-  | { readonly scope: "unscoped"; readonly sourceThreadId: string; readonly brief: Extract<ReflectionBrief, { scope: "unscoped" }> }
-);
-
 export interface RefreshInventoryRecord {
   readonly relativePath: string;
   readonly extension: string;
@@ -167,6 +148,7 @@ export interface PersonalCognitionState {
   readonly accessMode: AccessMode;
   readonly profiles: readonly PersonalCognitionProfile[];
   readonly taskAssignments: readonly TaskModelAssignment[];
+  readonly autoMemoryReviewPolicy?: AutoMemoryReviewPolicy;
   readonly promptRevisions: readonly SystemPromptRevision[];
   readonly activePromptRevisionId: string;
 }
@@ -178,6 +160,9 @@ export interface PhysicalContextState {
   readonly highWaterSequence?: number;
   readonly promptRevisionId?: string;
 }
+
+/** Content-free marker for the one-time cognition-v2 cutover. */
+export type CognitionCutoverStatus = "pending_reset" | "active" | "failed_reset";
 
 export class HostStateStore {
   readonly #database: DatabaseSyncInstance;
@@ -346,34 +331,7 @@ export class HostStateStore {
         profile_id TEXT NOT NULL REFERENCES model_profiles(id) ON DELETE CASCADE,
         updated_at TEXT NOT NULL
       ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS reflection_runs (
-        id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL UNIQUE REFERENCES threads(id) ON DELETE CASCADE,
-        scope TEXT NOT NULL CHECK(scope IN ('project', 'unscoped')),
-        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-        source_thread_id TEXT,
-        framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
-        objective TEXT NOT NULL,
-        focus TEXT,
-        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted', 'memory_aware_running', 'dialogue_active', 'memory_aware_failed', 'memory_aware_interrupted', 'discarded')),
-        brief_json TEXT NOT NULL,
-        prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
-        prompt_hash TEXT NOT NULL,
-        independent_profile_id TEXT REFERENCES model_profiles(id),
-        launch_override_profile_id TEXT REFERENCES model_profiles(id),
-        memory_aware_profile_id TEXT REFERENCES model_profiles(id),
-        memory_initial_turn_id TEXT,
-        assessment_json TEXT,
-        failure_json TEXT,
-        session_file TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        CHECK((scope = 'project' AND project_id IS NOT NULL AND source_thread_id IS NULL) OR (scope = 'unscoped' AND project_id IS NULL AND source_thread_id IS NOT NULL))
-      ) STRICT;
     `);
-    if (!this.#columnExists("reflection_runs", "memory_aware_profile_id")) this.#migrateReflectionRunsV10();
-    if (!this.#columnExists("reflection_runs", "scope")) this.#migrateReflectionRunsV11();
     if (!this.#columnExists("physical_contexts", "prompt_revision_id")) this.#database.exec("ALTER TABLE physical_contexts ADD COLUMN prompt_revision_id TEXT");
     this.#database
       .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)")
@@ -417,7 +375,7 @@ export class HostStateStore {
         CREATE TABLE IF NOT EXISTS execution_leases (
           id TEXT PRIMARY KEY,
           scope_key TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'internal_model_stage')),
+          kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'internal_model_stage')),
           acquired_at TEXT NOT NULL
         ) STRICT;
       `);
@@ -443,7 +401,7 @@ export class HostStateStore {
           CREATE TABLE execution_leases (
             id TEXT PRIMARY KEY,
             scope_key TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'independent_evidence', 'memory_aware_reflection', 'dream_scope', 'dream_synthesis', 'internal_model_stage')),
+            kind TEXT NOT NULL CHECK(kind IN ('ordinary_turn', 'compaction', 'internal_model_stage')),
             acquired_at TEXT NOT NULL
           ) STRICT;
           INSERT INTO execution_leases(id, scope_key, kind, acquired_at)
@@ -455,6 +413,15 @@ export class HostStateStore {
       }
       this.#database
         .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (17, ?)")
+        .run(new Date().toISOString());
+      // Schema 18 intentionally retires the legacy Reflection workflow.  Do
+      // not copy rows into cognition-v2: its file root is created by the Host
+      // reset protocol after this migration has activated.
+      this.#database.exec("DROP TABLE IF EXISTS reflection_runs");
+      this.#database.prepare("DELETE FROM task_model_assignments WHERE task_type IN ('dream', 'independent_evidence', 'memory_aware_reflection')").run();
+      this.#database.prepare("INSERT OR IGNORE INTO application_settings(key, value, updated_at) VALUES ('cognition_cutover_status', 'pending_reset', ?)").run(new Date().toISOString());
+      this.#database
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (18, ?)")
         .run(new Date().toISOString());
       const version = this.#database.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
       if (Number(version.version) !== STATE_SCHEMA_VERSION) throw new Error("Migration did not reach the supported schema");
@@ -503,69 +470,6 @@ export class HostStateStore {
           PRIMARY KEY(project_id, profile_id)
         ) STRICT;
       `);
-  }
-
-  #migrateReflectionRunsV10(): void {
-    this.#database.exec(`
-      ALTER TABLE reflection_runs RENAME TO reflection_runs_v9;
-      CREATE TABLE reflection_runs (
-        id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL UNIQUE REFERENCES threads(id) ON DELETE CASCADE,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
-        objective TEXT NOT NULL,
-        focus TEXT,
-        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted', 'memory_aware_running', 'dialogue_active', 'memory_aware_failed', 'memory_aware_interrupted', 'discarded')),
-        brief_json TEXT NOT NULL,
-        prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
-        prompt_hash TEXT NOT NULL,
-        independent_profile_id TEXT REFERENCES model_profiles(id),
-        launch_override_profile_id TEXT REFERENCES model_profiles(id),
-        memory_aware_profile_id TEXT REFERENCES model_profiles(id),
-        memory_initial_turn_id TEXT,
-        assessment_json TEXT,
-        failure_json TEXT,
-        session_file TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      ) STRICT;
-      INSERT INTO reflection_runs(id, thread_id, project_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, assessment_json, failure_json, session_file, created_at, updated_at)
-        SELECT id, thread_id, project_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, assessment_json, failure_json, session_file, created_at, updated_at FROM reflection_runs_v9;
-      DROP TABLE reflection_runs_v9;
-    `);
-  }
-
-  #migrateReflectionRunsV11(): void {
-    this.#database.exec(`
-      ALTER TABLE reflection_runs RENAME TO reflection_runs_v10;
-      CREATE TABLE reflection_runs (
-        id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL UNIQUE REFERENCES threads(id) ON DELETE CASCADE,
-        scope TEXT NOT NULL CHECK(scope IN ('project', 'unscoped')),
-        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-        source_thread_id TEXT,
-        framing TEXT NOT NULL CHECK(framing IN ('reflection', 'retrospective')),
-        objective TEXT NOT NULL,
-        focus TEXT,
-        status TEXT NOT NULL CHECK(status IN ('awaiting_profile', 'ready', 'independent_running', 'independent_completed', 'independent_failed', 'independent_interrupted', 'memory_aware_running', 'dialogue_active', 'memory_aware_failed', 'memory_aware_interrupted', 'discarded')),
-        brief_json TEXT NOT NULL,
-        prompt_revision_id TEXT NOT NULL REFERENCES system_prompt_revisions(id),
-        prompt_hash TEXT NOT NULL,
-        independent_profile_id TEXT REFERENCES model_profiles(id),
-        launch_override_profile_id TEXT REFERENCES model_profiles(id),
-        memory_aware_profile_id TEXT REFERENCES model_profiles(id),
-        memory_initial_turn_id TEXT,
-        assessment_json TEXT,
-        failure_json TEXT,
-        session_file TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        CHECK((scope = 'project' AND project_id IS NOT NULL AND source_thread_id IS NULL) OR (scope = 'unscoped' AND project_id IS NULL AND source_thread_id IS NOT NULL))
-      ) STRICT;
-      INSERT INTO reflection_runs(id, thread_id, scope, project_id, source_thread_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, memory_aware_profile_id, memory_initial_turn_id, assessment_json, failure_json, session_file, created_at, updated_at)
-        SELECT id, thread_id, 'project', project_id, NULL, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, memory_aware_profile_id, memory_initial_turn_id, assessment_json, failure_json, session_file, created_at, updated_at FROM reflection_runs_v10;
-      DROP TABLE reflection_runs_v10;
-    `);
   }
 
   #columnExists(table: string, column: string): boolean {
@@ -707,26 +611,59 @@ export class HostStateStore {
   }
 
   listTaskModelAssignments(): TaskModelAssignment[] {
-    return (this.#database.prepare("SELECT * FROM task_model_assignments ORDER BY task_type").all() as unknown as Array<{ task_type: TaskModelType; profile_id: string; updated_at: string }>).map((row) => ({ taskType: row.task_type, profileId: row.profile_id, updatedAt: row.updated_at }));
+    return (this.#database.prepare("SELECT * FROM task_model_assignments ORDER BY task_type").all() as unknown as Array<{ task_type: string; profile_id: string; updated_at: string }>).map(mapTaskModelAssignmentRow);
   }
 
   getTaskModelAssignment(taskType: TaskModelType): TaskModelAssignment | undefined {
-    const row = this.#database.prepare("SELECT * FROM task_model_assignments WHERE task_type = ?").get(taskType) as { task_type: TaskModelType; profile_id: string; updated_at: string } | undefined;
-    return row === undefined ? undefined : { taskType: row.task_type, profileId: row.profile_id, updatedAt: row.updated_at };
+    assertTaskModelType(taskType);
+    const row = this.#database.prepare("SELECT * FROM task_model_assignments WHERE task_type = ?").get(taskType) as { task_type: string; profile_id: string; updated_at: string } | undefined;
+    return row === undefined ? undefined : mapTaskModelAssignmentRow(row);
   }
 
   setTaskModelAssignment(taskType: TaskModelType, profileId: string): TaskModelAssignment {
+    assertTaskModelType(taskType);
     if (this.getModelProfile(profileId) === undefined) throw new Error("Model Profile not found");
+    const previous = this.getTaskModelAssignment(taskType);
     const updatedAt = new Date().toISOString();
     this.#database.prepare(`
       INSERT INTO task_model_assignments(task_type, profile_id, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(task_type) DO UPDATE SET profile_id = excluded.profile_id, updated_at = excluded.updated_at
     `).run(taskType, profileId, updatedAt);
+    // Automatic Memory Review consent is bound to the exact configured
+    // Memory Review Profile.  Switching the assignment must revoke that
+    // standing consent rather than silently transferring it to a new model.
+    if (taskType === "memory_review" && previous?.profileId !== undefined && previous.profileId !== profileId) {
+      this.clearAutoMemoryReviewPolicy();
+    }
     return { taskType, profileId, updatedAt };
   }
 
   clearTaskModelAssignment(taskType: TaskModelType): boolean {
-    return this.#database.prepare("DELETE FROM task_model_assignments WHERE task_type = ?").run(taskType).changes === 1;
+    assertTaskModelType(taskType);
+    const changed = this.#database.prepare("DELETE FROM task_model_assignments WHERE task_type = ?").run(taskType).changes === 1;
+    if (taskType === "memory_review") this.clearAutoMemoryReviewPolicy();
+    return changed;
+  }
+
+  getAutoMemoryReviewPolicy(): AutoMemoryReviewPolicy | undefined {
+    const row = this.#database.prepare("SELECT value FROM application_settings WHERE key = 'auto_memory_review_policy'").get() as { value: string } | undefined;
+    if (row === undefined) return undefined;
+    const parsed = autoMemoryReviewPolicySchema.safeParse(JSON.parse(row.value));
+    if (!parsed.success) throw new Error("Invalid persisted Automatic Memory Review Policy");
+    return parsed.data;
+  }
+
+  setAutoMemoryReviewPolicy(input: AutoMemoryReviewPolicy): AutoMemoryReviewPolicy {
+    const policy = autoMemoryReviewPolicySchema.parse(input);
+    const assignment = this.getTaskModelAssignment("memory_review");
+    if (assignment?.profileId !== policy.profileId) throw new Error("Automatic Memory Review policy must use the configured Memory Review Profile");
+    this.#database.prepare("INSERT INTO application_settings(key, value, updated_at) VALUES ('auto_memory_review_policy', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+      .run(JSON.stringify(policy), new Date().toISOString());
+    return policy;
+  }
+
+  clearAutoMemoryReviewPolicy(): boolean {
+    return this.#database.prepare("DELETE FROM application_settings WHERE key = 'auto_memory_review_policy'").run().changes === 1;
   }
 
   listExecutionQueue(): ExecutionQueueItem[] {
@@ -878,153 +815,6 @@ export class HostStateStore {
     this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
       .run(thread.id, thread.title, projectId, thread.createdAt);
     return thread;
-  }
-
-  createReflectionRun(input: CreateReflectionRunInput): ReflectionRun {
-    if (input.scope === "project" && (this.getProject(input.projectId) === undefined || input.brief.projectId !== input.projectId)) throw new Error("Reflection Project not found");
-    const sourceThread = input.scope === "unscoped" ? this.getThread(input.sourceThreadId) : undefined;
-    const unscopedSource = sourceThread?.scope === "unscoped" ? sourceThread : undefined;
-    if (input.scope === "unscoped" && (unscopedSource === undefined || input.brief.sourceThreadId !== input.sourceThreadId)) throw new Error("Reflection Unscoped source not found");
-    if (this.getSystemPromptRevision(input.promptRevision.id)?.hash !== input.promptRevision.hash) throw new Error("Reflection Prompt Snapshot is unavailable");
-    if (input.independentProfileId !== undefined && this.getModelProfile(input.independentProfileId) === undefined) throw new Error("Reflection Model Profile not found");
-    if (input.launchOverrideProfileId !== undefined && input.launchOverrideProfileId !== input.independentProfileId) throw new Error("Reflection launch override does not match the effective Profile");
-    const id = randomUUID();
-    const threadId = randomUUID();
-    const now = new Date().toISOString();
-    const status: ReflectionRun["status"] = input.independentProfileId === undefined ? "awaiting_profile" : "ready";
-    this.#database.exec("BEGIN IMMEDIATE");
-    try {
-      if (input.scope === "project") {
-        this.#database.prepare("INSERT INTO threads(id, title, scope, project_id, created_at) VALUES (?, ?, 'project', ?, ?)")
-          .run(threadId, input.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection", input.projectId, now);
-      } else {
-        this.#database.prepare("INSERT INTO threads(id, title, scope, active_profile_id, output_location, created_at) VALUES (?, ?, 'unscoped', ?, ?, ?)")
-          .run(threadId, input.framing === "retrospective" ? "Investment Retrospective" : "Investment Reflection", unscopedSource!.activeProfileId ?? null, unscopedSource!.outputLocation ?? null, now);
-      }
-      this.#database.prepare(`
-        INSERT INTO reflection_runs(id, thread_id, scope, project_id, source_thread_id, framing, objective, focus, status, brief_json, prompt_revision_id, prompt_hash, independent_profile_id, launch_override_profile_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, threadId, input.scope, input.scope === "project" ? input.projectId : null, input.scope === "unscoped" ? input.sourceThreadId : null, input.framing, input.objective, input.focus?.trim() || null, status, JSON.stringify(input.brief), input.promptRevision.id, input.promptRevision.hash, input.independentProfileId ?? null, input.launchOverrideProfileId ?? null, now, now);
-      this.#database.exec("COMMIT");
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    }
-    return this.getReflectionRun(id)!;
-  }
-
-  listReflectionRuns(projectId?: string): ReflectionRun[] {
-    const rows = projectId === undefined
-      ? this.#database.prepare("SELECT * FROM reflection_runs ORDER BY created_at DESC").all()
-      : this.#database.prepare("SELECT * FROM reflection_runs WHERE project_id = ? ORDER BY created_at DESC").all(projectId);
-    return (rows as unknown as ReflectionRunRow[]).map(mapReflectionRun);
-  }
-
-  getReflectionRun(id: string): ReflectionRun | undefined {
-    const row = this.#database.prepare("SELECT * FROM reflection_runs WHERE id = ?").get(id) as ReflectionRunRow | undefined;
-    return row === undefined ? undefined : mapReflectionRun(row);
-  }
-
-  getReflectionRunByThread(threadId: string): ReflectionRun | undefined {
-    const row = this.#database.prepare("SELECT * FROM reflection_runs WHERE thread_id = ?").get(threadId) as ReflectionRunRow | undefined;
-    return row === undefined ? undefined : mapReflectionRun(row);
-  }
-
-  selectReflectionProfile(id: string, profileId: string, launchOverride: boolean): ReflectionRun {
-    if (this.getModelProfile(profileId) === undefined) throw new Error("Reflection Model Profile not found");
-    const result = this.#database.prepare(`
-      UPDATE reflection_runs SET independent_profile_id = ?, launch_override_profile_id = ?, status = 'ready', failure_json = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('awaiting_profile', 'independent_failed', 'independent_interrupted', 'ready')
-    `).run(profileId, launchOverride ? profileId : null, new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection Profile selection is stale");
-    return this.getReflectionRun(id)!;
-  }
-
-  markReflectionRunning(id: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_running', failure_json = NULL, updated_at = ? WHERE id = ? AND status IN ('ready', 'independent_failed', 'independent_interrupted') AND independent_profile_id IS NOT NULL")
-      .run(new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection run is not ready");
-    return this.getReflectionRun(id)!;
-  }
-
-  setReflectionSession(id: string, sessionFile: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET session_file = ?, updated_at = ? WHERE id = ? AND status = 'independent_running'").run(sessionFile, new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection run is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  completeIndependentAssessment(id: string, assessment: IndependentAssessment): ReflectionRun {
-    const parsed = independentAssessmentSchema.parse(assessment);
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_completed', assessment_json = ?, failure_json = NULL, updated_at = ? WHERE id = ? AND status = 'independent_running'")
-      .run(JSON.stringify(parsed), new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection run is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  failIndependentAssessment(id: string, failure: ProviderFailure): ReflectionRun {
-    const parsed = providerFailureSchema.parse(failure);
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_failed', failure_json = ?, updated_at = ? WHERE id = ? AND status = 'independent_running'")
-      .run(JSON.stringify(parsed), new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection run is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  interruptIndependentAssessment(id: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'independent_interrupted', updated_at = ? WHERE id = ? AND status = 'independent_running'")
-      .run(new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Reflection run is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  recoverInterruptedReflections(): ReflectionRun[] {
-    const ids = (this.#database.prepare("SELECT id FROM reflection_runs WHERE status IN ('independent_running', 'memory_aware_running')").all() as Array<{ id: string }>).map((row) => row.id);
-    if (ids.length === 0) return [];
-    this.#database.prepare("UPDATE reflection_runs SET status = 'independent_interrupted', updated_at = ? WHERE status = 'independent_running'").run(new Date().toISOString());
-    this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_interrupted', updated_at = ? WHERE status = 'memory_aware_running'").run(new Date().toISOString());
-    return ids.map((id) => this.getReflectionRun(id)!);
-  }
-
-  startMemoryAwareReflection(id: string, profileId: string, initialTurnId: string): ReflectionRun {
-    if (this.getModelProfile(profileId) === undefined) throw new Error("Reflection Model Profile not found");
-    const run = this.getReflectionRun(id);
-    if (run === undefined) throw new Error("Reflection run not found");
-    this.#database.exec("BEGIN IMMEDIATE");
-    try {
-      const result = this.#database.prepare(`UPDATE reflection_runs SET memory_aware_profile_id = ?, memory_initial_turn_id = ?, status = 'memory_aware_running', failure_json = NULL, updated_at = ? WHERE id = ? AND status IN ('independent_completed', 'memory_aware_failed', 'memory_aware_interrupted') AND assessment_json IS NOT NULL`)
-        .run(profileId, initialTurnId, new Date().toISOString(), id);
-      if (result.changes !== 1) throw new Error("Reflection is not ready for Memory-Aware dialogue");
-      this.#database.prepare("UPDATE threads SET active_profile_id = ?, state_version = state_version + 1 WHERE id = ?").run(profileId, run.threadId);
-      this.#database.exec("COMMIT");
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    }
-    return this.getReflectionRun(id)!;
-  }
-
-  activateReflectionDialogue(id: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'dialogue_active', failure_json = NULL, updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  failMemoryAwareReflection(id: string, failure: ProviderFailure): ReflectionRun {
-    const parsed = providerFailureSchema.parse(failure);
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_failed', failure_json = ?, updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(JSON.stringify(parsed), new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  interruptMemoryAwareReflection(id: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'memory_aware_interrupted', updated_at = ? WHERE id = ? AND status = 'memory_aware_running'").run(new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Memory-Aware Reflection is not active");
-    return this.getReflectionRun(id)!;
-  }
-
-  discardReflection(id: string): ReflectionRun {
-    const result = this.#database.prepare("UPDATE reflection_runs SET status = 'discarded', updated_at = ? WHERE id = ? AND status NOT IN ('independent_running', 'memory_aware_running')").run(new Date().toISOString(), id);
-    if (result.changes !== 1) throw new Error("Active Reflection cannot be discarded");
-    return this.getReflectionRun(id)!;
   }
 
   refreshMaterialInventory(projectId: string, records: readonly RefreshInventoryRecord[]): { materials: MaterialInventoryItem[]; changedMaterialIds: string[] } {
@@ -1240,7 +1030,6 @@ export class HostStateStore {
       }
       this.#database.prepare("DELETE FROM execution_queue WHERE thread_id = ?").run(threadId);
       this.#database.prepare("DELETE FROM physical_contexts WHERE thread_id = ?").run(threadId);
-      this.#database.prepare("DELETE FROM reflection_runs WHERE thread_id = ?").run(threadId);
       this.#database.exec("COMMIT");
       return true;
     } catch (error) {
@@ -1297,6 +1086,7 @@ export class HostStateStore {
   exportPersonalCognitionState(): PersonalCognitionState {
     const activePromptRevision = this.getActiveSystemPromptRevision();
     if (activePromptRevision === undefined) throw new Error("System Prompt is not initialized");
+    const autoMemoryReviewPolicy = this.getAutoMemoryReviewPolicy();
     return {
       schemaVersion: 1,
       accessMode: this.getAccessMode(),
@@ -1312,6 +1102,7 @@ export class HostStateStore {
         updatedAt: profile.updatedAt
       })),
       taskAssignments: this.listTaskModelAssignments(),
+      ...(autoMemoryReviewPolicy === undefined ? {} : { autoMemoryReviewPolicy }),
       promptRevisions: this.listSystemPromptRevisions(),
       activePromptRevisionId: activePromptRevision.id
     };
@@ -1325,11 +1116,11 @@ export class HostStateStore {
       this.#database.prepare("UPDATE threads SET active_profile_id = NULL").run();
       this.#database.prepare("DELETE FROM project_provider_authorizations").run();
       this.#database.prepare("DELETE FROM task_model_assignments").run();
-      this.#database.prepare("DELETE FROM reflection_runs").run();
       this.#database.prepare("DELETE FROM physical_contexts").run();
       this.#database.prepare("DELETE FROM model_profiles").run();
       this.#database.prepare("DELETE FROM protected_credentials").run();
       this.#database.prepare("DELETE FROM application_settings WHERE key = 'active_prompt_revision_id'").run();
+      this.#database.prepare("DELETE FROM application_settings WHERE key = 'auto_memory_review_policy'").run();
       this.#database.prepare("DELETE FROM system_prompt_revisions").run();
 
       for (const revision of [...snapshot.promptRevisions].sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
@@ -1356,6 +1147,7 @@ export class HostStateStore {
         this.#database.prepare("INSERT INTO task_model_assignments(task_type, profile_id, updated_at) VALUES (?, ?, ?)")
           .run(assignment.taskType, assignment.profileId, assignment.updatedAt);
       }
+      if (snapshot.autoMemoryReviewPolicy !== undefined) this.setAutoMemoryReviewPolicy(snapshot.autoMemoryReviewPolicy);
       this.#database.exec("COMMIT");
     } catch (error) {
       this.#database.exec("ROLLBACK");
@@ -1519,6 +1311,29 @@ export class HostStateStore {
   close(): void {
     this.#database.close();
   }
+
+  getCognitionCutoverStatus(): CognitionCutoverStatus {
+    const row = this.#database.prepare("SELECT value FROM application_settings WHERE key = 'cognition_cutover_status'").get() as { value: string } | undefined;
+    if (row?.value === "active" || row?.value === "failed_reset" || row?.value === "pending_reset") return row.value;
+    // Databases created before schema 18 have no marker until the migration
+    // runs. Treat the absence as pending rather than guessing that cognition
+    // has already been reset.
+    return "pending_reset";
+  }
+
+  setCognitionCutoverStatus(status: CognitionCutoverStatus): void {
+    this.#database.prepare("INSERT INTO application_settings(key, value, updated_at) VALUES ('cognition_cutover_status', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").run(status, new Date().toISOString());
+  }
+}
+
+function assertTaskModelType(taskType: string): asserts taskType is TaskModelType {
+  if (!taskModelTypeSchema.safeParse(taskType).success) throw new Error("Unsupported Task Model Type");
+}
+
+function mapTaskModelAssignmentRow(row: { task_type: string; profile_id: string; updated_at: string }): TaskModelAssignment {
+  const assignment = taskModelAssignmentSchema.safeParse({ taskType: row.task_type, profileId: row.profile_id, updatedAt: row.updated_at });
+  if (!assignment.success) throw new Error("Invalid persisted Task Model Assignment");
+  return assignment.data;
 }
 
 function validatePersonalCognitionState(snapshot: PersonalCognitionState): void {
@@ -1528,7 +1343,15 @@ function validatePersonalCognitionState(snapshot: PersonalCognitionState): void 
   if (profileIds.size !== snapshot.profiles.length) throw new Error("Duplicate Model Profile id in Personal Cognition state");
   for (const profile of snapshot.profiles) assertModelLimitOverrides(profile);
   if (!snapshot.promptRevisions.some((revision) => revision.id === snapshot.activePromptRevisionId)) throw new Error("Active System Prompt Revision is missing");
-  for (const assignment of snapshot.taskAssignments) if (!profileIds.has(assignment.profileId)) throw new Error("Task Model Assignment references a missing Profile");
+  for (const assignment of snapshot.taskAssignments) {
+    if (!taskModelAssignmentSchema.safeParse(assignment).success) throw new Error("Invalid Task Model Assignment");
+    if (!profileIds.has(assignment.profileId)) throw new Error("Task Model Assignment references a missing Profile");
+  }
+  if (snapshot.autoMemoryReviewPolicy !== undefined) {
+    const policy = autoMemoryReviewPolicySchema.parse(snapshot.autoMemoryReviewPolicy);
+    const assignment = snapshot.taskAssignments.find((candidate) => candidate.taskType === "memory_review");
+    if (assignment?.profileId !== policy.profileId) throw new Error("Automatic Memory Review policy must use the configured Memory Review Profile");
+  }
 }
 
 function assertModelLimitOverrides(input: { readonly contextWindow?: number; readonly maxOutputTokens?: number }): void {
@@ -1613,32 +1436,6 @@ function mapPromptRevision(row: PromptRevisionRow): SystemPromptRevision {
     source: row.source,
     createdAt: row.created_at
   };
-}
-
-function mapReflectionRun(row: ReflectionRunRow): ReflectionRun {
-  const brief = reflectionBriefSchema.parse(JSON.parse(row.brief_json));
-  return reflectionRunSchema.parse({
-    schemaVersion: 1,
-    id: row.id,
-    threadId: row.thread_id,
-    scope: row.scope,
-    ...(row.scope === "project" ? { projectId: row.project_id } : { sourceThreadId: row.source_thread_id }),
-    framing: row.framing,
-    objective: row.objective,
-    ...(row.focus === null ? {} : { focus: row.focus }),
-    status: row.status,
-    brief,
-    promptSnapshot: { revisionId: row.prompt_revision_id, hash: row.prompt_hash },
-    ...(row.independent_profile_id === null ? {} : { independentProfileId: row.independent_profile_id }),
-    ...(row.launch_override_profile_id === null ? {} : { launchOverrideProfileId: row.launch_override_profile_id }),
-    ...(row.memory_aware_profile_id === null ? {} : { memoryAwareProfileId: row.memory_aware_profile_id }),
-    ...(row.memory_initial_turn_id === null ? {} : { memoryInitialTurnId: row.memory_initial_turn_id }),
-    ...(row.assessment_json === null ? {} : { assessment: independentAssessmentSchema.parse(JSON.parse(row.assessment_json)) }),
-    ...(row.failure_json === null ? {} : { failure: providerFailureSchema.parse(JSON.parse(row.failure_json)) }),
-    ...(row.session_file === null ? {} : { sessionFile: row.session_file }),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  });
 }
 
 function lineDiff(previous: string, next: string): string {

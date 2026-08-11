@@ -33,7 +33,7 @@ export interface LocalMemoryProvenanceRecord {
   readonly sourceReferenceId: string;
   readonly scope?: "project" | "unscoped" | undefined;
   readonly projectId?: string | undefined;
-  readonly workflowType: "reflection" | "dream";
+  readonly workflowType: "reflection" | "memory_review";
   readonly workflowRunId: string;
   readonly judgmentRecordId?: string | undefined;
   readonly threadId?: string | undefined;

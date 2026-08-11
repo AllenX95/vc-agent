@@ -233,8 +233,8 @@ An explicitly selected Access Mode that lets tools perform filesystem, command, 
 _Avoid_: Automatic Memory, automatic Dream, hidden elevated mode, bypass of cognitive review
 
 **Cognitive Review Gate**:
-The requirement that Investment Reflection, Dream execution or resume, Memory changes, and Thread Scope Elevation remain explicit User decisions in every Access Mode because they define the User's investment cognition or conversation scope rather than tool security.
-_Avoid_: Tool permission prompt, disabled by Full Access, automatic knowledge-base maintenance
+The requirement that Investment Reflection launch, final Cognition Review commit, and Thread Scope Elevation remain explicit User decisions in every Access Mode because they define the User's investment cognition or conversation scope rather than tool security. Standing opt-in may authorize non-authoritative Memory Review preparation, but never a cognitive commit.
+_Avoid_: Tool permission prompt, disabled by Full Access, automatic Memory commit, automatic Judgment confirmation
 
 **User Intent Gate**:
 The requirement that an Output or other user-facing product action arise from a direct User instruction or approval of a scoped Action Proposal. Standard Access adds tool-level confirmation for sensitive execution; Full Access supplies standing tool authorization but never satisfies the Cognitive Review Gate.
@@ -272,6 +272,38 @@ _Avoid_: Fixed recall command, unbounded memory load, Automatic Judgment Recall
 Global user memory for reusable investment cognition whose maximum specificity is an industry, financing stage, or comparable cross-project investment situation.
 _Avoid_: Project Memory, project notes, named company fact, deal term, material excerpt
 
+**Learning Epoch**:
+The time from which completed eligible exchanges may enter the current learning system. Sources before `learningEpochStartedAt` remain ordinary Thread history but are excluded unless the User explicitly imports them later.
+_Avoid_: Historical cutoff for Thread retention, automatic history deletion, migration of legacy cognition
+
+**Eligible Learning Source**:
+A stable reference to a completed, user-attributable exchange or confirmed cognitive artifact that may be examined for personal learning. Eligibility permits analysis; it does not assert that the source contains useful learning.
+_Avoid_: Memory entry, guaranteed candidate, raw transcript copy, arbitrary assistant output
+
+**Memory Review**:
+The manual or standing-opt-in batch workflow that examines eligible sources, consolidates learning proposals, and prepares one Review Bundle without changing active Memory.
+_Avoid_: Automatic Memory writer, separate Dream commit system, per-turn classifier
+
+**Coverage Ledger**:
+The authoritative set of eligible source references frozen into one Memory Review Batch, together with exactly one current Source Disposition for each reference.
+_Avoid_: Item-count sample, best-effort scope summary, moving cutoff, hidden omission
+
+**Extraction Chunk**:
+A bounded subset of one isolated Project or Unscoped scope, formed by token or character budget rather than a fixed total-item cutoff. Every source in the Coverage Ledger belongs to exactly one Extraction Chunk in the batch.
+_Avoid_: Twelve-item window, cross-Project context, unbounded prompt, independent review decision
+
+**Source Disposition**:
+The recorded outcome for one eligible source: `pending`, `processing`, `no_signal`, `represented`, or `carried_over`. `no_signal` means the source was inspected without a durable candidate; `represented` links to at least one valid batch proposal; `carried_over` keeps an unresolved source for a later batch.
+_Avoid_: Implicit omission, proposal status, committed Memory, failed source treated as reviewed
+
+**Review Bundle**:
+The sole User-reviewable cognition-change package. It contains proposals, User decisions, source coverage, dependency snapshots, and a patch preview; a Reflection Review Bundle additionally contains one Judgment Record draft.
+_Avoid_: Extraction result, synthesis transcript, automatic commit, separate Judgment and Memory patches
+
+**Cognition Review**:
+The shared authority transition that converts either a Reflection result or a Memory Review synthesis into a Review Bundle and, after explicit User confirmation, atomically commits its adopted changes.
+_Avoid_: Dream-only authority, direct store write, automatic cognitive commit, stage-level User workflow
+
 **Explicit Recall Only**:
 A Long-term Memory recall policy that excludes an entry from Automatic Judgment Recall while allowing it to be retrieved when the User explicitly asks to use that memory.
 _Avoid_: Project access grant, sensitive-data classification, inactive Memory, automatic recall
@@ -297,12 +329,12 @@ A configurable cleanup policy that removes expired Condensation Archive entries 
 _Avoid_: Cognitive history cleanup, hidden deletion
 
 **Dream**:
-A user-approved memory review flow where the model prepares memory proposals and the user decides what is promoted, merged, kept, or discarded.
-_Avoid_: Background memory writer, automatic memory commit
+An internal mechanism name or advanced command used by the Memory Review implementation; the primary user-facing batch workflow is Memory Review.
+_Avoid_: Separate product intent, background memory writer, automatic memory commit
 
 **Dream Due Check**:
-An automatic, model-free check that determines whether the configured Dream review interval has elapsed and, when due, surfaces an Action Proposal without starting Dream.
-_Avoid_: Scheduled Dream execution, background memory review, automatic model call
+An automatic, model-free check that determines whether configured Memory Review preparation is due. It may admit non-authoritative preparation after standing opt-in and an idle scheduler boundary, but it never commits cognition.
+_Avoid_: Startup Provider call, automatic Memory commit, automatic Judgment confirmation
 
 **Pending Dream Reminder**:
 A non-blocking reminder that immediately exposes existing Dream Carryover or a Resumable Dream Run without waiting for the periodic Dream interval or starting model work.

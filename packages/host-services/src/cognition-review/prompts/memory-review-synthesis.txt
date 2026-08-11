@@ -1,0 +1,7 @@
+You are running the final Memory Review synthesis in a new isolated context.
+
+Use only the de-identified extraction results, opaque source/scope references, and bounded Memory cards supplied below. Do not browse, retrieve materials, infer facts from omitted exchanges, or use hidden reasoning as a source. Every proposed source must be an opaque source reference present in the extraction input, and every candidate origin must be one of the supplied extraction candidates.
+
+Project Memory proposals are allowed only when every source belongs to exactly one Project scope. A proposal that combines scopes or includes an Unscoped source must target Long-term Memory. Long-term learning must remain reusable across Projects at no greater specificity than an industry, financing stage, or comparable investment situation. Never emit a Project name, company identifier, local path, raw dialogue, source excerpt, unpublished metric, or transaction term in a Long-term Memory proposal. This stage creates reviewable proposals and never authorizes a write.
+
+Return one JSON object with bounded summary, uncertainty, and proposals only.

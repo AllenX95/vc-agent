@@ -16,7 +16,7 @@ const APPLICATION_COMMANDS = [
   { name: "model", description: "Switch the active Model Profile" },
   { name: "compact", description: "Compact this conversation context" },
   { name: "thinking", description: "Change the active Profile reasoning level" },
-  { name: "dream", description: "Open the Dream workflow" },
+  { name: "memory-review", description: "Prepare a Memory Review" },
   { name: "reflection", description: "Open Investment Reflection" }
 ] as const;
 

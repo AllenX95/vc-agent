@@ -1,11 +1,10 @@
 import type { TurnCapabilitySurfaceSnapshot } from "@vc-agent/capabilities";
 import type {
-  DreamExtractionScope,
   ModelProfile,
   SystemPromptRevision,
   WorkerCommand
 } from "@vc-agent/contracts";
-import type { CitationRegistry, DreamSynthesisInput } from "@vc-agent/host-services";
+import type { CitationRegistry } from "@vc-agent/host-services";
 
 type ExecuteCommand = Extract<WorkerCommand, { command: "turn.execute" }>;
 type StartFailureHandler = (error: unknown) => void;
@@ -50,31 +49,9 @@ export interface ReflectionExecutionContext {
   readonly promptRevision: SystemPromptRevision;
 }
 
-export interface DreamExecutionContext {
-  readonly correlationId: string;
-  readonly batchId: string;
-  readonly scope: DreamExtractionScope;
-  readonly executionThreadId: string;
-  readonly turnId: string;
-  readonly profile: ModelProfile;
-  readonly allowedSourceReferences: readonly string[];
-}
-
-export interface DreamSynthesisExecutionContext {
-  readonly correlationId: string;
-  readonly batchId: string;
-  readonly executionThreadId: string;
-  readonly turnId: string;
-  readonly profile: ModelProfile;
-  readonly input: DreamSynthesisInput;
-  readonly forbiddenTerms: readonly string[];
-}
-
 export type TurnExecution =
   | { readonly kind: "turn"; readonly context: TurnContext }
-  | { readonly kind: "reflection"; readonly context: ReflectionExecutionContext }
-  | { readonly kind: "dream"; readonly context: DreamExecutionContext }
-  | { readonly kind: "dream_synthesis"; readonly context: DreamSynthesisExecutionContext };
+  | { readonly kind: "reflection"; readonly context: ReflectionExecutionContext };
 
 /**
  * Owns Host-side execution identity, admission invariants, Worker dispatch, event
@@ -89,9 +66,7 @@ export class HostTurnExecutionModule {
   ) {}
 
   start(execution: TurnExecution, command: ExecuteCommand, onFailure: StartFailureHandler): void {
-    const executionThreadId = execution.kind === "dream" || execution.kind === "dream_synthesis"
-      ? execution.context.executionThreadId
-      : execution.context.threadId;
+    const executionThreadId = execution.context.threadId;
     if (
       command.turnId !== execution.context.turnId
       || command.threadId !== executionThreadId
