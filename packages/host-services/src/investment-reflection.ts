@@ -96,7 +96,7 @@ export function buildReflectionProjectBrief(input: BuildReflectionProjectBriefIn
 }
 
 export function buildReflectionUnscopedBrief(input: { sourceThreadId: string; userInputs: readonly { turnId: string; text: string }[]; now?: (() => Date) | undefined }): ReflectionUnscopedBrief {
-  const userInputs = input.userInputs.slice(-12).map((item) => ({ turnId: item.turnId, text: item.text.trim().slice(0, 2_000) })).filter((item) => item.text.length > 0);
+  const userInputs = input.userInputs.map((item) => ({ turnId: item.turnId, text: item.text.trim().slice(0, 2_000) })).filter((item) => item.text.length > 0);
   return {
     schemaVersion: 1,
     scope: "unscoped",

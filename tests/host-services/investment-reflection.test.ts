@@ -36,15 +36,15 @@ describe("Reflection Project Brief", () => {
     expect(reflectionFraming("Did the original thesis hold up after later evidence?")).toBe("retrospective");
   });
 
-  it("builds an Unscoped brief from bounded User inputs without Project identity", () => {
+  it("preserves every reachable Unscoped User input without a count cap", () => {
     const brief = buildReflectionUnscopedBrief({
       sourceThreadId: "source-thread",
       now: () => new Date("2026-07-19T08:00:00.000Z"),
       userInputs: Array.from({ length: 14 }, (_, index) => ({ turnId: `turn-${index}`, text: `Investment claim ${index}` }))
     });
     expect(brief).toMatchObject({ scope: "unscoped", sourceThreadId: "source-thread" });
-    expect(brief.userInputs[0]).toEqual({ turnId: "turn-2", text: "Investment claim 2" });
-    expect(brief.userInputs).toHaveLength(12);
+    expect(brief.userInputs[0]).toEqual({ turnId: "turn-0", text: "Investment claim 0" });
+    expect(brief.userInputs).toHaveLength(14);
     expect(JSON.stringify(brief)).not.toMatch(/projectId|Project Context|Project Memory|path/iu);
     const prompt = buildMemoryAwareReflectionPrompt({
       objective: "Review this question",

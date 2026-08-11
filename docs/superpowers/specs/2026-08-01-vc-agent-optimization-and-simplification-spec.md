@@ -5,6 +5,15 @@ Status: Proposed for review
 Scope: Personal Build optimization after the Foundation, Learning, Integration, and Personal Build slices  
 Supersedes: None; this specification refines presentation and implementation while preserving governing ADRs unless an explicit amendment is approved
 
+> **Historical supersession notice (2026-08-11):** The Reflection state and
+> migration requirements `OPT-REQ-021` through `OPT-REQ-024`, the Dream
+> workflow requirements `OPT-REQ-025` through `OPT-REQ-032`, and the shallow
+> `MemoryReviewService` requirements `OPT-REQ-033` through `OPT-REQ-038` are
+> superseded by the [Cognition Review Redesign Specification](./2026-08-11-cognition-review-redesign-spec.md)
+> and ADR-0064/ADR-0065. This document remains a historical optimization
+> baseline; the sections below are retained verbatim and are not the current
+> implementation target.
+
 ## Outcome
 
 VC Desktop Agent becomes materially simpler in ordinary use without weakening the product boundaries that make its investment work trustworthy. Routine work uses fewer blocking decisions, Dream and Sub-Agent workflows expose fewer user-facing layers, Memory is organized through one review-oriented information architecture, and repeated execution and integration plumbing is centralized behind deep Host modules.
@@ -217,6 +226,11 @@ Ownership remains:
 
 ## Reflection State Model
 
+> **Superseded section:** `OPT-REQ-021`–`OPT-REQ-024` are historical
+> requirements. See the [Cognition Review Redesign Specification](./2026-08-11-cognition-review-redesign-spec.md)
+> and [ADR-0065](../../adr/0065-start-a-new-learning-epoch-for-cognition-review-v2.md)
+> for the Learning Epoch reset and replacement Reflection authority.
+
 Replace the flat eleven-state UI and persistence model with orthogonal workflow stage and execution state after an atomic migration.
 
 ```ts
@@ -259,6 +273,12 @@ Required legacy mapping:
 
 ## Dream Workflow Simplification
 
+> **Superseded section:** `OPT-REQ-025`–`OPT-REQ-032` are historical
+> requirements. See the [Cognition Review Redesign Specification](./2026-08-11-cognition-review-redesign-spec.md)
+> and [ADR-0064](../../adr/0064-use-one-cognition-review-module-with-strict-learning-coverage.md)
+> for Memory Review, strict Coverage Ledger disposition, and the shared
+> Cognition Review commit path.
+
 The User-facing Dream has three primary phases:
 
 ```text
@@ -297,6 +317,11 @@ The synthesis implementation adapts to input cardinality:
 | OPT-REQ-032 | Batch status fields may be removed only when a deterministic derivation from retained facts is documented, migrated, and property-tested. |
 
 ## Memory Information Architecture And Application Service
+
+> **Superseded section:** `OPT-REQ-033`–`OPT-REQ-038` are historical
+> requirements. See the [Cognition Review Redesign Specification](./2026-08-11-cognition-review-redesign-spec.md)
+> and [ADR-0064](../../adr/0064-use-one-cognition-review-module-with-strict-learning-coverage.md)
+> for the replacement Module Interface and Review Bundle authority.
 
 The User sees three top-level views:
 

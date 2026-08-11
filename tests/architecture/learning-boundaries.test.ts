@@ -19,8 +19,8 @@ describe("Learning Build architecture gate", () => {
       "packages/host-services/src/long-term-memory.ts",
       "packages/host-services/src/memory-evolution.ts",
       "packages/host-services/src/investment-reflection.ts",
-      "packages/host-services/src/dream-review.ts",
-      "packages/host-services/src/dream-commit.ts",
+      "packages/host-services/src/cognition-review/memory-review.ts",
+      "packages/host-services/src/cognition-review/commit.ts",
       "packages/host-services/src/personal-cognition-backup.ts"
     ].map(read).join("\n");
     expect(sources).not.toMatch(/office|paddleocr|ovisocr|mcp-adapter|extension audit|sub-agent|execution queue/iu);
@@ -32,7 +32,7 @@ describe("Learning Build architecture gate", () => {
     const renderer = read("apps/desktop/src/renderer/App.tsx");
     expect(contracts).toMatch(/promptEstimatedTokens[\s\S]*toolSchemaEstimatedTokens[\s\S]*contextEstimatedTokens[\s\S]*recalledStateEstimatedTokens[\s\S]*outputReserveEstimatedTokens/u);
     expect(host).toContain("latencyMs");
-    expect(renderer).toContain("Partial Dream Coverage");
+    expect(renderer).toContain("Memory Review scope coverage");
     expect(renderer).toContain("failure");
     expect(renderer).toContain("outputReserveEstimatedTokens");
     expect(read("packages/pi-adapter/src/pi-resource-runtime.ts")).toContain("DefaultResourceLoader");

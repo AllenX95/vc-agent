@@ -3,7 +3,6 @@ import { createFauxPiSession } from "@vc-agent/pi-adapter/testing";
 import { startAgentWorker, type AgentWorkerSessionAdapter, type ExecuteCommand } from "./worker-runtime.js";
 import {
   dogfoodFixtureResponses,
-  dreamSynthesisFixtureResponses,
   explicitLongTermMemoryFixtureResponses,
   learningGateRecallFixtureResponses,
   longTermMemoryFixtureResponses,
@@ -25,7 +24,6 @@ const fixtureProviders = new Set([
   "vc-agent-reflection-memory-faux",
   "vc-agent-unscoped-evidence-faux",
   "vc-agent-unscoped-memory-faux",
-  "vc-agent-dream-synthesis-faux",
   "vc-agent-sub-agent-faux"
 ]);
 
@@ -80,7 +78,6 @@ function fixtureResponses(command: ExecuteCommand) {
       ? unscopedMemoryAwareReflectionContinuationFixtureResponses()
       : unscopedMemoryAwareReflectionFixtureResponses();
   }
-  if (command.profile.provider === "vc-agent-dream-synthesis-faux") return dreamSynthesisFixtureResponses(command.prompt);
   if (command.profile.provider === "vc-agent-sub-agent-faux") return subAgentFixtureResponses(command.prompt);
   return dogfoodFixtureResponses();
 }

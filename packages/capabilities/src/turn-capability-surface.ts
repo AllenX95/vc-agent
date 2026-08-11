@@ -7,7 +7,6 @@ export type TurnKind =
   | "ordinary"
   | "reflection_independent"
   | "reflection_dialogue"
-  | "dream"
   | "sub_agent"
   | "compaction";
 

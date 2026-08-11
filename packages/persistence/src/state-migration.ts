@@ -3,7 +3,12 @@ import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const STATE_SCHEMA_VERSION = 17;
+/**
+ * Schema 18 is the cognition-v2 cutover.  The migration intentionally does
+ * not import legacy Reflection rows; those rows and stage-level cognition
+ * assignments are retired as part of activation.
+ */
+export const STATE_SCHEMA_VERSION = 18;
 
 export type StatePreparation =
   | { readonly status: "fresh" | "ready" | "migrated"; readonly mode: "read_write"; readonly storedVersion: number; readonly supportedVersion: number; readonly rollbackAvailable: boolean }
@@ -50,10 +55,12 @@ export function prepareStateStorage(
   let activationAttempted = false;
   try {
     migrate(stagedPath);
+    dropLegacyReflectionRuns(stagedPath);
     validateCurrentState(stagedPath);
     if (options.failAfterStageValidation === true) throw new Error("Injected migration failure");
     activationAttempted = true;
     migrate(storagePath);
+    dropLegacyReflectionRuns(storagePath);
     validateCurrentState(storagePath);
     rmSync(stageDirectory, { recursive: true, force: true });
     return { status: "migrated", mode: "read_write", storedVersion: STATE_SCHEMA_VERSION, supportedVersion: STATE_SCHEMA_VERSION, rollbackAvailable: true };
@@ -115,6 +122,28 @@ function restoreSqliteBundle(sourcePath: string, destinationPath: string): void 
 export function listRollbackFiles(storagePath: string): string[] {
   const directory = join(dirname(storagePath), "migration", "rollback");
   return existsSync(directory) ? readdirSync(directory).sort() : [];
+}
+
+function dropLegacyReflectionRuns(storagePath: string): void {
+  const database = new DatabaseSync(storagePath);
+  try {
+    database.exec("DROP TABLE IF EXISTS reflection_runs");
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Restore the rollback bundle produced by the most recent staged migration.
+ * This is intentionally a small Host-only seam used by the cognition-v2
+ * cutover when file activation fails after SQLite schema activation.  It does
+ * not erase the rollback bundle, so a failed reset remains recoverable.
+ */
+export function restoreStateStorageRollback(storagePath: string): boolean {
+  const rollbackPath = join(dirname(storagePath), "migration", "rollback", basename(storagePath));
+  if (!existsSync(rollbackPath)) return false;
+  restoreSqliteBundle(rollbackPath, storagePath);
+  return true;
 }
 
 export function exportRawStateBundle(

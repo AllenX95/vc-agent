@@ -14,6 +14,44 @@ import {
   type CapabilityExecutionContext
 } from "@vc-agent/capabilities";
 export { ProjectIdentityStore, type ProjectIdentityMarker } from "./project-identity.js";
+export {
+  selectEligibleLearningSources,
+} from "./cognition-review/eligibility.js";
+export { CognitionReviewStore, type CognitionReviewStoreOptions } from "./cognition-review/store.js";
+export {
+  MemoryReviewOrchestrator,
+  createMemoryReviewOrchestrator,
+  type AutomaticMemoryReviewPreparationInput,
+  type AutomaticMemoryReviewPreparationResult,
+  type MemoryReviewPreparationInput,
+  type MemoryReviewPreparationResult,
+  type MemoryReviewProfileSnapshot,
+  type MemoryReviewProgress,
+  type MemoryReviewPromptSnapshot,
+  type CreateMemoryReviewOrchestratorOptions
+} from "./cognition-review/memory-review.js";
+export {
+  MEMORY_REVIEW_EXTRACTION_STAGE_INSTRUCTIONS
+} from "./cognition-review/memory-review-extraction.js";
+export {
+  MEMORY_REVIEW_SYNTHESIS_STAGE_INSTRUCTIONS,
+  type MemoryReviewSynthesisCard
+} from "./cognition-review/memory-review-synthesis.js";
+export { DEFAULT_AUTO_MEMORY_REVIEW_THRESHOLDS, evaluateAutomaticMemoryReview } from "./cognition-review/automatic-review.js";
+export { CognitionReviewModule, type CognitionReviewModuleOptions } from "./cognition-review/cognition-review.js";
+export { createCognitionReviewModule, type CreateCognitionReviewModuleOptions } from "./cognition-review/factory.js";
+export {
+  LearningEpochReset,
+  type LearningEpochCutoverStatus,
+  type LearningEpochResetDiagnostic,
+  type LearningEpochResetInspection,
+  type LearningEpochResetMigrationResult,
+  type LearningEpochResetOptions,
+  type LearningEpochResetResult,
+  type LearningEpochResetStateAdapter,
+  type LearningEpochResetTarget
+} from "./cognition-review/reset.js";
+export { ReflectionRunStore, type ReflectionRunCreateInput, type ReflectionRunProfile, type ReflectionRunStoreOptions, type ReflectionRunThreadAdapter } from "./cognition-review/reflection-run-store.js";
 export { CITATION_OUTPUT_INSTRUCTIONS, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, estimateTokens } from "./system-prompt.js";
 export { CitationRegistry } from "./citations.js";
 export { CONTEXT_BUDGET_ESTIMATOR_REVISION, DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS, ESTIMATED_BYTES_PER_TOKEN, ContextBudgetService, estimateTextTokens, estimateUtf8Tokens, type ContextBudgetDecision, type ContextBudgetInput, type ContextBudgetTelemetry } from "./context-budget.js";
@@ -25,16 +63,10 @@ export { PROJECT_CONTEXT_TEMPLATE, ProjectContextRecallSource, ProjectContextSto
 export { PROJECT_MEMORY_HEADER, MemoryCandidateStore, ProjectMemoryRecallSource, ProjectMemoryStore, detectMemoryCandidateSignal, parseProjectMemory, type MemoryCandidate, type ProjectMemoryDocument, type ProjectMemoryDraft, type ProjectMemoryEntry, type ProjectMemoryRecallItem, type ProjectMemoryRecallQuery, type ProjectMemoryWarning } from "./project-memory.js";
 export { COGNITIVE_EVOLUTION_HISTORY_HEADER, LONG_TERM_MEMORY_ARCHIVE_HEADER, LONG_TERM_MEMORY_HEADER, LongTermMemoryRecallSource, LongTermMemoryStore, createLongTermMemoryIndexContent, detectExplicitMemoryRecallIntent, detectJudgmentHeavyIntent, parseLongTermMemory, type LongTermMemoryDocument, type LongTermMemoryEntry, type LongTermMemoryFileSummary, type LongTermMemoryMaturity, type LongTermMemoryRecallItem, type LongTermMemoryRecallPolicy, type LongTermMemoryRecallQuery, type LongTermMemoryStatus, type LongTermMemoryWarning } from "./long-term-memory.js";
 export { MemoryEvolutionStore, type AtomicMemoryFileAddition, type CondensationArchiveItem, type CondensationRetention, type LocalMemoryProvenanceInspection, type LocalMemoryProvenanceRecord, type MemoryEvolutionAction, type MemoryEvolutionStoreOptions, type MemoryLearningDraft, type MemoryMaintenanceState, type MemoryPatchFileDiff, type MemoryPatchRequest, type PreparedMemoryPatch } from "./memory-evolution.js";
-export { MemoryReviewService, type MemoryChangeRequest, type MemoryCommitResult, type MemoryHistoryProjection, type MemoryHistoryQuery, type MemoryReviewServiceOptions, type MemoryWorkspaceView, type PendingMemoryKind, type PendingMemoryProjection, type PendingMemoryQuery, type PreparedMemoryChange } from "./memory-review.js";
 export { DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, parseIndependentAssessment, reflectionFraming, type BuildReflectionProjectBriefInput } from "./investment-reflection.js";
 export { ReflectionEvidenceDrilldownSource, parseMaterialBlockReference, type ReflectionEvidenceAccess, type ReflectionEvidenceDrilldownQuery } from "./reflection-evidence.js";
-export { captureReflectionDependencies, reflectionDependencyFingerprint, staleReflectionDependencies, type CaptureReflectionDependenciesInput, type ReflectionDependencyEntry, type ReflectionDependencyState } from "./reflection-staleness.js";
-export { detectReflectionDreamEligibility, selectEligibleReflectionTrajectory, type EligibleReflectionTrajectoryTurn } from "./dream-eligibility.js";
-export { DreamReviewStore, selectEligibleDreamTrajectory, type CreateDreamBatchInput, type DreamReviewStoreOptions } from "./dream-review.js";
-export { DREAM_EXTRACTION_STAGE_INSTRUCTIONS, buildDreamExtractionScopes, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, dreamScopeId, dreamScopeInputHash, parseDreamScopeSummary, type DreamScopeExtractionContext } from "./dream-extraction.js";
-export { DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, buildDreamGlobalSynthesisPrompt, buildDreamSynthesisInput, dreamSynthesisInputHash, opaqueScopeReference, parseDreamGlobalSynthesis, type DreamSynthesisInput } from "./dream-synthesis.js";
-export { DreamCommitStore, type DreamCommitProject } from "./dream-commit.js";
-export { ReflectionOutcomeStore, type ReflectionOutcomeList, type ReflectionOutcomeStoreOptions } from "./reflection-outcomes.js";
+export { captureReflectionDependencies, reflectionDependencyFingerprint, staleReflectionDependencies, type CaptureReflectionDependenciesInput, type ReflectionDependencyEntry, type ReflectionDependencyState } from "./cognition-review/reflection-staleness.js";
+export { createReflectionDrafts, type CreateReflectionDraftsOptions, type ReflectionDraftList, type ReflectionDrafts, type ReflectionDraftStoreOptions } from "./cognition-review/reflection-drafts.js";
 export { ProjectOutputRegistry } from "./project-output-registry.js";
 export { PersonalCognitionBackupService, type PersonalCognitionBackupOptions, type PersonalCognitionManifest, type PersonalCognitionManifestFile, type PersonalCognitionRestorePreview, type PersonalCognitionStateAdapter } from "./personal-cognition-backup.js";
 export { BoundedExecutionScheduler, MODEL_EXECUTION_KINDS, type ExecutionAdmission, type ExecutionSchedulerStore, type ExecutionSchedulerTelemetry, type ModelExecutionKind, type ModelExecutionLease } from "./execution-scheduler.js";

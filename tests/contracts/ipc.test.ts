@@ -2,14 +2,158 @@ import { describe, expect, it } from "vitest";
 import {
   CAPABILITY_RESULT_CONTENT_MAX_CHARS,
   IPC_SCHEMA_VERSION,
+  memoryReviewProgressSchema,
   normalizeCapabilityExecutionResult,
   createBootstrapCommand,
   hostCommandSchema,
   hostEventSchema,
+  autoMemoryReviewPolicySchema,
+  cognitionCommitResultSchema,
+  reviewBundleSchema,
+  reflectionUnscopedBriefSchema,
+  taskModelAssignmentSchema,
+  taskModelTypeSchema,
   trajectoryEventSchema
 } from "@vc-agent/contracts";
 
 describe("versioned IPC contracts", () => {
+  it("accepts every reachable Unscoped Reflection user input instead of truncating at twelve", () => {
+    const brief = {
+      schemaVersion: 1,
+      scope: "unscoped",
+      sourceThreadId: "thread-1",
+      sourceVersion: "a".repeat(64),
+      createdAt: new Date().toISOString(),
+      userInputs: Array.from({ length: 14 }, (_, index) => ({ turnId: `turn-${index}`, text: `Input ${index}` })),
+      attachmentCards: [],
+      recordReferences: []
+    } as const;
+    expect(reflectionUnscopedBriefSchema.safeParse(brief).success).toBe(true);
+  });
+
+  it("accepts intent-level cognition Model Profile assignments", () => {
+    const updatedAt = new Date().toISOString();
+    expect(taskModelTypeSchema.safeParse("reflection").success).toBe(true);
+    expect(taskModelTypeSchema.safeParse("memory_review").success).toBe(true);
+    expect(taskModelAssignmentSchema.safeParse({ taskType: "reflection", profileId: "profile-1", updatedAt }).success).toBe(true);
+    expect(taskModelAssignmentSchema.safeParse({ taskType: "memory_review", profileId: "profile-2", updatedAt }).success).toBe(true);
+  });
+
+  it("exposes strict intent-level cognition commands without stage or launch-profile payloads", () => {
+    const now = new Date().toISOString();
+    const metadata = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      commandId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      actor: { actorType: "user", actorId: "local-user" },
+      sentAt: now
+    } as const;
+    const policy = {
+      enabled: false,
+      profileId: "memory-profile",
+      minEligibleExchangeCount: 20,
+      maxIntervalDays: 7,
+      maxInputTokensPerRun: 10_000
+    };
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.prepare" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.prepare", payload: {} }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.prepare", payload: { profileId: "per-launch" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.prepare", payload: { stage: "scope_extraction" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.cancel" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.policy.set", payload: { policy } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "memory_review.policy.set", payload: policy }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.decide", payload: {
+      reviewId: "review-1",
+      decisions: [
+        { proposalId: "proposal-1", decision: "adopt" },
+        { proposalId: "proposal-2", decision: "defer" },
+        { proposalId: "proposal-3", decision: "reject" }
+      ]
+    } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.decide", payload: {
+      reviewId: "review-1", decisions: [], scopeStage: "synthesis"
+    } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.commit", payload: { reviewId: "review-1" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.discard", payload: { reviewId: "review-1" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.load", payload: { reviewId: "review-1" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.load", payload: { reviewId: "review-1", chunkId: "chunk-1" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.get", payload: { reviewId: "review-1" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "cognition_review.list" }).success).toBe(false);
+    const projectId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.start", payload: { scope: "project", projectId } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.start", payload: { scope: "unscoped", threadId: "thread-1" } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.start", payload: { scope: "project", projectId, profileId: "per-launch" } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.finish", payload: { runId } }).success).toBe(true);
+  });
+
+  it("projects bounded cognition review bundles, progress, policy, and commit results", () => {
+    const now = new Date().toISOString();
+    const eventMetadata = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      eventId: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      sequence: 1,
+      actor: { actorType: "host", actorId: "desktop-host" },
+      provenance: { producerType: "host", producerId: "desktop-host" },
+      occurredAt: now
+    } as const;
+    const bundle = {
+      id: "review-1",
+      kind: "memory_review",
+      status: "waiting_for_review",
+      proposals: [],
+      decisions: [],
+      dependencies: [],
+      createdAt: now,
+      updatedAt: now
+    } as const;
+    const progress = {
+      reviewId: "review-1",
+      batchId: "batch-1",
+      status: "preparing",
+      eligible: 2,
+      processed: 1,
+      noSignal: 0,
+      represented: 1,
+      carriedOver: 0,
+      completedChunks: 1,
+      totalChunks: 2
+    } as const;
+    const policy = {
+      enabled: false,
+      profileId: "memory-profile",
+      minEligibleExchangeCount: 20,
+      maxIntervalDays: 7,
+      maxInputTokensPerRun: 10_000
+    } as const;
+    const result = {
+      schemaVersion: 1,
+      reviewId: "review-1",
+      status: "committed",
+      adoptedProposalIds: [],
+      carriedOverSourceReferences: [],
+      cutoff: now
+    } as const;
+    expect(reviewBundleSchema.safeParse(bundle).success).toBe(true);
+    expect(memoryReviewProgressSchema.safeParse(progress).success).toBe(true);
+    expect(autoMemoryReviewPolicySchema.safeParse(policy).success).toBe(true);
+    expect(cognitionCommitResultSchema.safeParse(result).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "cognition_review.bundle.updated", payload: { bundle } }).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "cognition_review.bundles.listed", payload: { bundles: [bundle] } }).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "memory_review.progress.updated", payload: { progress } }).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "memory_review.policy.updated", payload: { policy } }).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "cognition_review.commit.result", payload: { result } }).success).toBe(true);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "memory_review.progress.updated", payload: {
+      ...progress,
+      stage: "scope_extraction",
+      sourceReferences: ["raw-source"]
+    } }).success).toBe(false);
+    expect(hostEventSchema.safeParse({ ...eventMetadata, event: "cognition_review.bundle.updated", payload: {
+      bundle: { ...bundle, rawModelOutput: "provider payload" }
+    } }).success).toBe(false);
+  });
+
   it("accepts transient thinking deltas and optional reasoning token usage", () => {
     const now = new Date().toISOString();
     const eventMetadata = {
@@ -178,13 +322,13 @@ describe("versioned IPC contracts", () => {
     expect(trajectoryEventSchema.parse(event).provenance.producerId).toBe("agent-2");
   });
 
-  it("requires an affirmative Memory Patch confirmation in the IPC contract", () => {
+  it("rejects retired direct model-derived Memory write commands", () => {
     const base = {
       schemaVersion: 1, command: "long_term_memory.patch.commit", commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(),
-      actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString(), payload: { patchId: "patch-00000001", confirmed: false }
+      actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString(), payload: { patchId: "patch-00000001", confirmed: true }
     };
     expect(hostCommandSchema.safeParse(base).success).toBe(false);
-    expect(hostCommandSchema.safeParse({ ...base, payload: { ...base.payload, confirmed: true } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...base, command: "project.memory.append.confirm" }).success).toBe(false);
   });
 
   it("supports editing a saved Model Profile without requiring credential replacement", () => {
@@ -261,11 +405,12 @@ describe("versioned IPC contracts", () => {
     }).success).toBe(true);
   });
 
-  it("requires explicit versioned commands to start and stop Independent Evidence", () => {
+  it("rejects retired stage-level Reflection commands", () => {
     const metadata = { schemaVersion: 1, commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), actor: { actorType: "user", actorId: "local-user" }, sentAt: new Date().toISOString() };
     const runId = crypto.randomUUID();
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.start", payload: { runId } }).success).toBe(true);
-    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.stop", payload: { runId } }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.start", payload: { runId } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.stop", payload: { runId } }).success).toBe(false);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.memory_aware.start", payload: { runId } }).success).toBe(false);
     expect(hostCommandSchema.safeParse({ ...metadata, command: "reflection.independent.start", payload: {} }).success).toBe(false);
   });
 

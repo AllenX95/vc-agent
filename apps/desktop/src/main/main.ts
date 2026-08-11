@@ -6,16 +6,21 @@ import {
   IPC_SCHEMA_VERSION,
   canonicalParseSchema,
   hostCommandSchema,
+  thinkingLevelSchema,
   type ArtifactRecord,
   type ActorRef,
   type AcademicCredentialSource,
   type CapabilityExecutionRequest,
   type CapabilityExecutionResult,
-  type DreamProfileSnapshot,
-  type DreamExtractionScope,
   type HostCommand,
   type HostEvent,
   type ReflectionRun,
+  type ReflectionReviewInput,
+  type CognitionDependency,
+  type LearningProposal,
+  type ReviewBundle,
+  type JudgmentRecordDraft,
+  type LongTermLearningProposal,
   type MaterialInventoryItem,
   type ModelProfile,
   type ProvenanceRef,
@@ -23,6 +28,8 @@ import {
   type ProjectOutputArtifact,
   type ReflectionOutcomeProposalInput,
   type SystemPromptRevision,
+  type AutoMemoryReviewPolicy,
+  type EligibleLearningSource,
   type Thread,
   type TrajectoryEvent,
   type TrajectoryProfile,
@@ -35,16 +42,19 @@ import {
   type RuntimeResourceSnapshot,
   type PiResourcesSettingsState,
   type SubAgentContextBoundary,
-  type TaskModelType
+  type TaskModelType,
+  reflectionCompletionTransition,
+  reflectionLaunchTransition
 } from "@vc-agent/contracts";
 import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createRuntimeExtensionCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore, type CapabilityExecutionContext } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
 import { PROJECT_READ_TOOL_METADATA, PROJECT_READ_TOOL_NAMES } from "@vc-agent/pi-adapter/project-read-tool-metadata";
-import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DREAM_EXTRACTION_STAGE_INSTRUCTIONS, DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS, DefaultAcademicHttpAccess, DreamCommitStore, DreamReviewStore, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionOutcomeStore, academicWorkflowPrototype, buildDreamGlobalSynthesisPrompt, buildDreamScopeExtractionContext, buildDreamScopeExtractionPrompt, buildDreamSynthesisInput, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectReflectionDreamEligibility, detectTextEditIntent, detectWebResearchIntent, dreamSynthesisInputHash, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseDreamGlobalSynthesis, parseDreamScopeSummary, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, reflectionFraming, retrievalTrajectorySummary, selectEligibleDreamTrajectory, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState } from "@vc-agent/host-services";
+import { AcademicResearchService, BASELINE_PARSER_ADAPTERS, CapabilityGateway, CognitionReviewModule, CognitionReviewStore, CitationRegistry, CITATION_OUTPUT_INSTRUCTIONS, ContextBudgetService, createCognitionReviewModule, createMemoryReviewOrchestrator, createReflectionDrafts, DEFAULT_PROJECT_REFLECTION_OBJECTIVE, DEFAULT_UNSCOPED_REFLECTION_OBJECTIVE, DefaultAcademicHttpAccess, INDEPENDENT_EVIDENCE_STAGE_INSTRUCTIONS, INDEPENDENT_UNSCOPED_EVIDENCE_STAGE_INSTRUCTIONS, LearningEpochReset, MEMORY_AWARE_REFLECTION_INSTRUCTIONS, MEMORY_REVIEW_EXTRACTION_STAGE_INSTRUCTIONS, MEMORY_REVIEW_SYNTHESIS_STAGE_INSTRUCTIONS, LongTermMemoryRecallSource, LongTermMemoryStore, MemoryCandidateStore, MemoryEvolutionStore, PersonalCognitionBackupService, ProjectOutputRegistry, ReflectionEvidenceDrilldownSource, ReflectionRunStore, academicWorkflowPrototype, buildIndependentEvidencePrompt, buildMemoryAwareReflectionPrompt, buildReflectionProjectBrief, buildReflectionUnscopedBrief, captureReflectionDependencies, detectAcademicResearchIntent, detectArxivFulltextIntent, detectExplicitMemoryRecallIntent, detectFileDownloadIntent, detectJudgmentHeavyIntent, detectMaterialRecallIntent, detectMemoryCandidateSignal, detectOutputIntent, detectProjectStateRecallIntent, detectTextEditIntent, detectWebResearchIntent, estimateTokens, expectedParserIdentity, inventoryProjectFiles, MaterialRecallSource, parseIndependentAssessment, ProjectContextRecallSource, ProjectContextStore, ProjectIdentityStore, ProjectMemoryRecallSource, ProjectMemoryStore, reflectionDependencyFingerprint, reflectionFraming, retrievalTrajectorySummary, selectEligibleLearningSources, serializeBoundedRetrieval, SHIPPED_MINIMAL_VC_SYSTEM_PROMPT, staleReflectionDependencies, type MemoryReviewOrchestrator, type MemoryReviewPreparationResult, type MemoryReviewProfileSnapshot, type MemoryReviewPromptSnapshot, type MemoryReviewProgress, type MemoryReviewSynthesisCard, type CapabilityAuthorizationSnapshot, type ReflectionDependencyState, type ReflectionDrafts } from "@vc-agent/host-services";
 import { BoundedExecutionScheduler, OfficeSkillOrchestrator, PageRecoveryPipeline, ProviderSubAgentAdapter, SkillCreationWorkflow, SubAgentContextCompiler, SubAgentRuntime, VcSkillsDirectoryAdapter, resolveVcAgentUserDataRoot, type SkillDraft, type SkillDraftReview, type SubAgentRuntimeEvent } from "@vc-agent/host-services";
 import { AcademicResearchRunStore } from "@vc-agent/host-services";
+import { evaluateAutomaticMemoryReview } from "@vc-agent/host-services";
 import { PiIntegrationMigration, type PiIntegrationMigrationDiagnostic } from "@vc-agent/host-services";
-import { exportRawStateBundle, HostStateStore, ThreadTrajectoryStore } from "@vc-agent/persistence";
+import { exportRawStateBundle, HostStateStore, restoreStateStorageRollback, ThreadTrajectoryStore } from "@vc-agent/persistence";
 import { AgentWorkerSupervisor } from "./agent-worker-supervisor.js";
 import { InflightTurnCoordinator } from "./inflight-turn-coordinator.js";
 import { UtilityJobRunner } from "./utility-job-runner.js";
@@ -53,7 +63,7 @@ import { ProtectedCredentialService } from "./protected-credential-service.js";
 import { resolveDesktopRuntimePaths, validatePackagedRuntimePaths } from "./runtime-paths.js";
 import { DesktopSubAgentProviderExecutor, providerCapabilityIds, type SubAgentCapabilityExecutionContext } from "./sub-agent-provider-executor.js";
 import { createDesktopNativePdfAdapter, createDesktopOfficeAdapter, createDesktopOvisAdapter, createDesktopPaddleAdapter } from "./integration-adapters.js";
-import { HostTurnExecutionModule, type DreamExecutionContext, type DreamSynthesisExecutionContext, type ReflectionExecutionContext, type TurnContext } from "./turn-execution.js";
+import { HostTurnExecutionModule, type ReflectionExecutionContext, type TurnContext } from "./turn-execution.js";
 
 const COMMAND_CHANNEL = "vc-agent:command";
 const EVENT_CHANNEL = "vc-agent:event";
@@ -86,9 +96,6 @@ const READ_ONLY_RECOVERY_COMMANDS = new Set<HostCommand["command"]>([
   "page_recovery.inspect",
   "prompt.revision.list",
   "task_model_assignment.list",
-  "reflection.list",
-  "reflection.outcome.list",
-  "dream.state.load",
   "project.list",
   "project.material.list",
   "project.output.list",
@@ -119,6 +126,10 @@ function resolveAcademicCredentials(): Partial<Record<AcademicCredentialSource, 
 
 let mainWindow: BrowserWindow | null = null;
 let stateStore: HostStateStore | null = null;
+// Set when the one-shot cognition-v2 Learning Epoch reset cannot activate.
+// This is intentionally separate from HostStateStore's migration mode: the
+// SQLite schema may be writable while the cognition file reset is not.
+let learningEpochRecovery = false;
 let trajectoryStore: ThreadTrajectoryStore | null = null;
 let inflight: InflightTurnCoordinator | null = null;
 let workerSupervisor: AgentWorkerSupervisor | null = null;
@@ -130,9 +141,16 @@ let projectMemories: ProjectMemoryStore | null = null;
 let longTermMemories: LongTermMemoryStore | null = null;
 let memoryEvolution: MemoryEvolutionStore | null = null;
 let memoryCandidates: MemoryCandidateStore | null = null;
-let reflectionOutcomes: ReflectionOutcomeStore | null = null;
-let dreamReviews: DreamReviewStore | null = null;
-let dreamCommits: DreamCommitStore | null = null;
+let reflectionDrafts: ReflectionDrafts | null = null;
+let reflectionRuns: ReflectionRunStore | null = null;
+let cognitionReviews: CognitionReviewModule | null = null;
+let cognitionReviewStore: CognitionReviewStore | null = null;
+const reflectionReviewRuns = new Map<string, string>();
+let memoryReviewOrchestrator: MemoryReviewOrchestrator | null = null;
+let memoryReviewPolicy: AutoMemoryReviewPolicy | undefined;
+let automaticReviewUserWorkCompletedInAppRun = false;
+const memoryReviewWorkerStages = new Map<string, MemoryReviewWorkerStage>();
+const memoryReviewCorrelationByBatch = new Map<string, string>();
 let personalCognition: PersonalCognitionBackupService | null = null;
 let executionScheduler: BoundedExecutionScheduler | null = null;
 let vcSkillsDirectory: VcSkillsDirectoryAdapter | null = null;
@@ -166,6 +184,31 @@ let ownLongTermMemoryWriteHash: string | undefined;
 let longTermMemoryWatcher: FSWatcher | null = null;
 let longTermMemoryWatchTimer: ReturnType<typeof setTimeout> | undefined;
 const projectOutputs = new ProjectOutputRegistry();
+
+const EMPTY_WORKER_ACTIVITY = {
+  agentWorkersStarted: 0,
+  piSessionsStarted: 0,
+  providerRequests: 0,
+  projectWorkers: 0,
+  unscopedWorkers: 0,
+  activeSessions: 0,
+  workerCrashes: 0
+} as const;
+
+function hostReadOnlyRecovery(): boolean {
+  return learningEpochRecovery || stateStore?.isReadOnlyRecovery === true;
+}
+
+type MemoryReviewWorkerStage = {
+  readonly batchId: string;
+  readonly stage: "extraction" | "synthesis";
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly correlationId: string;
+  readonly profile: ModelProfile;
+  readonly resolve: (message: string) => void;
+  readonly reject: (error: Error) => void;
+};
 
 type NativeSkillCompatibilitySnapshot = {
   readonly schemaVersion: 1;
@@ -533,28 +576,6 @@ function diagnostic(
   return { ...eventMetadata(correlationId), event: "diagnostic.raised", payload: { code, message, recoverable: true } };
 }
 
-function currentEligibleDreamTrajectory() {
-  if (stateStore === null || trajectoryStore === null) return [];
-  const threads = stateStore.listThreads();
-  const reflectionThreadIds = new Set(stateStore.listReflectionRuns().map((run) => run.threadId));
-  return selectEligibleDreamTrajectory(
-    threads,
-    new Map(threads.map((thread) => [thread.id, trajectoryStore!.loadEvents(thread.id)])),
-    reflectionThreadIds
-  );
-}
-
-function synchronizeDreamSchedulingIndex(): void {
-  if (stateStore?.isReadOnlyRecovery !== false || dreamReviews === null || memoryCandidates === null) return;
-  dreamReviews.synchronizeSchedulingIndex(currentEligibleDreamTrajectory(), memoryCandidates.list());
-}
-
-function resolveDreamProfile(profileId?: string): ModelProfile | undefined {
-  if (stateStore === null) return undefined;
-  const effectiveId = profileId ?? stateStore.getTaskModelAssignment("dream")?.profileId;
-  return effectiveId === undefined ? undefined : stateStore.getModelProfile(effectiveId);
-}
-
 function resolveSubAgentProfile(input: { readonly role: "researcher" | "critic" | "synthesizer" | "writer" | "custom"; readonly requestedProfileId?: string; readonly parentThreadId?: string }): SubAgentProfileSnapshot | undefined {
   if (stateStore === null) return undefined;
   const parentThread = input.parentThreadId === undefined ? undefined : stateStore.getThread(input.parentThreadId);
@@ -708,141 +729,341 @@ function subAgentHostEvent(event: SubAgentRuntimeEvent): HostEvent {
   const { task, attempt } = event;
   return { ...metadata, event: event.event, payload: { projection: event.projection, ...(task === undefined ? {} : { task }), ...(attempt === undefined ? {} : { attempt }) } } as HostEvent;
 }
-
-function toDreamProfileSnapshot(profile: ModelProfile): DreamProfileSnapshot {
-  return { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel };
-}
-
-function dreamStateEvent(correlationId: string): HostEvent {
-  if (dreamReviews === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
-  if (stateStore?.isReadOnlyRecovery === false && projectMemories !== null) dreamReviews.revalidateProjectMemory(currentProjectMemoryHashes());
-  if (stateStore?.isReadOnlyRecovery === false) revalidateDreamSynthesis();
-  const profile = resolveDreamProfile();
-  const dueProposal = dreamReviews.dueCheck(profile === undefined ? undefined : toDreamProfileSnapshot(profile));
-  const reminder = dreamReviews.pendingReminder();
+function memoryReviewProfileSnapshot(profile: ModelProfile): MemoryReviewProfileSnapshot {
   return {
-    ...eventMetadata(correlationId),
-    event: "dream.state.updated",
-    payload: {
-      state: dreamReviews.load(),
-      ...(dueProposal === undefined ? {} : { dueProposal }),
-      ...(reminder === undefined ? {} : { reminder })
+    id: profile.id,
+    provider: profile.provider,
+    model: profile.model,
+    ...(profile.thinkingLevel === undefined ? {} : { thinkingLevel: profile.thinkingLevel }),
+    ...(profile.contextWindow === undefined ? {} : { contextWindow: profile.contextWindow }),
+    ...(profile.maxOutputTokens === undefined ? {} : { maxOutputTokens: profile.maxOutputTokens })
+  };
+}
+
+function memoryReviewPromptSnapshot(revision: SystemPromptRevision): MemoryReviewPromptSnapshot {
+  return { revisionId: revision.id, hash: revision.hash };
+}
+
+function resolveMemoryReviewConfiguration(): { readonly profile: ModelProfile; readonly profileSnapshot: MemoryReviewProfileSnapshot; readonly promptRevision: SystemPromptRevision; readonly promptSnapshot: MemoryReviewPromptSnapshot } | undefined {
+  if (stateStore === null) return undefined;
+  const assignment = stateStore.getTaskModelAssignment("memory_review");
+  if (assignment === undefined) return undefined;
+  const profile = stateStore.getModelProfile(assignment.profileId);
+  const promptRevision = stateStore.getActiveSystemPromptRevision();
+  if (profile === undefined || promptRevision === undefined) return undefined;
+  return { profile, profileSnapshot: memoryReviewProfileSnapshot(profile), promptRevision, promptSnapshot: memoryReviewPromptSnapshot(promptRevision) };
+}
+
+function memoryReviewEligibility(cutoff: string): { readonly learningEpochStartedAt: string; readonly eventsByThread: ReadonlyMap<string, readonly TrajectoryEvent[]>; readonly threads: readonly { readonly id: string; readonly scope: "project" | "unscoped"; readonly projectId?: string }[]; readonly cutoff: string } | undefined {
+  if (stateStore === null || trajectoryStore === null || cognitionReviewStore === null) return undefined;
+  const epoch = cognitionReviewStore.loadEpoch();
+  if (epoch === undefined || epoch.status === "pending_reset" || epoch.status === "failed_reset") return undefined;
+  const threads = stateStore.listThreads().map((thread) => ({ id: thread.id, scope: thread.scope, ...(thread.scope === "project" ? { projectId: thread.projectId } : {}) }));
+  return {
+    learningEpochStartedAt: epoch.learningEpochStartedAt,
+    eventsByThread: new Map(threads.map((thread) => [thread.id, trajectoryStore!.loadEvents(thread.id)])),
+    threads,
+    cutoff
+  };
+}
+
+function resolveMemoryReviewSourceBody(source: EligibleLearningSource): { readonly userText: string; readonly assistantText: string } | undefined {
+  if (trajectoryStore === null || source.threadId === undefined || source.turnId === undefined) return undefined;
+  const events = trajectoryStore.loadEvents(source.threadId);
+  const submitted = events.find((event) => event.turnId === source.turnId && event.event === "turn.submitted");
+  const completed = events.find((event) => event.turnId === source.turnId && event.event === "turn.completed");
+  if (submitted?.event !== "turn.submitted" || completed?.event !== "turn.completed") return undefined;
+  return { userText: submitted.payload.text, assistantText: completed.payload.message };
+}
+
+function memoryReviewCards(sources: readonly EligibleLearningSource[]): { readonly projectMemoryCards: readonly MemoryReviewSynthesisCard[]; readonly longTermMemoryCards: readonly MemoryReviewSynthesisCard[]; readonly dependencies: readonly CognitionDependency[] } {
+  const projectMemoryCards: MemoryReviewSynthesisCard[] = [];
+  const dependencies: CognitionDependency[] = [];
+  const projectIds = [...new Set(sources.filter((source) => source.scope === "project" && source.projectId !== undefined).map((source) => source.projectId!))].sort();
+  for (const projectId of projectIds) {
+    const project = stateStore?.getProject(projectId);
+    const document = project === undefined || projectMemories === null ? undefined : projectMemories.load(project.id, project.path, false);
+    if (document === undefined) continue;
+    dependencies.push({ kind: "project_memory", reference: projectId, hash: document.sourceHash, required: true });
+    for (const entry of document.entries) {
+      projectMemoryCards.push({ id: entry.id, title: entry.title, content: entry.body, tags: entry.tags, maturity: entry.maturity, scope: "project", projectId, status: "current" });
     }
-  };
-}
-
-function revalidateDreamSynthesis(): void {
-  if (dreamReviews === null || longTermMemories === null) return;
-  const state = dreamReviews.load();
-  const batch = state.batches.find((item) => item.id === state.schedule.activeBatchId);
-  if (batch?.synthesis === undefined || batch.synthesis.status === "stale" || (batch.status === "running" && batch.currentStage === "global_synthesis")) return;
-  const memory = longTermMemories.load(false);
-  if (memory === undefined) { dreamReviews.markSynthesisStale(batch.id); return; }
-  const input = buildDreamSynthesisInput(batch, memory);
-  if (dreamSynthesisInputHash(input) !== batch.synthesis.inputHash || memory.sourceHash !== batch.synthesis.longTermMemoryHash) dreamReviews.markSynthesisStale(batch.id);
-}
-
-function currentProjectMemoryHashes(): Record<string, string | undefined> {
-  if (stateStore === null || projectMemories === null) return {};
-  return Object.fromEntries(stateStore.listProjects().map((project) => [project.id, projectMemories!.load(project.id, project.path, false)?.sourceHash]));
-}
-
-function startDreamScopeExtraction(correlationId: string, batchId: string, scopeId: string): HostEvent {
-  if (dreamReviews === null || projectMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Dream scope extraction");
-  const batch = dreamReviews.load().batches.find((item) => item.id === batchId);
-  const existingScope = batch?.extractionScopes.find((item) => item.id === scopeId);
-  if (batch === undefined || existingScope === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream extraction scope was not found.");
-  const profile = stateStore!.getModelProfile(batch.profileSnapshot.id);
-  if (profile === undefined || profile.provider !== batch.profileSnapshot.provider || profile.model !== batch.profileSnapshot.model) {
-    return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Model Profile is unavailable or changed. No fallback was selected.");
   }
-  const promptRevision = stateStore!.getSystemPromptRevision(batch.promptSnapshot.revisionId);
-  if (promptRevision?.hash !== batch.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Prompt Snapshot is unavailable.");
-  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
-  if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream credential is unavailable.");
-  const project = existingScope.kind === "project" ? stateStore!.getProject(existingScope.projectId!) : undefined;
-  if (existingScope.kind === "project" && project === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The Dream Project scope is unavailable.");
-  const projectMemory = existingScope.kind === "project" ? projectMemories.load(existingScope.projectId!, project!.path, false) : undefined;
-  const executionThreadId = `dream-${batch.id}-${existingScope.id.replace(/[^a-z0-9-]/giu, "-")}`;
-  const turnId = randomUUID();
-  const admission = executionScheduler!.admit({ id: turnId, scopeKey: executionThreadId, kind: "dream_scope" });
-  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Dream scope extraction");
-  let scope: DreamExtractionScope;
-  try {
-    scope = dreamReviews.startScope(batch.id, existingScope.id, projectMemory?.sourceHash);
-  } catch (error) {
-    executionScheduler!.release(turnId);
-    return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream extraction scope could not start.");
-  }
-  const currentBatch = dreamReviews.load().batches.find((item) => item.id === batch.id)!;
-  const extractionContext = buildDreamScopeExtractionContext(currentBatch, scope, projectMemory);
-  const prompt = buildDreamScopeExtractionPrompt(extractionContext);
-  const context: DreamExecutionContext = { correlationId, batchId: batch.id, scope, executionThreadId, turnId, profile, allowedSourceReferences: [...scope.sourceReferences, ...(extractionContext.projectMemory?.map((entry) => entry.sourceReference) ?? [])] };
-  if (scope.kind === "project") stateStore!.authorizeProjectProfile(scope.projectId!, profile.id, profile.provider);
-  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
-    schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
-    cwd: project?.path ?? app.getPath("userData"),
-    threadDirectory: join(app.getPath("userData"), "memory", "dream", "scope-work", batch.id, scope.id.replace(/[^a-z0-9-]/giu, "-")),
-    contextHistory: [],
-    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_EXTRACTION_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
-    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_EXTRACTION_STAGE_INSTRUCTIONS) + estimateTokens(prompt),
-    activeCapabilities: [], expectedStateVersion: 1,
-    executionScope: scope.kind === "project" ? { kind: "project", projectId: scope.projectId! } : { kind: "unscoped", threadId: executionThreadId },
-    prompt,
-    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
-    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_EXTRACTION_STAGE_INSTRUCTIONS] },
-    piResources: piResourcesConfig()
-  };
-  turnExecution!.start({ kind: "dream", context }, workerCommand, () => failDreamExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Dream scope extraction completed.", provider: profile.provider, model: profile.model }));
-  return dreamStateEvent(correlationId);
+  const longTerm = longTermMemories?.load(false);
+  const longTermMemoryCards = longTerm?.entries.map((entry) => ({
+    id: entry.id, title: entry.title, content: entry.content, applicability: entry.applicability, limitations: entry.limitations,
+    tags: entry.tags, version: entry.version, maturity: entry.maturity, recallPolicy: entry.recallPolicy, conflictState: entry.conflictState, scope: "long_term" as const, status: entry.status
+  })) ?? [];
+  if (longTerm !== undefined) dependencies.push({ kind: "long_term_memory", reference: "long_term_memory", hash: longTerm.sourceHash, required: true });
+  return { projectMemoryCards, longTermMemoryCards, dependencies };
 }
 
-function startDreamGlobalSynthesis(correlationId: string, batchId: string): HostEvent {
-  if (dreamReviews === null || longTermMemories === null) return diagnostic(correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-  if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Global Dream Synthesis");
-  revalidateDreamSynthesis();
-  let batch = dreamReviews.load().batches.find((item) => item.id === batchId);
-  if (batch === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Dream batch was not found.");
-  if (batch.preparedPatch?.status === "stale") {
-    try { dreamCommits?.discard(batch.id, batch.preparedPatch.id); } catch { /* A missing stale preview cannot authorize a commit. */ }
+function memoryReviewSources(cutoff: string, profile: ModelProfile): EligibleLearningSource[] {
+  const eligibility = memoryReviewEligibility(cutoff);
+  if (eligibility === undefined) return [];
+  const sources = selectEligibleLearningSources(eligibility);
+  const committed = cognitionReviewStore?.loadCommittedCutoff();
+  const committedLedger = committed === undefined ? undefined : cognitionReviewStore?.loadCoverageLedger(committed.batchId);
+  const carriedOver = new Set((committedLedger?.entries ?? []).filter((entry) => entry.status === "carried_over").map((entry) => entry.sourceReference));
+  const sourceIndex = cognitionReviewStore?.readSourceIndex() ?? [];
+  const selectedByReference = new Map(sources.map((source) => [source.sourceReference, source]));
+  for (const source of sourceIndex) {
+    if (carriedOver.has(source.sourceReference) && !selectedByReference.has(source.sourceReference)) selectedByReference.set(source.sourceReference, source);
   }
-  const profile = stateStore!.getModelProfile(batch.profileSnapshot.id);
-  if (profile === undefined || profile.provider !== batch.profileSnapshot.provider || profile.model !== batch.profileSnapshot.model) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Model Profile is unavailable or changed. No fallback was selected.");
-  const promptRevision = stateStore!.getSystemPromptRevision(batch.promptSnapshot.revisionId);
-  if (promptRevision?.hash !== batch.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream Prompt Snapshot is unavailable.");
-  const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
-  if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Dream credential is unavailable.");
-  const memory = longTermMemories.load(true)!;
-  const input = buildDreamSynthesisInput(batch, memory);
-  const forbiddenTerms = batch.extractionScopes.flatMap((scope) => {
-    if (scope.kind !== "project") return [];
-    const project = stateStore!.getProject(scope.projectId!);
-    return project === undefined ? [] : [project.displayName, basename(project.path)];
+  const lowerBound = committed === undefined ? undefined : new Date(committed.cutoff).valueOf();
+  const pending = [...selectedByReference.values()].filter((source) => lowerBound === undefined || new Date(source.completedAt).valueOf() > lowerBound || carriedOver.has(source.sourceReference));
+  // A global Memory Review never falls back to a Thread Profile. Project
+  // sources are admitted only when the frozen assigned Profile is authorized
+  // for that Project; reject the batch rather than silently shrinking the
+  // strict eligible source set.
+  if (pending.some((source) => source.availability !== "deleted" && source.scope === "project" && (source.projectId === undefined || stateStore?.isProjectProfileAuthorized(source.projectId, profile.id) !== true))) {
+    throw new Error("MEMORY_REVIEW_PROJECT_PROFILE_UNAUTHORIZED");
+  }
+  return pending;
+}
+
+function initializeMemoryReviewOrchestrator(): void {
+  if (memoryReviewOrchestrator !== null || cognitionReviewStore === null || cognitionReviews === null) return;
+  memoryReviewOrchestrator = createMemoryReviewOrchestrator({
+    root: cognitionReviewStore.rootPath,
+    reviewModule: cognitionReviews,
+    resolveSource: resolveMemoryReviewSourceBody,
+    generate: (prompt, context) => runMemoryReviewModel({
+      batchId: context.batchId,
+      mode: context.mode,
+      stage: context.stage,
+      workerKey: context.workerKey,
+      prompt,
+      profileSnapshot: context.profileSnapshot,
+      promptSnapshot: context.promptSnapshot
+    }),
+    onProgress: (progress) => {
+      const correlationId = memoryReviewCorrelationByBatch.get(progress.batchId) ?? randomUUID();
+      emit({ ...eventMetadata(correlationId), event: "memory_review.progress.updated", payload: { progress } });
+      if (progress.reviewId !== undefined && progress.status === "waiting_for_review") {
+        const bundle = cognitionReviewStore?.loadReviewBundle(progress.reviewId);
+        if (bundle !== undefined) emit({ ...eventMetadata(correlationId), event: "cognition_review.bundle.updated", payload: { bundle } });
+      }
+    },
+    now: () => new Date()
   });
-  const executionThreadId = `dream-synthesis-${batch.id}`;
-  const turnId = randomUUID();
-  const admission = executionScheduler!.admit({ id: turnId, scopeKey: executionThreadId, kind: "dream_synthesis" });
-  if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Global Dream Synthesis");
-  try { batch = dreamReviews.beginSynthesis(batch.id); }
-  catch (error) {
-    executionScheduler!.release(turnId);
-    return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Global Dream Synthesis could not start.");
+}
+
+function buildMemoryReviewPreparationInput(cutoff: string, profile: ModelProfile, profileSnapshot: MemoryReviewProfileSnapshot, promptSnapshot: MemoryReviewPromptSnapshot): { readonly sources: readonly (EligibleLearningSource & { readonly body?: { readonly userText: string; readonly assistantText: string } })[]; readonly profileSnapshot: MemoryReviewProfileSnapshot; readonly promptSnapshot: MemoryReviewPromptSnapshot; readonly cutoff: string; readonly projectMemoryCards: readonly MemoryReviewSynthesisCard[]; readonly longTermMemoryCards: readonly MemoryReviewSynthesisCard[]; readonly dependencies: readonly CognitionDependency[] } | undefined {
+  const sources = memoryReviewSources(cutoff, profile);
+  if (sources.length === 0) return undefined;
+  cognitionReviewStore?.upsertSourceIndex(sources);
+  const cards = memoryReviewCards(sources);
+  return {
+    cutoff,
+    sources: sources.map((source) => {
+      const body = resolveMemoryReviewSourceBody(source);
+      return body === undefined ? source : { ...source, body };
+    }),
+    profileSnapshot,
+    promptSnapshot,
+    projectMemoryCards: cards.projectMemoryCards,
+    longTermMemoryCards: cards.longTermMemoryCards,
+    dependencies: cards.dependencies
+  };
+}
+
+function startMemoryReviewPreparation(correlationId: string, mode: "manual" | "automatic"): HostEvent {
+  if (stateStore === null || stateStore.isReadOnlyRecovery || memoryReviewOrchestrator === null) return diagnostic(correlationId, "HOST_FAILURE", "Memory Review is unavailable in Read-only Recovery.");
+  const configuration = resolveMemoryReviewConfiguration();
+  if (configuration === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Configure a Memory Review Profile before preparing a Memory Review.");
+  const cutoff = new Date().toISOString();
+  let input: ReturnType<typeof buildMemoryReviewPreparationInput>;
+  try { input = buildMemoryReviewPreparationInput(cutoff, configuration.profile, configuration.profileSnapshot, configuration.promptSnapshot); }
+  catch (error) { return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Memory Review source selection failed."); }
+  if (input === undefined) return diagnostic(correlationId, "HOST_FAILURE", "No eligible learning sources are available for Memory Review.");
+  const batchId = randomUUID();
+  memoryReviewCorrelationByBatch.set(batchId, correlationId);
+  const preparation = { ...input, batchId };
+  void (mode === "automatic" ? memoryReviewOrchestrator.prepare(preparation) : memoryReviewOrchestrator.prepare(preparation))
+    .then((run) => {
+      if (run.reviewId !== undefined) {
+        const bundle = cognitionReviewStore?.loadReviewBundle(run.reviewId);
+        if (bundle !== undefined) emit({ ...eventMetadata(correlationId), event: "cognition_review.bundle.updated", payload: { bundle } });
+      }
+    })
+    .catch((error) => emit(diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Memory Review preparation failed.")))
+    .finally(() => { memoryReviewCorrelationByBatch.delete(batchId); });
+  return { ...eventMetadata(correlationId), event: "memory_review.progress.updated", payload: { progress: { batchId, status: "preparing", eligible: input.sources.length, processed: 0, noSignal: 0, represented: 0, carriedOver: 0, completedChunks: 0, totalChunks: 0 } } };
+}
+
+function cancelMemoryReviewPreparation(correlationId: string): HostEvent {
+  const active = memoryReviewOrchestrator?.listRuns().find((run) => run.status === "preparing");
+  if (active === undefined || memoryReviewOrchestrator === null) return diagnostic(correlationId, "HOST_FAILURE", "No active Memory Review preparation was found.");
+  try {
+    const run = memoryReviewOrchestrator.cancel(active.batchId);
+    return { ...eventMetadata(correlationId), event: "memory_review.progress.updated", payload: { progress: memoryReviewProgressProjection(run) } };
+  } catch (error) {
+    return diagnostic(correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Memory Review cancellation failed.");
   }
-  const prompt = buildDreamGlobalSynthesisPrompt(input);
-  const context: DreamSynthesisExecutionContext = { correlationId, batchId: batch.id, executionThreadId, turnId, profile, input, forbiddenTerms };
-  const workerCommand: Extract<WorkerCommand, { command: "turn.execute" }> = {
-    schemaVersion: 1, command: "turn.execute", commandId: randomUUID(), correlationId, threadId: executionThreadId, turnId,
-    cwd: app.getPath("userData"), threadDirectory: join(app.getPath("userData"), "memory", "dream", "synthesis-work", batch.id), contextHistory: [],
-    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
-    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS) + estimateTokens(prompt),
-    activeCapabilities: [], expectedStateVersion: 1, executionScope: { kind: "unscoped", threadId: executionThreadId }, prompt,
-    profile: toWorkerModelProfile(profile, credentials.decrypt(encrypted)),
-    resources: { schemaVersion: 1, revisionId: promptRevision.id, systemPrompt: promptRevision.content, appendSystemPrompt: [DREAM_GLOBAL_SYNTHESIS_INSTRUCTIONS] },
+}
+
+function memoryReviewProgressProjection(run: MemoryReviewPreparationResult): MemoryReviewProgress {
+  const entries = run.ledger.entries;
+  const noSignal = entries.filter((entry) => entry.status === "no_signal").length;
+  const represented = entries.filter((entry) => entry.status === "represented").length;
+  const carriedOver = entries.filter((entry) => entry.status === "carried_over").length;
+  return { batchId: run.batchId, ...(run.reviewId === undefined ? {} : { reviewId: run.reviewId }), status: run.status, eligible: entries.length, processed: noSignal + represented + carriedOver, noSignal, represented, carriedOver, completedChunks: run.chunks.filter((chunk) => chunk.status === "completed").length, totalChunks: run.chunks.length, ...(run.failureCode === undefined ? {} : { failureCode: run.failureCode }) };
+}
+
+function runMemoryReviewModel(input: { readonly batchId: string; readonly mode: "manual" | "automatic"; readonly stage: "extraction" | "synthesis"; readonly workerKey: string; readonly prompt: string; readonly profileSnapshot: MemoryReviewProfileSnapshot; readonly promptSnapshot?: MemoryReviewPromptSnapshot }): Promise<string> {
+  if (stateStore === null || workerSupervisor === null || executionScheduler === null) return Promise.reject(new Error("MEMORY_REVIEW_WORKER_UNAVAILABLE"));
+  const profile = stateStore.getModelProfile(input.profileSnapshot.id);
+  const frozenThinkingLevel = thinkingLevelSchema.safeParse(input.profileSnapshot.thinkingLevel ?? "off");
+  const promptRevision = input.promptSnapshot === undefined ? stateStore.getActiveSystemPromptRevision() : stateStore.getSystemPromptRevision(input.promptSnapshot.revisionId);
+  if (!frozenThinkingLevel.success
+    || profile === undefined
+    || profile.provider !== input.profileSnapshot.provider
+    || profile.model !== input.profileSnapshot.model
+    || profile.thinkingLevel !== frozenThinkingLevel.data
+    || profile.contextWindow !== input.profileSnapshot.contextWindow
+    || profile.maxOutputTokens !== input.profileSnapshot.maxOutputTokens
+    || promptRevision === undefined
+    || (input.promptSnapshot !== undefined && promptRevision.hash !== input.promptSnapshot.hash)) return Promise.reject(new Error("MEMORY_REVIEW_FROZEN_CONFIGURATION_UNAVAILABLE"));
+  const encrypted = stateStore.getEncryptedCredential(profile.credentialRef);
+  if (encrypted === undefined) return Promise.reject(new Error("MEMORY_REVIEW_CREDENTIAL_UNAVAILABLE"));
+  const turnId = randomUUID();
+  const safeWorkerKey = input.workerKey.replace(/[^a-zA-Z0-9._-]/gu, "-").slice(0, 120);
+  const threadId = `memory-review-${input.batchId}-${input.stage}-${safeWorkerKey}-${turnId}`;
+  const admission = executionScheduler.admit({ id: turnId, scopeKey: threadId, kind: "internal_model_stage" });
+  if (!admission.admitted) return Promise.reject(new Error("MEMORY_REVIEW_EXECUTION_CAPACITY"));
+  const correlationId = memoryReviewCorrelationByBatch.get(input.batchId) ?? randomUUID();
+  const resources = {
+    schemaVersion: 1 as const,
+    revisionId: promptRevision.id,
+    systemPrompt: promptRevision.content,
+    appendSystemPrompt: [input.stage === "extraction" ? MEMORY_REVIEW_EXTRACTION_STAGE_INSTRUCTIONS : MEMORY_REVIEW_SYNTHESIS_STAGE_INSTRUCTIONS]
+  };
+  const command: Extract<WorkerCommand, { command: "turn.execute" }> = {
+    schemaVersion: 1,
+    command: "turn.execute",
+    commandId: randomUUID(),
+    correlationId,
+    threadId,
+    turnId,
+    cwd: app.getPath("userData"),
+    threadDirectory: join(app.getPath("userData"), "cognition-v2", "work", input.batchId, input.stage, safeWorkerKey),
+    contextHistory: [],
+    estimatedInputTokens: estimateTokens(promptRevision.content) + estimateTokens(input.prompt),
+    currentInputTokens: estimateTokens(promptRevision.content) + estimateTokens(input.prompt),
+    activeCapabilities: [],
+    expectedStateVersion: 1,
+    executionScope: { kind: "unscoped", threadId },
+    prompt: input.prompt,
+    profile: {
+      provider: input.profileSnapshot.provider,
+      model: input.profileSnapshot.model,
+      apiKey: credentials.decrypt(encrypted),
+      thinkingLevel: frozenThinkingLevel.data,
+      ...(input.profileSnapshot.contextWindow === undefined ? {} : { contextWindow: input.profileSnapshot.contextWindow }),
+      ...(input.profileSnapshot.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.profileSnapshot.maxOutputTokens })
+    },
+    resources,
     piResources: piResourcesConfig()
   };
-  turnExecution!.start({ kind: "dream_synthesis", context }, workerCommand, () => failDreamSynthesisExecution(context, { kind: "worker", code: "WORKER_EXITED", message: "Agent Worker exited before Global Dream Synthesis completed.", provider: profile.provider, model: profile.model }));
-  return dreamStateEvent(correlationId);
+  return new Promise<string>((resolve, reject) => {
+    memoryReviewWorkerStages.set(turnId, { batchId: input.batchId, stage: input.stage, threadId, turnId, correlationId, profile, resolve, reject });
+    void workerSupervisor!.execute(command).catch((error: unknown) => settleMemoryReviewWorkerStage(turnId, error instanceof Error ? error : new Error("MEMORY_REVIEW_WORKER_FAILED"), true));
+  });
+}
+
+function settleMemoryReviewWorkerStage(turnId: string, error?: Error, recordFailure = false, message?: string): void {
+  const stage = memoryReviewWorkerStages.get(turnId);
+  if (stage === undefined) return;
+  memoryReviewWorkerStages.delete(turnId);
+  if (recordFailure) executionScheduler?.recordFailure();
+  executionScheduler?.release(turnId);
+  workerSupervisor?.retire(stage.threadId);
+  queueMicrotask(() => drainExecutionQueue());
+  if (error === undefined) stage.resolve(message ?? "");
+  else stage.reject(error);
+}
+
+function handleMemoryReviewWorkerEvent(workerEvent: WorkerEvent, stage: MemoryReviewWorkerStage): void {
+  if (workerEvent.event === "capability.execution.requested") {
+    workerSupervisor?.resolveCapability({ schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: stage.correlationId, threadId: stage.threadId, turnId: stage.turnId, result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "MEMORY_REVIEW_CAPABILITY_NOT_ALLOWED", content: "Memory Review model stages receive only their frozen bounded input." } });
+    return;
+  }
+  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
+  if (workerEvent.event === "turn.completed") { settleMemoryReviewWorkerStage(stage.turnId, undefined, false, workerEvent.message); return; }
+  if (workerEvent.event === "turn.interrupted") { settleMemoryReviewWorkerStage(stage.turnId, new Error("MEMORY_REVIEW_INTERRUPTED"), true); return; }
+  if (workerEvent.event === "turn.failed") { settleMemoryReviewWorkerStage(stage.turnId, new Error(`MEMORY_REVIEW_MODEL_FAILED:${workerEvent.failure.code}`), true); }
+}
+
+function markMemoryReviewRunTerminal(reviewId: string, status: "completed" | "cancelled" = "completed"): void {
+  if (memoryReviewOrchestrator === null) return;
+  if (status === "completed") memoryReviewOrchestrator.completeReview(reviewId);
+  else memoryReviewOrchestrator.discardReview(reviewId);
+}
+
+function maybeStartAutomaticMemoryReview(correlationId: string): void {
+  if (!automaticReviewUserWorkCompletedInAppRun || memoryReviewPolicy?.enabled !== true || memoryReviewOrchestrator === null || executionScheduler === null || !executionScheduler.hasCapacity()) return;
+  const configuration = resolveMemoryReviewConfiguration();
+  if (configuration === undefined || memoryReviewPolicy === undefined) return;
+  const cutoff = new Date().toISOString();
+  let input: ReturnType<typeof buildMemoryReviewPreparationInput>;
+  try { input = buildMemoryReviewPreparationInput(cutoff, configuration.profile, configuration.profileSnapshot, configuration.promptSnapshot); }
+  catch { return; }
+  if (input === undefined) return;
+  const runs = memoryReviewOrchestrator.listRuns();
+  const latestAutomatic = runs.filter((run) => run.mode === "automatic").sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  const latestCompleted = runs.filter((run) => run.status === "completed").sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  const explicitCandidate = memoryCandidates?.list().some((candidate) => candidate.status === "active" && input.sources.some((source) => source.sourceReference === candidate.sourceReference)) ?? false;
+  const autoInput = {
+    ...input,
+    ...(latestAutomatic === undefined ? {} : { lastAutomaticStartAt: latestAutomatic.createdAt }),
+    ...(latestCompleted === undefined ? {} : { lastReviewCompletedAt: latestCompleted.updatedAt }),
+    policy: memoryReviewPolicy,
+    profileAvailable: true,
+    activeBatch: runs.some((run) => ["preparing", "waiting_for_review"].includes(run.status)) || (reflectionRuns?.list().some((run) => !["idle", "completed", "discarded"].includes(run.status)) ?? false),
+    bundleUnderReview: cognitionReviewStore?.listReviewBundles().some((bundle) => ["waiting_for_review", "reviewing", "prepared"].includes(bundle.status)) ?? false,
+    pendingEligibleExchangeCount: input.sources.length,
+    explicitCandidate,
+    phase: "post_user_work" as const,
+    userWorkCompletedInAppRun: true,
+    executionIdle: (() => { const telemetry = executionScheduler!.telemetry(); return telemetry.runningCount === 0 && telemetry.queuedCount === 0; })()
+  };
+  const batchId = randomUUID();
+  memoryReviewCorrelationByBatch.set(batchId, correlationId);
+  void memoryReviewOrchestrator.prepareAutomatically({ ...autoInput, batchId }).then((result) => {
+    if (result.run?.reviewId !== undefined) {
+      const bundle = cognitionReviewStore?.loadReviewBundle(result.run.reviewId);
+      if (bundle !== undefined) emit({ ...eventMetadata(correlationId), event: "cognition_review.bundle.updated", payload: { bundle } });
+    }
+  }).catch(() => undefined).finally(() => { memoryReviewCorrelationByBatch.delete(batchId); automaticReviewUserWorkCompletedInAppRun = false; });
+}
+
+function runMemoryReviewStartupDueCheck(): void {
+  if (memoryReviewPolicy?.enabled !== true || memoryReviewOrchestrator === null || executionScheduler === null) return;
+  const configuration = resolveMemoryReviewConfiguration();
+  if (configuration === undefined) return;
+  let sources: EligibleLearningSource[];
+  try { sources = memoryReviewSources(new Date().toISOString(), configuration.profile); }
+  catch { return; }
+  if (sources.length === 0) return;
+  const runs = memoryReviewOrchestrator.listRuns();
+  const latestAutomatic = runs.filter((run) => run.mode === "automatic").sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  const latestCompleted = runs.filter((run) => run.status === "completed").sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  const telemetry = executionScheduler.telemetry();
+  // This call is deliberately model-free. Startup may record/read due state,
+  // but the admission phase is post-user-work and never starts a Provider.
+  evaluateAutomaticMemoryReview({
+    policy: memoryReviewPolicy,
+    profileAvailable: true,
+    activeBatch: runs.some((run) => ["preparing", "waiting_for_review"].includes(run.status)),
+    bundleUnderReview: cognitionReviewStore?.listReviewBundles().some((bundle) => ["waiting_for_review", "reviewing", "prepared"].includes(bundle.status)) ?? false,
+    pendingEligibleExchangeCount: sources.length,
+    ...(latestAutomatic === undefined ? {} : { lastAutomaticStartAt: latestAutomatic.createdAt }),
+    ...(latestCompleted === undefined ? {} : { lastReviewCompletedAt: latestCompleted.updatedAt }),
+    phase: "startup",
+    userWorkCompletedInAppRun: false,
+    executionIdle: telemetry.runningCount === 0 && telemetry.queuedCount === 0
+  }, { now: () => new Date() });
 }
 
 async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Promise<HostEvent> {
@@ -859,29 +1080,39 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
     event.sender.send(EVENT_CHANNEL, result);
     return result;
   }
-  if (stateStore === null || workerSupervisor === null) {
+  if (stateStore === null) {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
   }
 
   try {
     const command = parsed.data;
-    if (stateStore.isReadOnlyRecovery && !READ_ONLY_RECOVERY_COMMANDS.has(command.command)) {
+    const recovery = hostReadOnlyRecovery();
+    if (recovery && !READ_ONLY_RECOVERY_COMMANDS.has(command.command)) {
       return diagnostic(command.correlationId, "READ_ONLY_RECOVERY_MODE", "This action is unavailable while local state is open in Read-only Recovery.");
     }
-    if (trajectoryStore === null || inflight === null || capabilityGateway === null) {
+    if (workerSupervisor === null && !recovery) {
+      return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
+    }
+    const recoverySafeCommand = command.command === "app.bootstrap"
+      || command.command === "state.recovery.export"
+      || command.command === "profile.list"
+      || command.command === "academic.credentials.list";
+    if ((trajectoryStore === null || inflight === null || capabilityGateway === null) && !(recovery && recoverySafeCommand)) {
       return diagnostic(correlationId, "HOST_FAILURE", "The local Host is not initialized.");
     }
     switch (command.command) {
       case "app.bootstrap": {
         const profileCount = stateStore.listModelProfiles().length;
         const preparation = stateStore.statePreparation;
-        const recovery = preparation.mode === "read_only_recovery";
-        const runtimeCapabilityDoctor = runtimeCapabilityDoctorMessage();
+        const recovery = hostReadOnlyRecovery();
+        const runtimeCapabilityDoctor = recovery
+          ? { status: "attention" as const, message: "Pi execution is disabled in Read-only Recovery; no integration resources were loaded." }
+          : runtimeCapabilityDoctorMessage();
         return {
           ...eventMetadata(command.correlationId),
           event: "app.bootstrap.completed",
           payload: {
-            ...stateStore.getBootstrapState(app.getVersion(), { ...workerSupervisor.activity, externalNetworkRequests }),
+            ...stateStore.getBootstrapState(app.getVersion(), { ...(workerSupervisor?.activity ?? EMPTY_WORKER_ACTIVITY), externalNetworkRequests }),
             piProviders: [...PI_BUILTIN_PROVIDER_IDS],
             executionScheduler: executionSchedulerTelemetry(),
             environmentDoctor: {
@@ -910,7 +1141,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         };
       }
       case "state.recovery.export": {
-        if (!stateStore.isReadOnlyRecovery) return diagnostic(command.correlationId, "INVALID_COMMAND", "Raw state export is available only in Read-only Recovery.");
+        if (!hostReadOnlyRecovery()) return diagnostic(command.correlationId, "INVALID_COMMAND", "Raw state export is available only in Read-only Recovery.");
         const selection = await dialog.showOpenDialog({ title: "Export raw recovery state", properties: ["openDirectory", "createDirectory"] });
         if (selection.canceled || selection.filePaths[0] === undefined) {
           return { ...eventMetadata(command.correlationId), event: "state.recovery.export.completed", payload: { status: "canceled", fileCount: 0 } };
@@ -1194,114 +1425,106 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         stateStore.clearTaskModelAssignment(command.payload.taskType);
         return { ...eventMetadata(command.correlationId), event: "task_model_assignment.updated", payload: { taskType: command.payload.taskType } };
       }
-      case "reflection.list":
-        return { ...eventMetadata(command.correlationId), event: "reflection.runs.listed", payload: { runs: stateStore.listReflectionRuns(command.payload.projectId) } };
-      case "reflection.start.project": {
+      case "memory_review.prepare": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Review preparation requires explicit User initiation.");
+        return startMemoryReviewPreparation(command.correlationId, "manual");
+      }
+      case "memory_review.cancel": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Review cancellation requires explicit User action.");
+        return cancelMemoryReviewPreparation(command.correlationId);
+      }
+      case "memory_review.policy.set": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Automatic Memory Review policy requires explicit User action.");
+        if (stateStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Automatic Memory Review policy is unavailable.");
+        try {
+          const policy = stateStore.setAutoMemoryReviewPolicy(command.payload.policy);
+          memoryReviewPolicy = policy;
+          return { ...eventMetadata(command.correlationId), event: "memory_review.policy.updated", payload: { policy } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Automatic Memory Review policy could not be saved.");
+        }
+      }
+      case "reflection.start": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Investment Reflection requires explicit User initiation.");
-        return startProjectReflection(command.correlationId, command.payload);
+        return command.payload.scope === "project"
+          ? startProjectReflection(command.correlationId, command.payload)
+          : startUnscopedReflection(command.correlationId, command.payload);
       }
-      case "reflection.start.unscoped": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Investment Reflection requires explicit User initiation.");
-        return startUnscopedReflection(command.correlationId, command.payload);
+      case "reflection.finish": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Finishing Reflection requires explicit User action.");
+        const run = reflectionRuns?.get(command.payload.runId);
+        if (run === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection finalization requires an active dialogue.");
+        const bundle = prepareReflectionCognitionBundle(run);
+        if (bundle === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection must produce exactly one Judgment Record draft before finalization.");
+        return { ...eventMetadata(command.correlationId, run.threadId), event: "cognition_review.bundle.updated", payload: { bundle } };
       }
-      case "reflection.independent.start": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Independent Evidence requires explicit User initiation.");
-        return startIndependentAssessment(command.correlationId, command.payload.runId, command.payload.profileId);
+      case "cognition_review.load": {
+        if (cognitionReviewStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review is unavailable in read-only recovery.");
+        const bundle = cognitionReviewStore.loadReviewBundle(command.payload.reviewId);
+        return bundle === undefined
+          ? diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review bundle not found.")
+          : { ...eventMetadata(command.correlationId), event: "cognition_review.bundle.updated", payload: { bundle } };
       }
-      case "reflection.independent.stop":
-        return stopIndependentAssessment(command.correlationId, command.payload.runId);
-      case "reflection.memory_aware.start": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory-Aware Reflection requires explicit User initiation.");
-        return startMemoryAwareReflection(command.correlationId, command.payload.runId, command.payload.profileId);
+      case "cognition_review.decide": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review decisions require explicit User action.");
+        if (cognitionReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review is unavailable in read-only recovery.");
+        try {
+          const bundle = cognitionReviews.decide(command.payload.reviewId, command.payload.decisions);
+          return { ...eventMetadata(command.correlationId), event: "cognition_review.bundle.updated", payload: { bundle } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Cognition Review decision could not be recorded.");
+        }
+      }
+      case "cognition_review.commit": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review commit requires explicit User confirmation.");
+        if (cognitionReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review is unavailable in read-only recovery.");
+        try {
+          const result = cognitionReviews.commit(command.payload.reviewId);
+          if (result.status === "committed" && reflectionRuns !== null) {
+            const run = reflectionRunForReview(command.payload.reviewId);
+            if (run !== undefined) {
+              const completed = reflectionRuns.complete(run.id);
+              emit({ ...eventMetadata(command.correlationId, completed.threadId), event: "reflection.run.updated", payload: { run: completed } });
+            }
+          }
+          if (result.status === "committed") markMemoryReviewRunTerminal(command.payload.reviewId);
+          return { ...eventMetadata(command.correlationId), event: "cognition_review.commit.result", payload: { result } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Cognition Review commit could not be completed.");
+        }
+      }
+      case "cognition_review.discard": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Cognition Review requires explicit User action.");
+        if (cognitionReviews === null || cognitionReviewStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review is unavailable in read-only recovery.");
+        try {
+          // Reflection reviews are owned by an active Reflection dialogue.  Resolve
+          // the Host-side mapping before discarding the bundle so that the run can
+          // leave dialogue_active as part of the same user action.
+          const reflectionRun = reflectionRunForReview(command.payload.reviewId);
+          cognitionReviews.discard(command.payload.reviewId);
+          if (reflectionRun !== undefined && reflectionRuns !== null) {
+            const discarded = reflectionRuns.discard(reflectionRun.id);
+            if (reflectionDrafts !== null) reflectionDrafts.discardRunDrafts(discarded.id);
+            emit({ ...eventMetadata(command.correlationId, discarded.threadId), event: "reflection.run.updated", payload: { run: discarded } });
+          } else {
+            // A discarded Memory Review must not count as a completed run for
+            // automatic interval throttling.
+            markMemoryReviewRunTerminal(command.payload.reviewId, "cancelled");
+          }
+          const bundle = cognitionReviewStore.loadReviewBundle(command.payload.reviewId);
+          return bundle === undefined
+            ? diagnostic(command.correlationId, "HOST_FAILURE", "Cognition Review bundle not found after discard.")
+            : { ...eventMetadata(command.correlationId), event: "cognition_review.bundle.updated", payload: { bundle } };
+        } catch (error) {
+          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Cognition Review could not be discarded.");
+        }
       }
       case "reflection.discard": {
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Reflection requires explicit User initiation.");
-        const run = stateStore.discardReflection(command.payload.runId);
-        if (reflectionOutcomes !== null) {
-          reflectionOutcomes.discardRunDrafts(run.id);
-          emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-        }
+        if (reflectionRuns === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection runs are unavailable.");
+        const run = reflectionRuns.discard(command.payload.runId);
+        if (reflectionDrafts !== null) reflectionDrafts.discardRunDrafts(run.id);
         return { ...eventMetadata(command.correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
-      }
-      case "reflection.outcome.list": {
-        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
-        const run = stateStore.getReflectionRun(command.payload.runId);
-        if (run === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection run not found.");
-        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
-      }
-      case "reflection.judgment.confirm": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Confirming a Judgment Record requires explicit User action.");
-        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
-        let draft = reflectionOutcomes.getJudgment(command.payload.draftId);
-        const run = draft === undefined ? undefined : stateStore.getReflectionRun(draft.runId);
-        if (draft === undefined || run === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Judgment Record confirmation requires an active Reflection dialogue.");
-        reconcileReflectionOutcomeState(run);
-        draft = reflectionOutcomes.getJudgment(command.payload.draftId);
-        if (draft?.status !== "draft") {
-          if (draft?.status === "stale") emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-          return diagnostic(command.correlationId, "HOST_FAILURE", draft?.status === "stale" ? "The Judgment Record draft is stale because relevant evidence or Memory changed. Continue the Reflection and prepare a new draft." : "Judgment Record draft is no longer confirmable.");
-        }
-        if (run.scope === "project") {
-          const project = stateStore.getProject(run.projectId);
-          if (project === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "The Reflection Project is unavailable.");
-          reflectionOutcomes.confirmJudgment(draft.id, project.path, { scope: "project", projectId: project.id, threadId: run.threadId });
-        } else {
-          const thread = stateStore.getThread(run.threadId);
-          if (thread?.scope !== "unscoped" || thread.outputLocation === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Choose an Unscoped Output Location before confirming the Judgment Record.");
-          reflectionOutcomes.confirmJudgment(draft.id, thread.outputLocation, { scope: "unscoped", threadId: run.threadId });
-        }
-        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
-      }
-      case "reflection.outcome.discard": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding a Reflection outcome requires explicit User action.");
-        if (reflectionOutcomes === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcomes are unavailable.");
-        const judgment = reflectionOutcomes.getJudgment(command.payload.draftId);
-        const learning = reflectionOutcomes.getLearningProposal(command.payload.draftId);
-        const runId = judgment?.runId ?? learning?.runId;
-        const run = runId === undefined ? undefined : stateStore.getReflectionRun(runId);
-        if (run === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection outcome context is unavailable.");
-        reflectionOutcomes.discard(command.payload.draftId);
-        return reflectionOutcomesEvent(command.correlationId, run.id, run.threadId);
-      }
-      case "reflection.learning.prepare_patch": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Preparing a Memory patch requires explicit User action.");
-        if (reflectionOutcomes === null || memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Reflection learning is unavailable.");
-        let proposal = reflectionOutcomes.getLearningProposal(command.payload.proposalId);
-        const judgment = reflectionOutcomes.getJudgment(command.payload.judgmentDraftId);
-        if (proposal === undefined || judgment === undefined || proposal.runId !== judgment.runId || judgment.status !== "confirmed") {
-          return diagnostic(command.correlationId, "HOST_FAILURE", "A draft Learning Proposal and confirmed Judgment Record from the same Reflection are required.");
-        }
-        const run = stateStore.getReflectionRun(proposal.runId);
-        if (run === undefined || run.status !== "dialogue_active") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory patch preparation requires an active Reflection dialogue.");
-        reconcileReflectionOutcomeState(run);
-        proposal = reflectionOutcomes.getLearningProposal(command.payload.proposalId);
-        if (proposal?.status !== "draft") {
-          if (proposal?.status === "stale") emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-          return diagnostic(command.correlationId, "HOST_FAILURE", proposal?.status === "stale" ? "The Long-term Learning Proposal is stale because relevant evidence or Memory changed. Continue the Reflection and prepare a new proposal." : "Learning Proposal is no longer available for patch preparation.");
-        }
-        const patch = memoryEvolution.prepare({
-          action: proposal.action,
-          targetEntryIds: proposal.targetEntryIds,
-          proposed: { ...proposal.proposed, sourceReferenceIds: [judgment.sourceReferenceId] },
-          rationale: proposal.rationale,
-          resolutionSignal: { type: run.framing === "retrospective" ? "approved_retrospective" : "approved_reflection", referenceId: judgment.id },
-          provenanceRecords: [{
-            schemaVersion: 1,
-            sourceReferenceId: judgment.sourceReferenceId,
-            scope: run.scope,
-            ...(run.scope === "project" ? { projectId: run.projectId } : {}),
-            workflowType: "reflection",
-            workflowRunId: run.id,
-            judgmentRecordId: judgment.id,
-            threadId: run.threadId,
-            evidenceReferences: judgment.evidenceReferences,
-            availability: judgment.sourceAvailability === "source_unavailable" ? "source_unavailable" : "active",
-            createdAt: judgment.confirmedAt ?? judgment.createdAt
-          }]
-        });
-        reflectionOutcomes.markPatchPrepared(proposal.id, patch.id);
-        emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-        return { ...eventMetadata(command.correlationId, run.threadId), event: "long_term_memory.patch.prepared", payload: { patch } };
       }
       case "project.list":
         return { ...eventMetadata(command.correlationId), event: "projects.listed", payload: { projects: stateStore.listProjects() } };
@@ -1338,7 +1561,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const existed = existsSync(projectMemories.markdownPath(project.path));
         const document = projectMemories.load(project.id, project.path, true)!;
         if (!existed) ownProjectMemoryWrites.set(project.id, document.sourceHash);
-        emit(dreamStateEvent(randomUUID()));
         return { ...eventMetadata(command.correlationId), event: "project.memory.loaded", payload: { document, source: existed ? "load" : "lazy_create" } };
       }
       case "project.memory.save": {
@@ -1347,7 +1569,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const document = projectMemories.save(project.id, project.path, command.payload.content, command.payload.expectedSourceHash);
           ownProjectMemoryWrites.set(project.id, document.sourceHash);
-          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "user_save" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before saving." : "Project Memory could not be saved.");
@@ -1364,7 +1585,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const document = longTermMemories?.refreshIfExists();
         if (document === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Open the Long-term Memory view before refreshing it.");
         startLongTermMemoryWatcher();
-        emit(dreamStateEvent(randomUUID()));
         return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "manual_refresh" } };
       }
       case "long_term_memory.save": {
@@ -1372,7 +1592,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         try {
           const document = longTermMemories.save(command.payload.content, command.payload.expectedSourceHash);
           ownLongTermMemoryWriteHash = document.sourceHash;
-          emit(dreamStateEvent(randomUUID()));
           return { ...eventMetadata(command.correlationId), event: "long_term_memory.updated", payload: { document, source: "user_save" } };
         } catch (error) {
           return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_LONG_TERM_MEMORY_WRITE" ? "Long-term Memory changed externally. Refresh before saving." : "Long-term Memory could not be saved.");
@@ -1383,41 +1602,6 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         const error = await shell.openPath(longTermMemories.rootPath);
         if (error !== "") return diagnostic(command.correlationId, "HOST_FAILURE", "The Long-term Memory folder could not be opened.");
         return { ...eventMetadata(command.correlationId), event: "long_term_memory.folder.opened", payload: { path: longTermMemories.rootPath } };
-      }
-      case "long_term_memory.patch.prepare": {
-        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Evolution is unavailable in read-only recovery.");
-        try {
-          const patch = memoryEvolution.prepare(command.payload);
-          return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.prepared", payload: { patch } };
-        } catch (error) {
-          return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be prepared."));
-        }
-      }
-      case "long_term_memory.patch.commit": {
-        if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory Evolution is unavailable in read-only recovery.");
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Memory changes require explicit User confirmation.");
-        try {
-          const document = memoryEvolution.commit(command.payload.patchId);
-          ownLongTermMemoryWriteHash = document.sourceHash;
-          const proposal = reflectionOutcomes?.markPatchCommitted(command.payload.patchId);
-          if (proposal !== undefined) {
-            const run = stateStore.getReflectionRun(proposal.runId);
-            if (run !== undefined) emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-          }
-          emit(dreamStateEvent(randomUUID()));
-          return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.committed", payload: { patchId: command.payload.patchId, document } };
-        } catch (error) {
-          return diagnostic(command.correlationId, "HOST_FAILURE", memoryEvolutionFailure(error, "Memory patch could not be committed."));
-        }
-      }
-      case "long_term_memory.patch.discard": {
-        if (memoryEvolution === null || !memoryEvolution.discard(command.payload.patchId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory patch is no longer available.");
-        const proposal = reflectionOutcomes?.markPatchDiscarded(command.payload.patchId);
-        if (proposal !== undefined) {
-          const run = stateStore.getReflectionRun(proposal.runId);
-          if (run !== undefined) emit(reflectionOutcomesEvent(command.correlationId, run.id, run.threadId));
-        }
-        return { ...eventMetadata(command.correlationId), event: "long_term_memory.patch.discarded", payload: { patchId: command.payload.patchId } };
       }
       case "long_term_memory.maintenance.load": {
         if (memoryEvolution === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory maintenance is unavailable in read-only recovery.");
@@ -1454,140 +1638,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "memory.candidate.dismiss": {
         const candidate = memoryCandidates?.resolve(command.payload.candidateId, "dismissed");
         if (candidate === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory candidate is no longer active.");
-        synchronizeDreamSchedulingIndex();
         return { ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate } };
-      }
-      case "dream.state.load":
-        return dreamStateEvent(command.correlationId);
-      case "dream.interval.set": {
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
-        dreamReviews.setReviewIntervalDays(command.payload.reviewIntervalDays);
-        return dreamStateEvent(command.correlationId);
-      }
-      case "dream.reminder.defer": {
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream review state is unavailable.");
-        dreamReviews.defer(command.payload.until);
-        return dreamStateEvent(command.correlationId);
-      }
-      case "dream.launch": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream requires explicit User initiation.");
-        if (dreamReviews === null || memoryCandidates === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        const profile = resolveDreamProfile(command.payload.profileId);
-        if (profile === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Configure a Dream Task Model Assignment or choose a Model Profile before launching Dream.");
-        const promptRevision = stateStore.getActiveSystemPromptRevision();
-        if (promptRevision === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "An active System Prompt Revision is required before launching Dream.");
-        synchronizeDreamSchedulingIndex();
-        try {
-          const projectMemoryHashes = currentProjectMemoryHashes();
-          dreamReviews.createBatch({ promptRevision, profile: toDreamProfileSnapshot(profile), trajectory: currentEligibleDreamTrajectory(), candidates: memoryCandidates.list(), projectMemoryHashes });
-          return dreamStateEvent(command.correlationId);
-        } catch (error) {
-          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream batch could not be created.");
-        }
-      }
-      case "dream.resume": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Resuming Dream requires explicit User action.");
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        try { dreamReviews.resume(command.payload.batchId); return dreamStateEvent(command.correlationId); }
-        catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream could not be resumed."); }
-      }
-      case "dream.discard": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding Dream requires explicit User action.");
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        try { dreamReviews.discard(command.payload.batchId); return dreamStateEvent(command.correlationId); }
-        catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream could not be discarded."); }
-      }
-      case "dream.scope.start": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream extraction and retry require explicit User action.");
-        return startDreamScopeExtraction(command.correlationId, command.payload.batchId, command.payload.scopeId);
-      }
-      case "dream.scope.review": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream scope review requires explicit User action.");
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        try {
-          dreamReviews.reviewScope(command.payload.batchId, command.payload.scopeId, command.payload.decision);
-          const reviewedBatch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
-          if (reviewedBatch?.status === "synthesis_pending" && reviewedBatch.synthesis === undefined) {
-            return startDreamGlobalSynthesis(command.correlationId, command.payload.batchId);
-          }
-          return dreamStateEvent(command.correlationId);
-        } catch (error) {
-          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream scope could not be reviewed.");
-        }
-      }
-      case "dream.synthesis.start": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Global Dream Synthesis requires explicit User action.");
-        return startDreamGlobalSynthesis(command.correlationId, command.payload.batchId);
-      }
-      case "dream.proposal.review": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream proposal review requires explicit User action.");
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        try {
-          const reviewedBatch = dreamReviews.reviewSynthesisProposals(command.payload.batchId, [{ proposalId: command.payload.proposalId, decision: command.payload.decision, ...(command.payload.destination === undefined ? {} : { destination: command.payload.destination }) }]);
-          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
-            revalidateDreamSynthesis();
-            dreamCommits.prepare(command.payload.batchId, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
-          }
-          return dreamStateEvent(command.correlationId);
-        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposal could not be reviewed."); }
-      }
-      case "dream.proposal.review_all": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Bulk Dream proposal review requires explicit User action.");
-        if (dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream is unavailable in read-only recovery.");
-        try {
-          const batch = dreamReviews.load().batches.find((item) => item.id === command.payload.batchId);
-          if (batch?.synthesis === undefined) throw new Error("DREAM_SYNTHESIS_NOT_REVIEWABLE");
-          const reviewedBatch = dreamReviews.reviewSynthesisProposals(batch.id, batch.synthesis.proposals.filter((proposal) => proposal.status === "pending").map((proposal) => ({ proposalId: proposal.id, decision: command.payload.decision })));
-          if (reviewedBatch.synthesis?.status === "reviewed" && reviewedBatch.preparedPatch === undefined && dreamCommits !== null) {
-            revalidateDreamSynthesis();
-            dreamCommits.prepare(batch.id, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
-          }
-          return dreamStateEvent(command.correlationId);
-        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream proposals could not be reviewed."); }
-      }
-      case "dream.patch.prepare": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch preparation requires explicit User action.");
-        if (dreamCommits === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch preparation is unavailable.");
-        try {
-          revalidateDreamSynthesis();
-          dreamCommits.prepare(command.payload.batchId, new Map(stateStore.listProjects().map((project) => [project.id, { id: project.id, path: project.path }])));
-          return dreamStateEvent(command.correlationId);
-        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch could not be prepared."); }
-      }
-      case "dream.patch.commit": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Dream Memory commit requires explicit final confirmation.");
-        if (dreamCommits === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch commit is unavailable.");
-        try {
-          revalidateDreamSynthesis();
-          dreamCommits.commit(command.payload.batchId, command.payload.patchId);
-          synchronizeDreamSchedulingIndex();
-          return dreamStateEvent(command.correlationId);
-        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch commit failed without activating changes."); }
-      }
-      case "dream.patch.discard": {
-        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "HOST_FAILURE", "Discarding a Dream patch requires explicit User action.");
-        if (dreamCommits === null || dreamReviews === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Dream patch discard is unavailable.");
-        try {
-          dreamCommits.discard(command.payload.batchId, command.payload.patchId);
-          dreamReviews.discardPreparedPatch(command.payload.batchId, command.payload.patchId);
-          return dreamStateEvent(command.correlationId);
-        } catch (error) { return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error ? error.message : "Dream patch could not be discarded."); }
-      }
-      case "project.memory.append.confirm": {
-        const candidate = memoryCandidates?.list().find((item) => item.id === command.payload.candidateId && item.status === "active");
-        const project = stateStore.getProject(command.payload.projectId);
-        if (candidate === undefined || candidate.scope !== "project" || candidate.projectId !== command.payload.projectId || project === undefined || projectMemories === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Memory candidate is not eligible for this Project.");
-        try {
-          const document = projectMemories.append(project.id, project.path, { title: command.payload.title, tags: command.payload.tags, body: command.payload.body, threadId: candidate.threadId }, command.payload.expectedSourceHash);
-          ownProjectMemoryWrites.set(project.id, document.sourceHash);
-          const resolved = memoryCandidates!.resolve(candidate.id, "promoted")!;
-          synchronizeDreamSchedulingIndex();
-          emit({ ...eventMetadata(command.correlationId, candidate.threadId), event: "memory.candidate.resolved", payload: { candidate: resolved } });
-          emit(dreamStateEvent(randomUUID()));
-          return { ...eventMetadata(command.correlationId), event: "project.memory.updated", payload: { document, source: "confirmed_append" } };
-        } catch (error) {
-          return diagnostic(command.correlationId, "HOST_FAILURE", error instanceof Error && error.message === "STALE_PROJECT_MEMORY_WRITE" ? "Project Memory changed externally. Reload before confirming this draft." : "Project Memory could not be updated.");
-        }
       }
       case "project.output.list": {
         const project = stateStore.getProject(command.payload.projectId);
@@ -1619,6 +1670,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "thread.list":
         return { ...eventMetadata(command.correlationId), event: "threads.listed", payload: { threads: stateStore.listThreads() } };
       case "thread.trajectory.load":
+        if (trajectoryStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread trajectory is unavailable in read-only recovery.");
         if (stateStore.getThread(command.payload.threadId) === undefined) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
         }
@@ -1633,12 +1685,12 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         };
       case "thread.trajectory.delete": {
         if (command.actor.actorType !== "user" || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread history deletion requires explicit User confirmation.");
+        if (trajectoryStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread trajectory is unavailable.");
         if (turnExecution!.isThreadActive(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting its history.");
         if (stateStore.getThread(command.payload.threadId) === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
-        const before = dreamReviews?.load().batches ?? [];
-        const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
+        const affectedBatchIds: string[] = [];
         const removedCandidateIds = memoryCandidates?.removeByThread(command.payload.threadId) ?? [];
-        dreamReviews?.redactThreadSources(command.payload.threadId);
+        cognitionReviewStore?.markThreadSourcesDeleted(command.payload.threadId);
         subAgentRuntime?.deleteForParentThread(command.payload.threadId);
         trajectoryStore.deleteThreadHistory(command.payload.threadId);
         loadedPromptByThread.delete(command.payload.threadId);
@@ -1653,12 +1705,12 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       }
       case "thread.delete": {
         if (command.actor.actorType !== "user" || command.payload.confirmed !== true) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread deletion requires explicit User confirmation.");
+        if (trajectoryStore === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread trajectory is unavailable.");
         if (turnExecution!.isThreadActive(command.payload.threadId)) return diagnostic(command.correlationId, "HOST_FAILURE", "Stop the active Turn before deleting this Thread.");
         if (stateStore.getThread(command.payload.threadId) === undefined) return diagnostic(command.correlationId, "HOST_FAILURE", "Thread not found.");
-        const before = dreamReviews?.load().batches ?? [];
-        const affectedBatchIds = before.filter((batch) => batch.trajectoryInputs.some((item) => item.threadId === command.payload.threadId) || batch.candidateInputs.some((item) => item.threadId === command.payload.threadId) || batch.carryoverInputs.some((item) => item.threadId === command.payload.threadId)).map((batch) => batch.id);
+        const affectedBatchIds: string[] = [];
         const removedCandidateIds = memoryCandidates?.removeByThread(command.payload.threadId) ?? [];
-        dreamReviews?.redactThreadSources(command.payload.threadId);
+        cognitionReviewStore?.markThreadSourcesDeleted(command.payload.threadId);
         subAgentRuntime?.deleteForParentThread(command.payload.threadId);
         workerSupervisor?.discardThread(command.payload.threadId);
         trajectoryStore.deleteThreadHistory(command.payload.threadId);
@@ -1728,6 +1780,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "thread.compact":
         return compactThread(command.correlationId, command.payload.threadId);
       case "turn.stop": {
+        if (inflight === null || workerSupervisor === null) return diagnostic(command.correlationId, "HOST_FAILURE", "Turn execution is unavailable in read-only recovery.");
         const context = turnExecution!.getTurn(command.payload.turnId);
         if (context === undefined || context.threadId !== command.payload.threadId) {
           return diagnostic(command.correlationId, "HOST_FAILURE", "The requested Turn is not active.");
@@ -1810,6 +1863,7 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
       case "capability.confirmation.resolve":
         return resolveCapabilityConfirmation(command.correlationId, command.payload.requestId, command.payload.approved);
     }
+    return diagnostic(correlationId, "INVALID_COMMAND", "The Host does not recognize this command.");
   } catch {
     return diagnostic(correlationId, "HOST_FAILURE", "The local Host could not complete the command.");
   }
@@ -1902,12 +1956,17 @@ async function startProjectReflection(correlationId: string, input: { projectId:
     materials: stateStore!.listMaterials(project.id),
     outputs: projectOutputs.list(project.id, project.path)
   });
-  const assignment = stateStore!.getTaskModelAssignment("independent_evidence");
-  const effectiveProfileId = input.profileId ?? assignment?.profileId;
+  // The intent-level Reflection assignment is the sole profile authority for
+  // both isolated stages.  Keep the legacy payload field for wire
+  // compatibility, but never let a per-launch selector replace the frozen
+  // assignment.
+  const assignment = stateStore!.getTaskModelAssignment("reflection");
+  const effectiveProfileId = assignment?.profileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   if (effectiveProfileId !== undefined && profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence Profile is unavailable.");
   const framing = reflectionFraming(input.focus ?? "");
-  const run = stateStore!.createReflectionRun({
+  if (reflectionRuns === null) return diagnostic(correlationId, "HOST_FAILURE", "Reflection runs are unavailable.");
+  const run = reflectionRuns.create({
     scope: "project",
     projectId: project.id,
     framing,
@@ -1915,29 +1974,36 @@ async function startProjectReflection(correlationId: string, input: { projectId:
     ...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
     brief,
     promptRevision,
-    ...(profile === undefined ? {} : { independentProfileId: profile.id }),
-    ...(input.profileId === undefined ? {} : { launchOverrideProfileId: input.profileId })
+    ...(profile === undefined ? {} : { independentProfileId: profile.id })
   });
   if (profile !== undefined) stateStore!.authorizeProjectProfile(project.id, profile.id, profile.provider);
   const thread = stateStore!.getThread(run.threadId);
   if (thread?.scope !== "project") throw new Error("Reflection Thread was not created");
-  return { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+  const created: HostEvent = { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+  // A configured Reflection Profile is the complete launch authorization.  Do
+  // not borrow the current Thread Profile or wait for a second stage action.
+  if (reflectionLaunchTransition({ profileId: profile?.id }).action === "start_independent") {
+    emit(created);
+    return startIndependentAssessment(correlationId, run.id);
+  }
+  return created;
 }
 
 async function startUnscopedReflection(correlationId: string, input: { threadId: string; focus?: string | undefined; profileId?: string | undefined }): Promise<HostEvent> {
   const sourceThread = stateStore!.getThread(input.threadId);
   const promptRevision = stateStore!.getActiveSystemPromptRevision();
-  if (sourceThread?.scope !== "unscoped" || promptRevision === undefined || stateStore!.getReflectionRunByThread(sourceThread.id) !== undefined) {
+  if (sourceThread?.scope !== "unscoped" || promptRevision === undefined || reflectionRuns?.getByThread(sourceThread.id) !== undefined) {
     return diagnostic(correlationId, "HOST_FAILURE", "An ordinary Unscoped task and System Prompt are required.");
   }
   const userInputs = trajectoryStore!.loadEvents(sourceThread.id).flatMap((event) => event.event === "turn.submitted" ? [{ turnId: event.turnId, text: event.payload.text }] : []);
   const brief = buildReflectionUnscopedBrief({ sourceThreadId: sourceThread.id, userInputs });
-  const assignment = stateStore!.getTaskModelAssignment("independent_evidence");
-  const effectiveProfileId = input.profileId ?? assignment?.profileId;
+  const assignment = stateStore!.getTaskModelAssignment("reflection");
+  const effectiveProfileId = assignment?.profileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   if (effectiveProfileId !== undefined && profile === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence Profile is unavailable.");
   const framing = reflectionFraming(`${input.focus ?? ""} ${userInputs.map((item) => item.text).join(" ")}`);
-  const run = stateStore!.createReflectionRun({
+  if (reflectionRuns === null) return diagnostic(correlationId, "HOST_FAILURE", "Reflection runs are unavailable.");
+  const run = reflectionRuns.create({
     scope: "unscoped",
     sourceThreadId: sourceThread.id,
     framing,
@@ -1945,22 +2011,29 @@ async function startUnscopedReflection(correlationId: string, input: { threadId:
     ...(input.focus?.trim() ? { focus: input.focus.trim() } : {}),
     brief,
     promptRevision,
-    ...(profile === undefined ? {} : { independentProfileId: profile.id }),
-    ...(input.profileId === undefined ? {} : { launchOverrideProfileId: input.profileId })
+    ...(profile === undefined ? {} : { independentProfileId: profile.id })
   });
   const thread = stateStore!.getThread(run.threadId);
   if (thread?.scope !== "unscoped") throw new Error("Unscoped Reflection task was not created");
-  return { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+  const created: HostEvent = { ...eventMetadata(correlationId, thread.id), event: "reflection.run.created", payload: { run, thread } };
+  if (reflectionLaunchTransition({ profileId: profile?.id }).action === "start_independent") {
+    emit(created);
+    return startIndependentAssessment(correlationId, run.id);
+  }
+  return created;
 }
 
 async function startIndependentAssessment(correlationId: string, runId: string, profileId?: string): Promise<HostEvent> {
-  let run = stateStore!.getReflectionRun(runId);
+  // `profileId` is retained for legacy command compatibility only.  A
+  // Reflection run always executes the profile frozen at its launch.
+  void profileId;
+  if (reflectionRuns === null) return diagnostic(correlationId, "HOST_FAILURE", "Reflection runs are unavailable.");
+  let run = reflectionRuns.get(runId);
   if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
   if (run.status === "independent_completed" || run.status === "independent_running") {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   }
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Independent Evidence Pass");
-  if (profileId !== undefined) run = stateStore!.selectReflectionProfile(run.id, profileId, true);
   const profile = run.independentProfileId === undefined ? undefined : stateStore!.getModelProfile(run.independentProfileId);
   if (profile === undefined) {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
@@ -1974,10 +2047,10 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) return diagnostic(correlationId, "HOST_FAILURE", "The selected Independent Evidence credential is unavailable.");
   const turnId = randomUUID();
-  const admission = executionScheduler!.admit({ id: turnId, scopeKey: run.threadId, kind: "independent_evidence" });
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: run.threadId, kind: "internal_model_stage" });
   if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Independent Evidence Pass");
   if (run.scope === "project") stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
-  run = stateStore!.markReflectionRunning(run.id);
+  run = reflectionRuns.markIndependentRunning(run.id);
   const activeCapabilities = run.scope === "project" ? ["material_recall"] : ["web_search", "web_fetch"];
   const context: ReflectionExecutionContext = {
     correlationId,
@@ -2022,7 +2095,7 @@ async function startIndependentAssessment(correlationId: string, runId: string, 
 
 function stopIndependentAssessment(correlationId: string, runId: string): HostEvent {
   const context = turnExecution!.findReflection(runId);
-  const run = stateStore!.getReflectionRun(runId);
+  const run = reflectionRuns?.get(runId);
   if (run === undefined) return diagnostic(correlationId, "HOST_FAILURE", "Reflection run not found.");
   if (context !== undefined) {
     workerSupervisor?.stop({ schemaVersion: 1, command: "turn.stop", commandId: randomUUID(), correlationId: context.correlationId, threadId: context.threadId, turnId: context.turnId });
@@ -2031,21 +2104,27 @@ function stopIndependentAssessment(correlationId: string, runId: string): HostEv
 }
 
 function startMemoryAwareReflection(correlationId: string, runId: string, profileId?: string): HostEvent {
-  let run = stateStore!.getReflectionRun(runId);
+  // The second stage cannot select a stage-specific or current-Thread
+  // fallback.  The optional argument remains only for legacy command shape.
+  void profileId;
+  if (reflectionRuns === null) return diagnostic(correlationId, "HOST_FAILURE", "Reflection runs are unavailable.");
+  let run = reflectionRuns.get(runId);
   if (run === undefined || run.assessment === undefined) return diagnostic(correlationId, "HOST_FAILURE", "A completed Independent Assessment is required.");
   const assessment = run.assessment;
   if (run.status === "dialogue_active" || run.status === "memory_aware_running") {
     return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   }
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Memory-Aware Reflection");
-  const effectiveProfileId = profileId ?? stateStore!.getTaskModelAssignment("memory_aware_reflection")?.profileId ?? run.memoryAwareProfileId;
+  // New launches freeze one Reflection Profile for both isolated stages and
+  // never fall back to a current-Thread or stage assignment.
+  const effectiveProfileId = run.independentProfileId;
   const profile = effectiveProfileId === undefined ? undefined : stateStore!.getModelProfile(effectiveProfileId);
   if (profile === undefined) return { ...eventMetadata(correlationId, run.threadId), event: "reflection.run.updated", payload: { run } };
   const thread = stateStore!.getThread(run.threadId);
   const promptRevision = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
   if (thread === undefined || thread.scope !== run.scope || promptRevision?.hash !== run.promptSnapshot.hash) return diagnostic(correlationId, "HOST_FAILURE", "The frozen Reflection scope or Prompt Snapshot is unavailable.");
   const turnId = randomUUID();
-  run = stateStore!.startMemoryAwareReflection(run.id, profile.id, turnId);
+  run = reflectionRuns.startMemoryAware(run.id, profile.id, turnId);
   if (run.scope === "project") stateStore!.authorizeProjectProfile(run.projectId, profile.id, profile.provider);
   loadedPromptByThread.set(run.threadId, promptRevision);
   emitReflectionRun(correlationId, run);
@@ -2104,7 +2183,6 @@ function startMaterialWatcher(projectId: string): void {
             if (document === undefined) return;
             if (ownProjectMemoryWrites.get(projectId) === document.sourceHash) { ownProjectMemoryWrites.delete(projectId); return; }
             emit({ ...eventMetadata(randomUUID()), event: "project.memory.updated", payload: { document, source: "external_edit" } });
-            emit(dreamStateEvent(randomUUID()));
           } catch { /* The next stable write or explicit load retries index rebuild. */ }
         }, 750);
       }
@@ -2135,7 +2213,6 @@ function startLongTermMemoryWatcher(): void {
             return;
           }
           emit({ ...eventMetadata(randomUUID()), event: "long_term_memory.updated", payload: { document, source: "external_edit" } });
-          emit(dreamStateEvent(randomUUID()));
         } catch {
           // Manual refresh retries deterministic parsing after an unstable external write.
         }
@@ -2332,7 +2409,7 @@ function submitTurn(
     return diagnostic(correlationId, "HOST_FAILURE", "This Thread already has an active Turn.");
   }
   if (!executionScheduler!.hasCapacity()) return executionCapacityDiagnostic(correlationId, "Turn");
-  const reflectionRun = options.reflectionRun ?? stateStore!.getReflectionRunByThread(input.threadId);
+  const reflectionRun = options.reflectionRun ?? reflectionRuns?.getByThread(input.threadId);
   if (reflectionRun !== undefined && options.reflectionRun === undefined && reflectionRun.status !== "dialogue_active") return diagnostic(correlationId, "HOST_FAILURE", "Complete or explicitly resume the Reflection workflow before continuing its dialogue.");
   const fileDownloadIntent = reflectionRun === undefined && detectFileDownloadIntent(input.text);
   const arxivFulltextIntent = reflectionRun === undefined && detectArxivFulltextIntent(input.text);
@@ -2437,7 +2514,6 @@ function submitTurn(
       preloadHintCount: preloadHints.length
     }
   };
-  const dreamEligibility = reflectionRun?.status === "dialogue_active" ? detectReflectionDreamEligibility(input.text) : undefined;
   const submitted: TrajectoryEvent = {
     ...trajectoryMetadata(correlationId, input.threadId, turnId, USER_ACTOR, USER_PROVENANCE),
     event: "turn.submitted",
@@ -2445,16 +2521,15 @@ function submitTurn(
       text: input.text,
       idempotencyKey: randomUUID(),
       ...(input.retryOfTurnId === undefined ? {} : { retryOfTurnId: input.retryOfTurnId }),
-      ...(dreamEligibility === undefined ? {} : { dreamEligibility }),
       ...(profile === undefined ? {} : { profile: toTrajectoryProfile(profile) }),
       prompt: promptTelemetry
     }
   };
   trajectoryStore!.append(submitted);
-  const memorySignal = dreamEligibility === undefined ? detectMemoryCandidateSignal(input.text) : `reflection_${dreamEligibility.signal}` as const;
+  if (reflectionRun === undefined) automaticReviewUserWorkCompletedInAppRun = true;
+  const memorySignal = detectMemoryCandidateSignal(input.text);
   if (memorySignal !== undefined && input.retryOfTurnId === undefined && memoryCandidates !== null && options.skipMemoryCandidate !== true) {
     const candidate = memoryCandidates.capture({ scope: thread.scope, ...(thread.scope === "project" ? { projectId: thread.projectId } : {}), threadId: thread.id, turnId, sourceSnippet: input.text.slice(0, 2_000), sourceKind: reflectionRun?.status === "dialogue_active" ? "reflection_dialogue" : "ordinary_user_signal", signal: memorySignal });
-    synchronizeDreamSchedulingIndex();
     emit({ ...eventMetadata(correlationId, thread.id), event: "memory.candidate.captured", payload: { candidate } });
   }
 
@@ -2514,7 +2589,7 @@ function submitTurn(
 
   const encrypted = stateStore!.getEncryptedCredential(profile.credentialRef);
   if (encrypted === undefined) throw new Error("Credential reference is unavailable");
-  const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "memory_aware_reflection" : "ordinary_turn" });
+  const admission = executionScheduler!.admit({ id: turnId, scopeKey: input.threadId, kind: options.reflectionRun?.status === "memory_aware_running" ? "internal_model_stage" : "ordinary_turn" });
   if (!admission.admitted) return executionCapacityDiagnostic(correlationId, "Turn");
   const context: TurnContext = {
     correlationId,
@@ -2611,13 +2686,21 @@ function executionQueueEvent(correlationId: string): HostEvent {
 }
 
 function executionSchedulerTelemetry() {
-  return executionScheduler!.telemetry();
+  return executionScheduler?.telemetry() ?? {
+    capacity: EXECUTION_CAPACITY,
+    runningCount: 0,
+    queuedCount: 0,
+    draftCount: 0,
+    averageQueueDelayMs: 0,
+    longestRunningMs: 0,
+    failureCount: 0
+  };
 }
 
 function submitOrQueueTurn(correlationId: string, input: { threadId: string; text: string; retryOfTurnId?: string | undefined }): HostEvent {
   const thread = stateStore!.getThread(input.threadId);
   if (thread === undefined) throw new Error("Thread not found");
-  const reflection = stateStore!.getReflectionRunByThread(thread.id);
+  const reflection = reflectionRuns?.getByThread(thread.id);
   const requestedProfileId = reflection?.memoryAwareProfileId ?? thread.activeProfileId;
   if (requestedProfileId === undefined || (reflection !== undefined && reflection.status !== "dialogue_active")) return submitTurn(correlationId, input);
   const reason = turnExecution!.isThreadActive(thread.id) ? "thread_active" as const : !executionScheduler!.hasCapacity() ? "capacity" as const : undefined;
@@ -2640,7 +2723,7 @@ function drainExecutionQueue(correlationId: string = randomUUID()): void {
       if (candidate.status !== "queued" || turnExecution!.isThreadActive(candidate.threadId)) return false;
       const candidateThread = stateStore!.getThread(candidate.threadId);
       if (candidateThread === undefined) return true;
-      const effectiveProfileId = stateStore!.getReflectionRunByThread(candidateThread.id)?.memoryAwareProfileId ?? candidateThread.activeProfileId;
+      const effectiveProfileId = reflectionRuns?.getByThread(candidateThread.id)?.memoryAwareProfileId ?? candidateThread.activeProfileId;
       return candidate.requestedProfileId === undefined || candidate.requestedProfileId === effectiveProfileId;
     });
     if (item === undefined) break;
@@ -2649,7 +2732,7 @@ function drainExecutionQueue(correlationId: string = randomUUID()): void {
       stateStore.cancelExecutionQueueItem(item.id);
       continue;
     }
-    const effectiveProfileId = stateStore.getReflectionRunByThread(thread.id)?.memoryAwareProfileId ?? thread.activeProfileId;
+    const effectiveProfileId = reflectionRuns?.getByThread(thread.id)?.memoryAwareProfileId ?? thread.activeProfileId;
     if (item.requestedProfileId !== undefined && effectiveProfileId !== item.requestedProfileId) break;
     stateStore.cancelExecutionQueueItem(item.id);
     // Remove the admitted item from the renderer before publishing the new Turn.
@@ -2751,16 +2834,13 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     stateStore?.acknowledgePhysicalContext(workerEvent.threadId, workerEvent.eventId, workerEvent.sequence);
     return;
   }
+  const memoryReviewStage = memoryReviewWorkerStages.get(workerEvent.turnId);
+  if (memoryReviewStage !== undefined) {
+    handleMemoryReviewWorkerEvent(workerEvent, memoryReviewStage);
+    return;
+  }
   const execution = turnExecution?.route(workerEvent.turnId);
   if (execution === undefined) return;
-  if (execution.kind === "dream_synthesis") {
-    handleDreamSynthesisWorkerEvent(execution.context, workerEvent);
-    return;
-  }
-  if (execution.kind === "dream") {
-    handleDreamWorkerEvent(execution.context, workerEvent);
-    return;
-  }
   if (execution.kind === "reflection") {
     void handleReflectionWorkerEvent(execution.context, workerEvent);
     return;
@@ -2800,7 +2880,6 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
       payload
     };
     trajectoryStore!.append(record);
-    synchronizeDreamSchedulingIndex();
     if (workerEvent.event === "thread.compaction.completed") loadedPromptByThread.delete(context.threadId);
     if (workerEvent.event === "thread.compaction.completed") acknowledgeTrajectory(context, record);
     emit({ ...ipcMetadata(record), event: workerEvent.event, payload: { threadId: context.threadId, turnId: context.turnId, ...payload } });
@@ -2872,12 +2951,13 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
     };
     trajectoryStore!.append(record);
     if (context.reflectionRunId !== undefined) {
-      const run = stateStore!.getReflectionRun(context.reflectionRunId);
-      if (run?.status === "memory_aware_running" && run.memoryInitialTurnId === context.turnId) emitReflectionRun(context.correlationId, stateStore!.activateReflectionDialogue(run.id));
+      const run = reflectionRuns?.get(context.reflectionRunId);
+      if (run?.status === "memory_aware_running" && run.memoryInitialTurnId === context.turnId && reflectionRuns !== null) emitReflectionRun(context.correlationId, reflectionRuns.activateDialogue(run.id));
     }
     finishTurn(context);
     acknowledgeTrajectory(context, record);
     emit({ ...ipcMetadata(record), event: "turn.completed", payload: { threadId: context.threadId, turnId: context.turnId, message: formattedMessage.message, profile: context.profile, usage: workerEvent.usage, citations: formattedMessage.citations, ...(workerEvent.contextUsage === undefined ? {} : { contextUsage: workerEvent.contextUsage }), latencyMs, recalledStateEstimatedTokens, ...(workerEvent.responseId === undefined ? {} : { responseId: workerEvent.responseId }) } });
+    if (context.reflectionRunId === undefined) maybeStartAutomaticMemoryReview(context.correlationId);
     return;
   }
 
@@ -2921,97 +3001,12 @@ function handleWorkerEvent(workerEvent: WorkerEvent): void {
   };
   trajectoryStore!.append(record);
   if (context.reflectionRunId !== undefined) {
-    const run = stateStore!.getReflectionRun(context.reflectionRunId);
-    if (run?.status === "memory_aware_running") emitReflectionRun(context.correlationId, stateStore!.failMemoryAwareReflection(run.id, workerEvent.failure));
+    const run = reflectionRuns?.get(context.reflectionRunId);
+    if (run?.status === "memory_aware_running" && reflectionRuns !== null) emitReflectionRun(context.correlationId, reflectionRuns.failMemoryAware(run.id, workerEvent.failure));
   }
   finishTurn(context);
   acknowledgeTrajectory(context, record);
   emit({ ...ipcMetadata(record), event: "turn.failed", payload: { threadId: context.threadId, turnId: context.turnId, text: context.text, ...(context.retryOfTurnId === undefined ? {} : { retryOfTurnId: context.retryOfTurnId }), profile: context.profile, failure: workerEvent.failure } });
-}
-
-function handleDreamSynthesisWorkerEvent(context: DreamSynthesisExecutionContext, workerEvent: WorkerEvent): void {
-  if (workerEvent.event === "capability.execution.requested") {
-    workerSupervisor?.resolveCapability({ schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId, threadId: context.executionThreadId, turnId: context.turnId, result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "DREAM_SYNTHESIS_CAPABILITY_NOT_ALLOWED", content: "Global Dream Synthesis receives only approved de-identified summaries and cannot use tools." } });
-    return;
-  }
-  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
-  if (workerEvent.event === "turn.completed") {
-    try {
-      const batch = dreamReviews!.load().batches.find((item) => item.id === context.batchId);
-      if (batch === undefined) throw new Error("DREAM_BATCH_NOT_FOUND");
-      const synthesis = parseDreamGlobalSynthesis(workerEvent.message, batch, context.input, context.forbiddenTerms);
-      dreamReviews!.completeSynthesis(context.batchId, synthesis);
-      finishDreamSynthesisExecution(context);
-      emit(dreamStateEvent(context.correlationId));
-    } catch {
-      failDreamSynthesisExecution(context, { kind: "worker", code: "INVALID_DREAM_SYNTHESIS_RESULT", message: "The model response did not match the de-identified Global Dream Synthesis contract.", provider: context.profile.provider, model: context.profile.model });
-    }
-    return;
-  }
-  if (workerEvent.event === "turn.interrupted") {
-    failDreamSynthesisExecution(context, { kind: "worker", code: "DREAM_SYNTHESIS_INTERRUPTED", message: "Global Dream Synthesis was interrupted and requires explicit retry.", provider: context.profile.provider, model: context.profile.model });
-    return;
-  }
-  if (workerEvent.event === "turn.failed") failDreamSynthesisExecution(context, workerEvent.failure);
-}
-
-function failDreamSynthesisExecution(context: DreamSynthesisExecutionContext, failure: ProviderFailure): void {
-  if (!turnExecution!.isActive({ kind: "dream_synthesis", context })) return;
-  executionScheduler!.recordFailure();
-  try { dreamReviews?.failSynthesis(context.batchId, failure); }
-  finally { finishDreamSynthesisExecution(context); emit(dreamStateEvent(context.correlationId)); }
-}
-
-function finishDreamSynthesisExecution(context: DreamSynthesisExecutionContext): void {
-  turnExecution?.finish({ kind: "dream_synthesis", context });
-  executionScheduler?.release(context.turnId);
-  workerSupervisor?.retire(context.executionThreadId);
-  queueMicrotask(() => drainExecutionQueue());
-}
-
-function handleDreamWorkerEvent(context: DreamExecutionContext, workerEvent: WorkerEvent): void {
-  if (workerEvent.event === "capability.execution.requested") {
-    workerSupervisor?.resolveCapability({
-      schemaVersion: 1, command: "capability.execution.resolve", commandId: randomUUID(), correlationId: context.correlationId,
-      threadId: context.executionThreadId, turnId: context.turnId,
-      result: { schemaVersion: 1, requestId: workerEvent.request.requestId, status: "rejected", code: "DREAM_EXTRACTION_CAPABILITY_NOT_ALLOWED", content: "Dream extraction receives only its frozen scope-local input and cannot use tools." }
-    });
-    return;
-  }
-  if (workerEvent.event === "physical_context.ready" || workerEvent.event === "turn.started" || workerEvent.event === "message.delta" || workerEvent.event === "thinking.delta" || workerEvent.event.startsWith("thread.compaction.")) return;
-  if (workerEvent.event === "turn.completed") {
-    try {
-      const result = parseDreamScopeSummary(workerEvent.message, context.scope, context.allowedSourceReferences);
-      dreamReviews!.completeScope(context.batchId, context.scope.id, result);
-      finishDreamExecution(context);
-      emit(dreamStateEvent(context.correlationId));
-    } catch {
-      failDreamExecution(context, { kind: "worker", code: "INVALID_DREAM_SCOPE_RESULT", message: "The model response did not match the bounded, de-identified Dream scope contract.", provider: context.profile.provider, model: context.profile.model });
-    }
-    return;
-  }
-  if (workerEvent.event === "turn.interrupted") {
-    failDreamExecution(context, { kind: "worker", code: "DREAM_SCOPE_INTERRUPTED", message: "Dream scope extraction was interrupted and remains Pending for explicit retry.", provider: context.profile.provider, model: context.profile.model });
-    return;
-  }
-  if (workerEvent.event === "turn.failed") failDreamExecution(context, workerEvent.failure);
-}
-
-function failDreamExecution(context: DreamExecutionContext, failure: ProviderFailure): void {
-  if (!turnExecution!.isActive({ kind: "dream", context })) return;
-  executionScheduler!.recordFailure();
-  try { dreamReviews?.failScope(context.batchId, context.scope.id, failure); }
-  finally {
-    finishDreamExecution(context);
-    emit(dreamStateEvent(context.correlationId));
-  }
-}
-
-function finishDreamExecution(context: DreamExecutionContext): void {
-  turnExecution?.finish({ kind: "dream", context });
-  executionScheduler?.release(context.turnId);
-  workerSupervisor?.retire(context.executionThreadId);
-  queueMicrotask(() => drainExecutionQueue());
 }
 
 async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, workerEvent: WorkerEvent): Promise<void> {
@@ -3047,7 +3042,8 @@ async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, 
     return;
   }
   if (workerEvent.event === "physical_context.ready") {
-    const run = stateStore!.setReflectionSession(context.runId, workerEvent.sessionFile);
+    if (reflectionRuns === null) return;
+    const run = reflectionRuns.setSessionFile(context.runId, workerEvent.sessionFile);
     emitReflectionRun(context.correlationId, run);
     return;
   }
@@ -3055,9 +3051,33 @@ async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, 
   if (workerEvent.event === "turn.completed") {
     try {
       const assessment = parseIndependentAssessment(workerEvent.message);
-      const run = stateStore!.completeIndependentAssessment(context.runId, assessment);
+      if (reflectionRuns === null) return;
+      const run = reflectionRuns.completeIndependent(context.runId, assessment);
       finishReflectionExecution(context);
       emitReflectionRun(context.correlationId, run);
+      const promptSnapshot = stateStore!.getSystemPromptRevision(run.promptSnapshot.revisionId);
+      const transition = reflectionCompletionTransition({
+        status: run.status,
+        independentProfileId: run.independentProfileId,
+        assessmentAvailable: run.assessment !== undefined,
+        frozenBriefAvailable: run.brief !== undefined,
+        frozenPromptSnapshotAvailable: promptSnapshot?.hash === run.promptSnapshot.hash
+      });
+      if (transition.action === "start_memory_aware") {
+        try {
+          // finishReflectionExecution above releases the Independent Evidence
+          // lease and retires its Worker before this new isolated context is
+          // admitted.  The handoff prompt is rebuilt from only the frozen
+          // brief and bounded assessment; no Independent session/history is
+          // passed to submitTurn.
+          const started = startMemoryAwareReflection(context.correlationId, run.id, transition.profileId);
+          if (started.event !== "reflection.run.updated") emit(started);
+        } catch {
+          // The completed assessment remains resumable and visible.  A local
+          // start failure never retries or silently chooses another Profile.
+          emit(diagnostic(context.correlationId, "HOST_FAILURE", "Memory-Aware Reflection could not start automatically."));
+        }
+      }
     } catch {
       failReflectionExecution(context, {
         kind: "worker", code: "INVALID_INDEPENDENT_ASSESSMENT", message: "The model response did not match the bounded Independent Assessment contract.", provider: context.profile.provider, model: context.profile.model
@@ -3066,7 +3086,8 @@ async function handleReflectionWorkerEvent(context: ReflectionExecutionContext, 
     return;
   }
   if (workerEvent.event === "turn.interrupted") {
-    const run = stateStore!.interruptIndependentAssessment(context.runId);
+    if (reflectionRuns === null) return;
+    const run = reflectionRuns.interruptIndependent(context.runId);
     finishReflectionExecution(context);
     emitReflectionRun(context.correlationId, run);
     return;
@@ -3084,9 +3105,10 @@ function resolveReflectionCapability(context: ReflectionExecutionContext, result
 function failReflectionExecution(context: ReflectionExecutionContext, failure: ProviderFailure): void {
   if (!turnExecution!.isActive({ kind: "reflection", context })) return;
   executionScheduler!.recordFailure();
-  const current = stateStore!.getReflectionRun(context.runId);
+  if (reflectionRuns === null) return;
+  const current = reflectionRuns.get(context.runId);
   if (current?.status !== "independent_running") return;
-  const run = stateStore!.failIndependentAssessment(context.runId, failure);
+  const run = reflectionRuns.failIndependent(context.runId, failure);
   finishReflectionExecution(context);
   emitReflectionRun(context.correlationId, run);
 }
@@ -3565,8 +3587,8 @@ function interruptTurn(
   };
   trajectoryStore!.append(record);
   if (context.reflectionRunId !== undefined) {
-    const run = stateStore!.getReflectionRun(context.reflectionRunId);
-    if (run?.status === "memory_aware_running") emitReflectionRun(context.correlationId, stateStore!.interruptMemoryAwareReflection(run.id));
+    const run = reflectionRuns?.get(context.reflectionRunId);
+    if (run?.status === "memory_aware_running" && reflectionRuns !== null) emitReflectionRun(context.correlationId, reflectionRuns.interruptMemoryAware(run.id));
   }
   if (reason === "user_stop") stateStore!.pauseThreadExecutionQueue(context.threadId);
   if (reason === "worker_exit") executionScheduler!.recordFailure();
@@ -3641,13 +3663,6 @@ function detectReflectionOutcomeIntent(text: string): boolean {
   return requestsPreparation && namesOutcome;
 }
 
-function reflectionOutcomesEvent(correlationId: string, runId: string, threadId: string): HostEvent {
-  if (reflectionOutcomes === null) throw new Error("Reflection outcomes are unavailable.");
-  const run = stateStore?.getReflectionRun(runId);
-  const outcomes = run === undefined ? reflectionOutcomes.list(runId) : reconcileReflectionOutcomeState(run);
-  return { ...eventMetadata(correlationId, threadId), event: "reflection.outcomes.updated", payload: { runId, ...outcomes } };
-}
-
 function reflectionOutcomeDependencies(run: ReflectionRun, input: ReflectionOutcomeProposalInput) {
   const recalled = recalledReflectionMemoryIds(run.threadId);
   return captureReflectionDependencies({
@@ -3661,19 +3676,90 @@ function reflectionOutcomeDependencies(run: ReflectionRun, input: ReflectionOutc
   });
 }
 
+/**
+ * Convert the legacy Reflection outcome projection into the one Cognition
+ * Review Module input.  The conversion is Host-owned: the Renderer never
+ * chooses a destination path, scope, dependency hash, or Memory action.
+ */
+function prepareReflectionCognitionBundle(run: ReflectionRun): ReviewBundle | undefined {
+  if (cognitionReviews === null || cognitionReviewStore === null || reflectionDrafts === null) return undefined;
+  const existing = cognitionReviewStore.listReviewBundles().find((bundle) => bundle.kind === "reflection" && bundle.judgment !== undefined && bundle.judgment.id === reflectionDrafts!.list(run.id).judgments.at(-1)?.id && ["analysis_completed", "waiting_for_review", "reviewing", "prepared"].includes(bundle.status));
+  if (existing !== undefined) {
+    reflectionReviewRuns.set(existing.id, run.id);
+    return existing;
+  }
+  const outcomes = reconcileReflectionOutcomeState(run);
+  const judgment = [...outcomes.judgments].reverse().find((draft) => draft.status === "draft");
+  if (judgment === undefined) return undefined;
+  const proposals = outcomes.learningProposals.filter((proposal) => proposal.status === "draft").map((proposal) => toCognitionLearningProposal(run, judgment, proposal));
+  const dependencies = cognitionDependencies(run, judgment, outcomes.learningProposals);
+  const input: ReflectionReviewInput = {
+    kind: "reflection",
+    judgment: {
+      id: judgment.id,
+      title: "Investment Judgment",
+      judgment: judgment.view,
+      rationale: judgment.reasoning,
+      uncertainty: judgment.uncertainties,
+      evidenceReferences: judgment.evidenceReferences,
+      createdAt: judgment.createdAt
+    },
+    proposals,
+    dependencies
+  };
+  const bundle = cognitionReviews.prepare(input);
+  reflectionReviewRuns.set(bundle.id, run.id);
+  return bundle;
+}
+
+function reflectionRunForReview(reviewId: string): ReflectionRun | undefined {
+  const mapped = reflectionReviewRuns.get(reviewId);
+  if (mapped !== undefined) return reflectionRuns?.get(mapped);
+  const bundle = cognitionReviewStore?.loadReviewBundle(reviewId);
+  const judgmentId = bundle?.judgment?.id;
+  if (judgmentId === undefined || reflectionRuns === null || reflectionDrafts === null) return undefined;
+  const run = reflectionRuns.list().find((candidate) => reflectionDrafts!.list(candidate.id).judgments.some((draft) => draft.id === judgmentId));
+  if (run !== undefined) reflectionReviewRuns.set(reviewId, run.id);
+  return run;
+}
+
+function toCognitionLearningProposal(run: ReflectionRun, judgment: JudgmentRecordDraft, proposal: LongTermLearningProposal): LearningProposal {
+  return {
+    id: proposal.id,
+    title: proposal.proposed.title,
+    content: proposal.proposed.content,
+    applicability: proposal.proposed.applicability,
+    limitations: proposal.proposed.limitations,
+    destination: "long_term_memory",
+    action: proposal.action,
+    sourceReferences: [judgment.sourceReferenceId, ...judgment.evidenceReferences].slice(0, 100),
+    targetEntryIds: proposal.targetEntryIds,
+    ...(run.scope === "project" ? { projectId: run.projectId } : {})
+  };
+}
+
+function cognitionDependencies(run: ReflectionRun, judgment: JudgmentRecordDraft, proposals: readonly LongTermLearningProposal[]): CognitionDependency[] {
+  const dependencies: CognitionDependency[] = [{ kind: "source", reference: judgment.sourceReferenceId, hash: `reflection:${run.id}`, required: true }];
+  for (const dependency of [...judgment.dependencies, ...proposals.flatMap((proposal) => proposal.dependencies)]) {
+    const kind = dependency.kind === "material" ? "material" : dependency.kind === "project_memory" ? "project_memory" : "long_term_memory";
+    const reference = `${dependency.kind}:${dependency.targetId}:${dependency.referenceId}`;
+    if (!dependencies.some((candidate) => candidate.kind === kind && candidate.reference === reference)) dependencies.push({ kind, reference, hash: dependency.contentVersion, required: true });
+  }
+  return dependencies;
+}
+
 function reconcileReflectionOutcomeState(run: ReflectionRun) {
-  if (reflectionOutcomes === null) throw new Error("Reflection outcomes are unavailable.");
-  let outcomes = reflectionOutcomes.list(run.id);
+  if (reflectionDrafts === null) throw new Error("Reflection drafts are unavailable.");
+  let outcomes = reflectionDrafts.list(run.id);
   if (stateStore?.isReadOnlyRecovery === true) return outcomes;
   const state = reflectionDependencyState(run);
   for (const outcome of [...outcomes.judgments, ...outcomes.learningProposals]) {
-    if (!["draft", "patch_prepared"].includes(outcome.status)) continue;
+    if (outcome.status !== "draft") continue;
     const reasons = staleReflectionDependencies(outcome.dependencies, state);
     if (reasons.length === 0) continue;
-    if ("preparedPatchId" in outcome && outcome.preparedPatchId !== undefined) memoryEvolution?.discard(outcome.preparedPatchId);
-    reflectionOutcomes.markStale(outcome.id, reasons);
+    reflectionDrafts.markStale(outcome.id, reasons);
   }
-  outcomes = reflectionOutcomes.list(run.id);
+  outcomes = reflectionDrafts.list(run.id);
   return outcomes;
 }
 
@@ -3692,6 +3778,73 @@ function reflectionDependencyState(run: ReflectionRun): ReflectionDependencyStat
     ...(projectDocument === undefined ? {} : { projectMemory: projectDocument.entries.map((entry) => ({ id: entry.id, value: entry })) }),
     ...(longTermDocument === undefined ? {} : { longTermMemory: longTermDocument.entries.map((entry) => ({ id: entry.id, value: entry })) })
   };
+}
+
+interface CurrentCognitionDependency {
+  readonly hash: string;
+  readonly path?: string;
+}
+
+/**
+ * Re-resolve Cognition Review dependencies against the current Host state.
+ * Review bundles keep only frozen hashes; this seam prevents commit from
+ * trusting a stale target file or a renderer-provided dependency value.
+ */
+function resolveCognitionReviewDependency(dependency: CognitionDependency): CurrentCognitionDependency | undefined {
+  if (stateStore === null) return undefined;
+  if (dependency.kind === "source") {
+    if (reflectionRuns === null || reflectionDrafts === null) return undefined;
+    const matches = reflectionRuns.list().filter((run) => run.status !== "discarded" && reflectionDrafts!.list(run.id).judgments.some((judgment) => judgment.sourceReferenceId === dependency.reference && judgment.status !== "discarded"));
+    return matches.length === 1 ? { hash: `reflection:${matches[0]!.id}` } : undefined;
+  }
+
+  if (dependency.kind === "project_memory") {
+    // Memory Review dependencies identify the project document directly.
+    const project = stateStore.getProject(dependency.reference);
+    if (project !== undefined && projectMemories !== null) {
+      const document = projectMemories.load(project.id, project.path, false);
+      return document === undefined ? undefined : { hash: document.sourceHash, path: projectMemories.markdownPath(project.path) };
+    }
+    const scoped = parseScopedCognitionDependencyReference(dependency.reference, "project_memory");
+    if (scoped === undefined || projectMemories === null) return undefined;
+    const matches: { readonly value: unknown; readonly path: string }[] = [];
+    for (const candidate of stateStore.listProjects()) {
+      const document = projectMemories.load(candidate.id, candidate.path, false);
+      const entry = document?.entries.find((item) => item.id === scoped.targetId);
+      if (document !== undefined && entry !== undefined) matches.push({ value: entry, path: projectMemories.markdownPath(candidate.path) });
+    }
+    return matches.length === 1 ? { hash: reflectionDependencyFingerprint(matches[0]!.value), path: matches[0]!.path } : undefined;
+  }
+
+  if (dependency.kind === "long_term_memory") {
+    const document = longTermMemories?.load(false);
+    if (document === undefined) return undefined;
+    if (dependency.reference === "long_term_memory") return { hash: document.sourceHash, path: document.markdownPath };
+    const scoped = parseScopedCognitionDependencyReference(dependency.reference, "long_term_memory");
+    if (scoped === undefined) return undefined;
+    const matches = document.entries.filter((entry) => entry.id === scoped.targetId);
+    return matches.length === 1 ? { hash: reflectionDependencyFingerprint(matches[0]!) } : undefined;
+  }
+
+  if (dependency.kind === "material") {
+    const scoped = parseScopedCognitionDependencyReference(dependency.reference, "material");
+    if (scoped === undefined) return undefined;
+    const matches = stateStore.listProjects().flatMap((project) => stateStore!.listMaterials(project.id).filter((material) => material.id === scoped.targetId && material.availability === "active"));
+    return matches.length === 1 ? { hash: matches[0]!.sourceHash } : undefined;
+  }
+
+  // Memory and judgment_destination are not current source documents.  An
+  // unresolved required dependency must make the review stale at commit.
+  return undefined;
+}
+
+function parseScopedCognitionDependencyReference(reference: string, kind: "material" | "project_memory" | "long_term_memory"): { readonly targetId: string; readonly referenceId: string } | undefined {
+  const prefix = `${kind}:`;
+  if (!reference.startsWith(prefix)) return undefined;
+  const remainder = reference.slice(prefix.length);
+  const separator = remainder.indexOf(":");
+  if (separator <= 0 || separator === remainder.length - 1) return undefined;
+  return { targetId: remainder.slice(0, separator), referenceId: remainder.slice(separator + 1) };
 }
 
 function recalledReflectionMemoryIds(threadId: string): { projectMemory: string[]; longTermMemory: string[] } {
@@ -3775,6 +3928,33 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
+/**
+ * Run the one-shot cognition-v2 reset before constructing any execution
+ * runtime.  Project roots and Unscoped Output locations come directly from
+ * the just-opened Host state; no guessed/default path is admitted to the
+ * destructive boundary.
+ */
+function runLearningEpochCutover(userDataRoot: string, statePath: string, openedState: HostStateStore): boolean {
+  try {
+    const reset = new LearningEpochReset({
+      appDataRoot: userDataRoot,
+      stateStore: openedState,
+      rollbackState: () => restoreStateStorageRollback(statePath),
+      projectRoots: openedState.listProjects().map((project) => project.path),
+      unscopedOutputRoots: openedState.listUnscopedThreads()
+        .flatMap((thread) => thread.outputLocation === undefined ? [] : [thread.outputLocation])
+    });
+    const result = reset.reset();
+    learningEpochRecovery = result.mode === "read_only_recovery" || openedState.isReadOnlyRecovery;
+    return !learningEpochRecovery;
+  } catch {
+    // A malformed reset boundary is itself a recovery condition.  Keep the
+    // Host alive for bootstrap/export diagnostics and admit no runtime.
+    learningEpochRecovery = true;
+    return false;
+  }
+}
+
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
   const runtimePaths = resolveDesktopRuntimePaths({
@@ -3794,9 +3974,19 @@ app.whenReady().then(() => {
     if (details.url.startsWith("http://") || details.url.startsWith("https://")) externalNetworkRequests += 1;
     callback({});
   });
-  stateStore = new HostStateStore(join(app.getPath("userData"), "state.db"), {
+  const userDataRoot = app.getPath("userData");
+  const statePath = join(userDataRoot, "state.db");
+  stateStore = new HostStateStore(statePath, {
     failAfterStageValidation: process.env.NODE_ENV === "test" && process.env.VC_AGENT_TEST_MIGRATION_FAIL_AFTER_STAGE === "1"
   });
+  // This is the first operation after State v18 opens.  It must stay ahead of
+  // every Worker, Pi, Provider, Utility, and scheduling/runtime constructor.
+  if (!runLearningEpochCutover(userDataRoot, statePath, stateStore)) {
+    ipcMain.handle(COMMAND_CHANNEL, handleCommand);
+    mainWindow = createMainWindow();
+    app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow(); });
+    return;
+  }
   loadPiResourceSettings();
   migrateLegacyPiResources();
   loadIntegrationJobs(join(app.getPath("userData"), "integrations", "jobs.json"));
@@ -3846,8 +4036,15 @@ app.whenReady().then(() => {
   pageRecoveryPipeline = new PageRecoveryPipeline(useFixtureOcr
     ? { native: createDesktopNativePdfAdapter(), paddle: createDesktopPaddleAdapter(), ovis: createDesktopOvisAdapter() }
     : { native: createDesktopNativePdfAdapter(localOcrOptions), paddle: createDesktopPaddleAdapter(localOcrOptions), ovis: createDesktopOvisAdapter(localOcrOptions) });
-  const readOnlyRecovery = stateStore.isReadOnlyRecovery;
-  if (!readOnlyRecovery) stateStore.recoverInterruptedReflections();
+  const readOnlyRecovery = hostReadOnlyRecovery();
+  reflectionRuns = new ReflectionRunStore(join(app.getPath("userData"), "cognition-v2", "reflection-runs.json"), {
+    createProjectThread: (projectId, title) => stateStore!.createProjectThread(projectId, title),
+    createUnscopedThread: (title) => stateStore!.createUnscopedThread(title),
+    getThread: (threadId) => stateStore!.getThread(threadId),
+    selectThreadProfile: (threadId, profileId) => stateStore!.selectThreadProfile(threadId, profileId),
+    setThreadOutputLocation: (threadId, outputLocation) => stateStore!.setThreadOutputLocation(threadId, outputLocation)
+  }, { createRoot: !readOnlyRecovery });
+  if (!readOnlyRecovery) reflectionRuns?.recoverInterrupted();
   if (!readOnlyRecovery) stateStore.recoverQueuedExecutionAsDrafts();
   if (!readOnlyRecovery) stateStore.clearStaleExecutionLeases();
   longTermMemories = new LongTermMemoryStore(join(app.getPath("userData"), "memory", "long-term"));
@@ -3855,20 +4052,38 @@ app.whenReady().then(() => {
     memoryEvolution = new MemoryEvolutionStore(longTermMemories);
     projectMemories = new ProjectMemoryStore(join(app.getPath("userData"), "memory", "project-index"));
     memoryCandidates = new MemoryCandidateStore(join(app.getPath("userData"), "memory", "candidates.jsonl"));
+    cognitionReviewStore = new CognitionReviewStore(join(app.getPath("userData"), "cognition-v2"));
+    cognitionReviews = createCognitionReviewModule({
+      store: cognitionReviewStore,
+      memory: longTermMemories,
+      evolution: memoryEvolution,
+      projectMemory: projectMemories,
+      transactionRoot: join(app.getPath("userData"), "cognition-v2", "transactions"),
+      allowedRoots: () => [app.getPath("userData"), ...stateStore!.listProjects().map((project) => project.path)],
+      resolveProject: (projectId) => {
+        const project = stateStore!.getProject(projectId);
+        return project === undefined ? undefined : { id: project.id, path: project.path };
+      },
+      resolveDependency: resolveCognitionReviewDependency
+    });
   }
-  reflectionOutcomes = new ReflectionOutcomeStore(join(app.getPath("userData"), "memory", "reflection", "outcomes.jsonl"));
+  // Reflection analytical drafts are non-authoritative and live under the
+  // active cognition-v2 root.  The concrete event-log store stays behind the
+  // narrow Host factory; legacy Reflection outcome state is never recreated.
+  reflectionDrafts = createReflectionDrafts({ root: join(app.getPath("userData"), "cognition-v2") });
   trajectoryStore = new ThreadTrajectoryStore(join(app.getPath("userData"), "threads"), { createRoot: !readOnlyRecovery });
-  dreamReviews = new DreamReviewStore(join(app.getPath("userData"), "memory", "dream"), { createRoot: !readOnlyRecovery });
-  if (!readOnlyRecovery && memoryEvolution !== null && projectMemories !== null && memoryCandidates !== null) dreamCommits = new DreamCommitStore(join(app.getPath("userData"), "memory", "dream"), { reviews: dreamReviews, evolution: memoryEvolution, memory: longTermMemories, projectMemory: projectMemories, candidates: memoryCandidates });
-  if (!readOnlyRecovery) dreamReviews.recoverInterruptedScopes();
+  if (!readOnlyRecovery && cognitionReviewStore !== null && cognitionReviews !== null) {
+    initializeMemoryReviewOrchestrator();
+    try { memoryReviewPolicy = stateStore.getAutoMemoryReviewPolicy(); } catch { memoryReviewPolicy = undefined; }
+  }
   for (const thread of stateStore.listThreads()) {
     if (!readOnlyRecovery) trajectoryStore.recoverInterruptedTurns(thread.id);
     const lastSequence = trajectoryStore.loadEvents(thread.id).at(-1)?.sequence ?? 0;
     sequenceByThread.set(thread.id, lastSequence);
   }
-  if (!readOnlyRecovery) synchronizeDreamSchedulingIndex();
   inflight = new InflightTurnCoordinator(trajectoryStore);
   if (!readOnlyRecovery) stateStore.ensureDefaultSystemPrompt(SHIPPED_MINIMAL_VC_SYSTEM_PROMPT);
+  if (!readOnlyRecovery) runMemoryReviewStartupDueCheck();
   if (!readOnlyRecovery) personalCognition = new PersonalCognitionBackupService({
     state: stateStore,
     memoryFiles: {
@@ -3877,6 +4092,7 @@ app.whenReady().then(() => {
       "cognitive-evolution-history.md": longTermMemories.historyPath,
       "long-term-maintenance.json": join(app.getPath("userData"), "memory", "long-term-maintenance.json")
     },
+    cognitionRoot: join(app.getPath("userData"), "cognition-v2"),
     skillsRoot: piResourcePaths().skills
   });
   capabilityRegistry = new CapabilityRegistry();
@@ -4039,7 +4255,7 @@ app.whenReady().then(() => {
   }));
   capabilityRegistry.register(createReflectionEvidenceDrilldownCapability(async (input, context) => {
     const turn = turnExecution!.getTurn(context.request.turnId);
-    const run = turn?.reflectionRunId === undefined ? undefined : stateStore!.getReflectionRun(turn.reflectionRunId);
+    const run = turn?.reflectionRunId === undefined ? undefined : reflectionRuns?.get(turn.reflectionRunId);
     if (run?.scope !== "project" || !["memory_aware_running", "dialogue_active"].includes(run.status) || run.assessment === undefined) {
       throw new Error("Evidence Drilldown requires an active Project Reflection with a completed Independent Assessment.");
     }
@@ -4105,13 +4321,12 @@ app.whenReady().then(() => {
   }));
   capabilityRegistry.register(createReflectionOutcomeProposalCapability(async (input, context) => {
     const turn = turnExecution!.getTurn(context.request.turnId);
-    if (turn?.reflectionRunId === undefined || !turn.reflectionOutcomeIntent || reflectionOutcomes === null) {
+    if (turn?.reflectionRunId === undefined || !turn.reflectionOutcomeIntent || reflectionDrafts === null) {
       throw new Error("Reflection outcomes require an explicit User request in an active Reflection dialogue.");
     }
-    const run = stateStore!.getReflectionRun(turn.reflectionRunId);
+    const run = reflectionRuns?.get(turn.reflectionRunId);
     if (run === undefined || run.status !== "dialogue_active") throw new Error("Reflection dialogue is not active.");
-    const created = reflectionOutcomes.propose(run.id, input, reflectionOutcomeDependencies(run, input));
-    emit(reflectionOutcomesEvent(context.request.correlationId, run.id, run.threadId));
+    const created = reflectionDrafts.propose(run.id, input, reflectionOutcomeDependencies(run, input));
     return JSON.stringify({ status: "drafted", judgmentCount: created.judgments.length, learningProposalCount: created.learningProposals.length });
   }));
   capabilityRegistry.register(createRuntimeExtensionCapability({
@@ -4189,19 +4404,18 @@ async function shutdownApplication(): Promise<void> {
     if (execution.kind === "turn") {
       interruptTurn(execution.context, "application_restart", 0);
     } else if (execution.kind === "reflection") {
-      const run = stateStore?.getReflectionRun(execution.context.runId);
-      if (run?.status === "independent_running") stateStore?.interruptIndependentAssessment(execution.context.runId);
-      turnExecution?.finish(execution);
-    } else if (execution.kind === "dream") {
-      try { dreamReviews?.failScope(execution.context.batchId, execution.context.scope.id, { kind: "worker", code: "APPLICATION_RESTART", message: "Dream scope extraction was interrupted by application restart and remains Pending for explicit retry.", provider: execution.context.profile.provider, model: execution.context.profile.model }); }
-      catch { /* Preserve already completed scope state. */ }
+      const run = reflectionRuns?.get(execution.context.runId);
+      if (run?.status === "independent_running") reflectionRuns?.interruptIndependent(execution.context.runId);
+      if (run?.status === "memory_aware_running") reflectionRuns?.interruptMemoryAware(execution.context.runId);
       turnExecution?.finish(execution);
     } else {
-      try { dreamReviews?.failSynthesis(execution.context.batchId, { kind: "worker", code: "APPLICATION_RESTART", message: "Global Dream Synthesis was interrupted by application restart and requires explicit retry.", provider: execution.context.profile.provider, model: execution.context.profile.model }); }
-      catch { /* Preserve already completed synthesis state. */ }
       turnExecution?.finish(execution);
     }
   }
+  for (const stage of [...memoryReviewWorkerStages.values()]) settleMemoryReviewWorkerStage(stage.turnId, new Error("MEMORY_REVIEW_APPLICATION_RESTART"));
+  memoryReviewCorrelationByBatch.clear();
+  memoryReviewOrchestrator = null;
+  memoryReviewPolicy = undefined;
   ipcMain.removeHandler(COMMAND_CHANNEL);
   const subAgentShutdown = subAgentRuntime?.shutdown() ?? Promise.resolve();
   subAgentRuntime = null;
