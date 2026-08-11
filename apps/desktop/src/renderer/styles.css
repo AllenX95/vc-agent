@@ -1,16 +1,23 @@
 :root {
-  font-family: Inter, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", Arial, sans-serif;
-  color: #1f2822;
-  background: #f3f5f2;
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", Arial, sans-serif;
+  color: #172033;
+  background: #f6f8fb;
   font-synthesis: none;
   letter-spacing: 0;
   font-size: 15px;
-  --surface: #fbfcfa;
-  --surface-muted: #eef1ec;
-  --line: #d8ddd7;
-  --text-muted: #667168;
-  --accent: #315b43;
-  --accent-soft: #e1ebe3;
+  --canvas: #f6f8fb;
+  --surface: #ffffff;
+  --surface-muted: #f7faff;
+  --line: #e2e7ef;
+  --line-strong: #d4dbe6;
+  --text-muted: #6d7687;
+  --accent: #0a67d8;
+  --accent-hover: #075bbf;
+  --accent-soft: #eaf3ff;
+  --accent-wash: #f3f8ff;
+  --success: #2bad66;
+  --shadow-soft: 0 12px 34px rgba(25, 53, 91, .08);
 }
 
 * { box-sizing: border-box; }
@@ -720,4 +727,421 @@ button { font: inherit; letter-spacing: 0; }
 
 .cognition-memory-review .settings-section-header {
   align-items: flex-start;
+}
+
+/* Production visual system: Apple-inspired white and blue surfaces shared by
+ * the workspace and settings. Keep the existing component contracts while
+ * making hierarchy and actions easier to scan. */
+body {
+  background: var(--canvas);
+  color: #172033;
+}
+
+.app-shell,
+.center-pane {
+  background: var(--surface);
+}
+
+.left-rail,
+.right-panel {
+  background: var(--surface-muted);
+  border-color: var(--line);
+}
+
+.brand-mark {
+  background: linear-gradient(145deg, #0a67d8, #075bbf);
+  box-shadow: 0 6px 16px rgba(10, 103, 216, .18);
+}
+
+.settings-button:hover,
+.settings-button.active,
+.thread-row:hover,
+.section-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.thread-row.active {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.settings-view {
+  width: min(900px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 38px 0 72px;
+}
+
+.settings-view header:not(.settings-hero) {
+  padding: 0;
+  border: 0;
+}
+
+.settings-hero {
+  min-height: 86px;
+  padding: 0 0 24px !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+.settings-hero h1 {
+  margin: 4px 0 0;
+  color: #172033;
+  font-size: 30px;
+  letter-spacing: -.035em;
+}
+
+.settings-hero-copy {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-hero-icon {
+  color: var(--accent);
+}
+
+.eyebrow {
+  color: var(--accent);
+  letter-spacing: .08em;
+}
+
+.settings-tabs {
+  min-width: 228px;
+  margin: 22px 0 24px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #f1f5fb;
+}
+
+.settings-tabs button {
+  min-height: 34px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.settings-tabs button.active {
+  color: var(--accent);
+  box-shadow: 0 2px 7px rgba(25, 53, 91, .12);
+}
+
+.settings-general-panel,
+.memory-settings-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-section {
+  margin: 0;
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.settings-section + .settings-section {
+  border-top: 1px solid var(--line);
+}
+
+.settings-section h2 {
+  margin: 0 0 7px;
+  color: #202b3d;
+  font-size: 17px;
+  letter-spacing: -.015em;
+}
+
+.settings-section-header {
+  gap: 18px;
+}
+
+.settings-section-header p {
+  max-width: 680px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-write-controls {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-write-controls:disabled {
+  color: inherit;
+}
+
+.compact-button,
+.form-actions button,
+.profile-row-actions button,
+.academic-credential-actions button,
+.archive-row button {
+  min-height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: #4f596b;
+  font-size: 13px;
+}
+
+.compact-button:hover,
+.form-actions button:hover,
+.profile-row-actions button:hover,
+.academic-credential-actions button:hover,
+.archive-row button:hover {
+  border-color: #abc9ef;
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.form-actions .primary-button,
+.settings-section .primary-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.form-actions .primary-button:hover,
+.settings-section .primary-button:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.settings-section dl div {
+  min-height: 38px;
+  padding: 7px 0;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.settings-section dl div:last-child {
+  border-bottom: 0;
+}
+
+.settings-section dt {
+  color: var(--text-muted);
+}
+
+.settings-section dd {
+  color: #273248;
+  text-align: right;
+}
+
+/* Resource rows use a stable three-column rhythm at desktop widths. This
+ * avoids the old three-up cards whose copy wrapped word by word. */
+.pi-resource-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.pi-resource-card {
+  display: grid;
+  grid-template-columns: minmax(175px, .78fr) minmax(0, 1.45fr) minmax(160px, .62fr);
+  grid-template-areas: "head details actions" "diagnostics diagnostics diagnostics";
+  align-items: start;
+  gap: 16px 20px;
+  min-height: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.pi-resource-card-header {
+  grid-area: head;
+  display: block !important;
+}
+
+.pi-resource-card-title h3 {
+  margin: 0;
+  color: #202b3d;
+  font-size: 16px;
+}
+
+.pi-resource-card-title p {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.52;
+}
+
+.pi-resource-card .doctor-status {
+  display: inline-flex;
+  margin-top: 13px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid #bde5cf;
+  border-radius: 999px;
+  background: #effaf4;
+  color: #16824b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.pi-resource-card .doctor-status.attention {
+  border-color: #f1d49d;
+  background: #fff8e9;
+  color: #9a6700;
+}
+
+.pi-resource-card .doctor-status.unavailable {
+  border-color: #efc3bc;
+  background: #fff3f1;
+  color: #b42318;
+}
+
+.pi-resource-card-details {
+  grid-area: details;
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.pi-resource-path {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pi-resource-path > span:first-child {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.pi-resource-path-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #334056;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.pi-resource-summary {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.pi-resource-disclosure {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pi-resource-card-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.pi-resource-card-actions .compact-button {
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 10px;
+}
+
+.pi-resource-card-diagnostics {
+  grid-area: diagnostics;
+  min-width: 0;
+}
+
+.pi-resource-card-diagnostics .pi-resource-diagnostics {
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 1px solid #edf0f4;
+}
+
+.pi-project-resource-trust {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid #dfe9f5;
+  border-radius: 11px;
+  background: var(--accent-wash);
+}
+
+.pi-project-resource-trust input {
+  position: relative;
+  z-index: 1;
+  width: 15px;
+  height: 15px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.pi-project-resource-trust span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #334056;
+  font-weight: 650;
+}
+
+.pi-project-resource-trust small {
+  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.integration-runtime-status {
+  border-left-color: var(--accent);
+  background: var(--accent-wash);
+  color: #38587e;
+}
+
+.right-panel {
+  background: #fbfcff;
+}
+
+.panel-tabs button.active,
+.context-heading h2,
+.inventory-heading h2 {
+  color: var(--accent);
+}
+
+.panel-tabs button.active::after {
+  background: var(--accent);
+}
+
+.composer-shell {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 18px 50px rgba(36, 66, 104, .12);
+}
+
+@media (max-width: 760px) {
+  .settings-view {
+    width: min(100% - 28px, 900px);
+    padding-top: 24px;
+  }
+
+  .settings-section {
+    padding: 18px;
+  }
+
+  .pi-resource-card {
+    grid-template-columns: 1fr;
+    grid-template-areas: "head" "details" "actions" "diagnostics";
+    gap: 13px;
+  }
+
+  .pi-resource-card-actions {
+    justify-content: flex-start;
+  }
 }

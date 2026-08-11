@@ -40,7 +40,28 @@ export function PiResourcesSettings({ state, actions, disabled = false }: PiReso
         </button>
       </div>
 
-      <div className="integration-grid">
+      {state.extensions.projectResourcesTrusted !== undefined && (
+        <label className="checkbox-setting pi-project-resource-trust">
+          <input
+            key={`${state.generation}:${state.extensions.projectResourcesTrusted ? "trusted" : "untrusted"}`}
+            type="checkbox"
+            defaultChecked={state.extensions.projectResourcesTrusted}
+            onChange={(event) => {
+              if (actions.onSetProjectResourcesTrusted !== undefined) {
+                run(() => actions.onSetProjectResourcesTrusted?.(event.target.checked));
+              }
+            }}
+            disabled={disabled || actions.onSetProjectResourcesTrusted === undefined}
+            data-testid="pi-project-resources-trusted"
+          />
+          <span>
+            Trust project-local Pi resources
+            <small>When enabled, project-local Extensions and MCP configuration may participate at the next session boundary.</small>
+          </span>
+        </label>
+      )}
+
+      <div className="pi-resource-list">
         <PiResourceCard
           testId="pi-extensions-settings"
           title="Extensions"
@@ -118,27 +139,6 @@ export function PiResourcesSettings({ state, actions, disabled = false }: PiReso
         />
       </div>
 
-      {state.extensions.projectResourcesTrusted !== undefined && (
-        <label className="checkbox-setting pi-project-resource-trust">
-          <input
-            key={`${state.generation}:${state.extensions.projectResourcesTrusted ? "trusted" : "untrusted"}`}
-            type="checkbox"
-            defaultChecked={state.extensions.projectResourcesTrusted}
-            onChange={(event) => {
-              if (actions.onSetProjectResourcesTrusted !== undefined) {
-                run(() => actions.onSetProjectResourcesTrusted?.(event.target.checked));
-              }
-            }}
-            disabled={disabled || actions.onSetProjectResourcesTrusted === undefined}
-            data-testid="pi-project-resources-trusted"
-          />
-          <span>
-            Trust project-local Pi resources
-            <small>When enabled, project-local Extensions and MCP configuration may participate at the next session boundary.</small>
-          </span>
-        </label>
-      )}
-
       <PiDiagnostics diagnostics={state.diagnostics} />
       {state.reloadPending && <p className="integration-runtime-status" role="status">Reload queued until the active Turn closes.</p>}
     </section>
@@ -185,27 +185,27 @@ function PiResourceCard({
 }: PiResourceCardProps) {
   return (
     <article className="integration-card pi-resource-card" data-testid={testId}>
-      <header>
-        <div>
+      <header className="pi-resource-card-header">
+        <div className="pi-resource-card-title">
           <h3>{title}</h3>
           <p>{description}</p>
         </div>
         <span className={`doctor-status ${status}`} role="status">{status}</span>
       </header>
-      <div>
-        <div className="integration-inline-row"><span>{pathLabel}</span><span title={path}>{path}</span></div>
-        <div className="integration-inline-row"><span>{loadedSummary}</span></div>
+      <div className="pi-resource-card-details">
+        <div className="pi-resource-path"><span>{pathLabel}</span><span className="pi-resource-path-value" title={path}>{path}</span></div>
+        <div className="pi-resource-summary"><span>{loadedSummary}</span></div>
         <p className="pi-resource-disclosure">{trustDisclosure}</p>
         {isolationDisclosure !== undefined && <p className="pi-resource-disclosure">{isolationDisclosure}</p>}
       </div>
-      <div className="form-actions">
+      <div className="pi-resource-card-actions">
         {actions.map((action) => (
           <button key={action.testId} className="compact-button" type="button" onClick={() => run(action.onClick)} disabled={disabled} data-testid={action.testId}>
             {action.icon} {action.label}
           </button>
         ))}
       </div>
-      <PiDiagnostics diagnostics={diagnostics} compact />
+      <div className="pi-resource-card-diagnostics"><PiDiagnostics diagnostics={diagnostics} compact /></div>
     </article>
   );
 }

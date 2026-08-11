@@ -15,7 +15,12 @@ test("uses the dedicated Pi Skills directory without a legacy activation UI", as
   try {
     const window = await application.firstWindow();
     await window.getByRole("button", { name: "Settings" }).click();
+    const settings = window.locator(".settings-view");
+    await expect(settings).toBeVisible();
+    await expect(settings.locator(".settings-hero")).toBeVisible();
+    await expect(settings.locator(".settings-tabs").getByRole("tab", { name: "General", exact: true })).toBeVisible();
     const resources = window.getByTestId("pi-resources-settings");
+    await expect(resources.locator(".pi-resource-list")).toBeVisible();
     await expect(resources.getByTestId("pi-skills-settings")).toBeVisible();
     await expect(resources.getByText(/Only the dedicated VC Agent Skills directory/i)).toBeVisible();
     await expect(window.getByRole("button", { name: "Install academic skills" })).toHaveCount(0);
