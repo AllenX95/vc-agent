@@ -217,6 +217,7 @@ button { font: inherit; letter-spacing: 0; }
 .execution-queue-item > div span { margin-right: auto; }
 .execution-queue-item button { min-height: 25px; padding: 0 7px; border: 1px solid #c9c0ad; border-radius: 4px; background: #fff; color: #4b463d; font-size: 9px; }
 .output-location { flex: 1; min-width: 0; overflow: hidden; color: #7a817a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.composer-status { flex: none; color: #8a641f; font-size: 11px; white-space: nowrap; }
 .full-access-indicator { flex: none; padding: 3px 6px; border: 1px solid #9e735e; border-radius: 4px; background: #f5e9e2; color: #704936; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .send-button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; box-shadow: 0 2px 7px rgba(40,80,56,.18); }
 .send-button:disabled { background: #d9ddd8; color: #8c938d; }
