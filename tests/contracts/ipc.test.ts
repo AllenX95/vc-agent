@@ -240,6 +240,7 @@ describe("versioned IPC contracts", () => {
     expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.load" }).success).toBe(true);
     expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.reload" }).success).toBe(true);
     expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.import_skill" }).success).toBe(true);
+    expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.skills.set_enabled", payload: { id: "fixture/SKILL.md", enabled: false } }).success).toBe(true);
     expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.open", payload: { target: "mcp_config" } }).success).toBe(true);
     expect(hostCommandSchema.safeParse({ ...metadata, command: "pi.resources.project_trust.set", payload: { trusted: true } }).success).toBe(true);
 
@@ -276,6 +277,7 @@ describe("versioned IPC contracts", () => {
         status: "ready",
         directoryPath: "C:/vc-agent/skills",
         loadedCount: 2,
+        items: [{ id: "fixture/SKILL.md", name: "fixture", description: "Fixture Skill", relativePath: "fixture/SKILL.md", enabled: true }],
         diagnostics: [],
         trustDisclosure: "Skills are trusted instructions.",
         sourceIsolationDisclosure: "Only this dedicated directory is searched."

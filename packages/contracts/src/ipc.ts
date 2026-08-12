@@ -557,6 +557,10 @@ const openPiResourceCommandSchema = commandMetadataSchema.extend({
 });
 const reloadPiResourcesCommandSchema = commandMetadataSchema.extend({ command: z.literal("pi.resources.reload") });
 const importPiSkillCommandSchema = commandMetadataSchema.extend({ command: z.literal("pi.resources.import_skill") });
+const setPiSkillEnabledCommandSchema = commandMetadataSchema.extend({
+  command: z.literal("pi.skills.set_enabled"),
+  payload: z.object({ id: z.string().min(1), enabled: z.boolean() })
+});
 const setPiProjectTrustCommandSchema = commandMetadataSchema.extend({
   command: z.literal("pi.resources.project_trust.set"),
   payload: z.object({ trusted: z.boolean() })
@@ -824,6 +828,7 @@ export const hostCommandSchema = z.discriminatedUnion("command", [
   openPiResourceCommandSchema,
   reloadPiResourcesCommandSchema,
   importPiSkillCommandSchema,
+  setPiSkillEnabledCommandSchema,
   setPiProjectTrustCommandSchema,
   createProfileCommandSchema,
   updateProfileCommandSchema,
@@ -1026,7 +1031,7 @@ const piResourcesUpdatedEventSchema = eventMetadataSchema.extend({
   event: z.literal("pi.resources.updated"),
   payload: z.object({
     state: piResourcesSettingsStateSchema,
-    action: z.enum(["loaded", "opened", "reloaded", "imported", "project_trust_changed"])
+    action: z.enum(["loaded", "opened", "reloaded", "imported", "project_trust_changed", "skill_enabled_changed"])
   })
 });
 const integrationStateUpdatedEventSchema = eventMetadataSchema.extend({

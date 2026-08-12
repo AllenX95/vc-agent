@@ -266,6 +266,7 @@ async function createNativePiSession(
     mcpAdapterPath,
     mcpConfigPath: nativeConfig.mcpConfigPath,
     projectResourcesTrusted: nativeConfig.projectResourcesTrusted ?? false,
+    disabledSkillIds: nativeConfig.disabledSkillIds,
     // Existing VC prompts are still Host-owned. Do not implicitly pull in
     // ambient prompt/theme/context files while the sender migrates.
     systemPrompt: config.resources.systemPrompt,

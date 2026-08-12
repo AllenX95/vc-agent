@@ -67,12 +67,14 @@ import {
 import remarkGfm from "remark-gfm";
 import { useUiLanguage } from "./i18n";
 import { PiResourcesSettings } from "./PiResourcesSettings";
+import { SkillManagementSettings } from "./SkillManagementSettings";
 import {
   applicationCommandSuggestions,
   applyComposerSuggestion,
   fileSuggestion,
   matchComposerSuggestions,
   profileSuggestion,
+  skillSuggestions,
   thinkingSuggestion,
   type ComposerSuggestion
 } from "./composer-suggestions";
@@ -242,6 +244,7 @@ export function App() {
   const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
   const composerCandidates: ComposerSuggestion[] = [
     ...applicationCommandSuggestions(),
+    ...skillSuggestions(piResourcesState?.skills.items ?? []),
     ...profiles.map((profile) => profileSuggestion(profile)),
     ...(["off", "minimal", "low", "medium", "high", "xhigh"] as const).map(thinkingSuggestion),
     ...(activeThread?.scope === "project" ? (materialsByProject[activeThread.projectId] ?? [])
@@ -1388,7 +1391,7 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
   onLongTermMemoryChange(content: string): void;
   onLongTermMemoryRefresh(): void;
 }) {
-  const [tab, setTab] = useState<"general" | "memory">("general");
+  const [tab, setTab] = useState<"general" | "skills" | "memory">("general");
   const [name, setName] = useState("");
   const [providerMode, setProviderMode] = useState<"builtin" | "url">("builtin");
   const [builtinProvider, setBuiltinProvider] = useState("");
@@ -1476,8 +1479,20 @@ function SettingsView({ bootstrap, profiles, academicCredentials, taskAssignment
   return (
     <section className="settings-view" aria-labelledby="settings-title">
       <header className="settings-hero"><div><span className="eyebrow">Application</span><h1 id="settings-title">Settings</h1><p className="settings-hero-copy">Tune the workspace, model connections, and Pi-native resources.</p></div><SlidersHorizontal className="settings-hero-icon" size={20} aria-hidden="true" /></header>
-      <div className="settings-tabs" role="tablist" aria-label="Settings views"><button type="button" role="tab" aria-selected={tab === "general"} className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button><button type="button" role="tab" aria-selected={tab === "memory"} className={tab === "memory" ? "active" : ""} onClick={openMemory} disabled={readOnly}>Memory</button></div>
-      {tab === "memory" ? <div className="memory-settings-stack"><MemoryReviewSettings progress={memoryReviewProgress} policy={memoryReviewPolicy} profileId={taskAssignments.find((item) => item.taskType === "memory_review")?.profileId} invoke={invoke} prepare={openMemoryReview} readOnly={readOnly} /><LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /></div> : <>
+      <div className="settings-tabs" role="tablist" aria-label="Settings views"><button type="button" role="tab" aria-selected={tab === "general"} className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>General</button><button type="button" role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}>Skills</button><button type="button" role="tab" aria-selected={tab === "memory"} className={tab === "memory" ? "active" : ""} onClick={openMemory} disabled={readOnly}>Memory</button></div>
+      {tab === "memory" ? <div className="memory-settings-stack"><MemoryReviewSettings progress={memoryReviewProgress} policy={memoryReviewPolicy} profileId={taskAssignments.find((item) => item.taskType === "memory_review")?.profileId} invoke={invoke} prepare={openMemoryReview} readOnly={readOnly} /><LongTermMemorySettings document={longTermMemoryDocument} draft={longTermMemoryDraft} maintenance={memoryMaintenance} invoke={invoke} onChange={onLongTermMemoryChange} onRefresh={onLongTermMemoryRefresh} onSave={saveLongTermMemory} openFolder={() => void invoke(createCommand({ command: "long_term_memory.open_folder" }))} /></div> : tab === "skills" ? (piResourcesState === null ? <div className="settings-section skill-management-settings" data-testid="skill-management-settings"><p>Loading Skills...</p></div> : <SkillManagementSettings
+        state={piResourcesState}
+        disabled={readOnly}
+        actions={{
+          onOpenExtensionsFolder: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "extensions_folder" } })); },
+          onOpenMcpConfig: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "mcp_config" } })); },
+          onOpenSkillsFolder: async () => { await invoke(createCommand({ command: "pi.resources.open", payload: { target: "skills_folder" } })); },
+          onImportSkill: async () => { await invoke(createCommand({ command: "pi.resources.import_skill" })); },
+          onReload: async () => { await invoke(createCommand({ command: "pi.resources.reload" })); },
+          onSetSkillEnabled: async (id, enabled) => { await invoke(createCommand({ command: "pi.skills.set_enabled", payload: { id, enabled } })); },
+          onSetProjectResourcesTrusted: async (trusted) => { await invoke(createCommand({ command: "pi.resources.project_trust.set", payload: { trusted } })); }
+        }}
+      />) : <>
       <div className="settings-panel settings-general-panel">
       {readOnly && <div className="settings-section recovery-export"><h2>Recovery export</h2><p>Raw state may contain encrypted credentials and sensitive local metadata. Its destination determines its security.</p><button className="compact-button" type="button" onClick={() => void invoke(createCommand({ command: "state.recovery.export" }))}>Export raw state</button>{recoveryExport && <span title={recoveryExport}>{recoveryExport}</span>}</div>}
       <fieldset className="settings-write-controls" disabled={readOnly}>

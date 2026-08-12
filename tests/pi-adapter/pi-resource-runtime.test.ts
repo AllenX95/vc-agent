@@ -73,6 +73,24 @@ describe("PiResourceRuntime", () => {
     await runtime.close();
   });
 
+  it("omits explicitly disabled Skills from the native runtime", async () => {
+    const root = createRoot("vc-agent-pi-runtime-disabled-skill-");
+    const dedicated = join(root, "vc-skills");
+    createSkill(dedicated, "disabled-skill");
+    createSkill(dedicated, "enabled-skill");
+
+    const runtime = new PiResourceRuntime({
+      cwd: root,
+      agentDir: join(root, "pi"),
+      skillsRoot: dedicated,
+      disabledSkillIds: ["disabled-skill/SKILL.md"]
+    });
+    const snapshot = await runtime.reload();
+
+    expect(snapshot.skills.map((skill) => skill.name)).toEqual(["enabled-skill"]);
+    await runtime.close();
+  });
+
   it("reports deterministic Extension tool collisions without silently hiding them", async () => {
     const root = createRoot("vc-agent-pi-runtime-collision-");
     const agentDir = join(root, "pi");

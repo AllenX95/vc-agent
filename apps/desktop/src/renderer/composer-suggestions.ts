@@ -41,6 +41,25 @@ export function skillSuggestion(input: { packageId: string; name: string; descri
   };
 }
 
+/**
+ * Build slash-command suggestions from the metadata exposed by the Pi
+ * resource snapshot.  Disabled skills intentionally remain invisible to the
+ * composer; they may still be present in the management view for re-enable.
+ */
+export function skillSuggestions(
+  items: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly description: string;
+    readonly relativePath: string;
+    readonly enabled: boolean;
+  }[]
+): readonly ComposerSuggestion[] {
+  return items
+    .filter((item) => item.enabled === true)
+    .map((item) => skillSuggestion({ packageId: item.id, name: item.name, description: item.description }));
+}
+
 export function profileSuggestion(input: { id: string; name: string; provider: string; model: string }): ComposerSuggestion {
   return {
     id: `profile:${input.id}`,

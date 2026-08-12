@@ -262,7 +262,7 @@ button { font: inherit; letter-spacing: 0; }
 .recovery-export p { margin: 0 0 10px; color: #747b74; font-size: 11px; line-height: 1.5; }
 .recovery-export span { display: block; margin-top: 8px; overflow: hidden; color: #626a63; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-view header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #dcdfda; }
-.settings-tabs { display: inline-grid; grid-template-columns: 1fr 1fr; min-width: 220px; margin-top: 18px; padding: 3px; border: 1px solid #ccd2cb; border-radius: 6px; background: #eef1ed; }
+.settings-tabs { display: inline-grid; grid-template-columns: repeat(3, 1fr); min-width: 300px; margin-top: 18px; padding: 3px; border: 1px solid #ccd2cb; border-radius: 6px; background: #eef1ed; }
 .settings-tabs button { min-height: 30px; border: 0; border-radius: 4px; background: transparent; color: #616961; font-size: 11px; }
 .settings-tabs button.active { background: #fff; color: #29352e; box-shadow: 0 1px 4px rgba(36, 48, 40, .1); }
 .settings-tabs button:disabled { color: #a0a6a0; }
@@ -1097,6 +1097,118 @@ body {
   color: var(--text-muted);
   font-weight: 400;
   line-height: 1.45;
+}
+
+.skill-management-source {
+  display: grid;
+  gap: 9px;
+  margin-top: 20px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+}
+
+.skill-management-source .pi-resource-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.skill-management-source .doctor-status {
+  display: inline-flex;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid #bde5cf;
+  border-radius: 999px;
+  background: #effaf4;
+  color: #16824b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+
+.skill-management-source .doctor-status.attention {
+  border-color: #f1d49d;
+  background: #fff8e9;
+  color: #9a6700;
+}
+
+.skill-management-source .doctor-status.unavailable {
+  border-color: #efc3bc;
+  background: #fff3f1;
+  color: #b42318;
+}
+
+.skill-management-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.skill-management-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.skill-management-row.disabled {
+  background: #f7f8fa;
+  opacity: .76;
+}
+
+.skill-management-row input {
+  width: 15px;
+  height: 15px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.skill-management-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.skill-management-copy strong {
+  color: #202b3d;
+  font-size: 13px;
+}
+
+.skill-management-copy span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.skill-management-copy code {
+  overflow-wrap: anywhere;
+  color: #59677b;
+  font-size: 11px;
+}
+
+.skill-management-row > .doctor-status {
+  align-self: start;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #effaf4;
+  color: #16824b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.skill-management-row > .doctor-status.unavailable {
+  background: #f0f2f5;
+  color: #697586;
 }
 
 .integration-runtime-status {

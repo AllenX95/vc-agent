@@ -30,6 +30,7 @@ function stateFixture(): PiResourcesSettingsState {
       status: "ready",
       directoryPath: "C:/Users/example/AppData/Local/VC Agent/pi/skills",
       loadedCount: 4,
+      items: [{ id: "fixture/SKILL.md", name: "fixture", description: "Fixture Skill", relativePath: "fixture/SKILL.md", enabled: true }],
       diagnostics: [],
       trustDisclosure: "Skills are loaded from the dedicated VC Agent directory.",
       sourceIsolationDisclosure: "Other Pi, Codex, Claude Code, and project Skill roots are ignored."
