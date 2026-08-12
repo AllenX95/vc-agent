@@ -14,8 +14,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.8",
-    "@earendil-works/pi-coding-agent": "0.80.8",
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
     "@vc-agent/contracts": "workspace:*",
     "pi-mcp-adapter": "1.5.1",
     "pi-web-access": "0.17.0",

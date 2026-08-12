@@ -486,7 +486,9 @@ function createSkillIsolatedResourceLoader(base: ResourceLoader, skillsRoot: str
     getThemes: () => base.getThemes(),
     getAgentsFiles: () => base.getAgentsFiles(),
     getSystemPrompt: () => base.getSystemPrompt(),
+    getSystemPromptSource: () => base.getSystemPromptSource(),
     getAppendSystemPrompt: () => base.getAppendSystemPrompt(),
+    getAppendSystemPromptSources: () => base.getAppendSystemPromptSources(),
     extendResources: (paths) => {
       const skillPaths = (paths.skillPaths ?? []).filter((entry) => {
         const canonical = canonicalPath(entry.path);
