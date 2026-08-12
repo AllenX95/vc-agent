@@ -456,7 +456,7 @@ function runtimeCapabilityDoctorMessage(): { readonly status: "ready" | "attenti
   const blocking = state.diagnostics.filter((diagnostic) => diagnostic.blocking === true);
   return {
     status: blocking.length === 0 ? "ready" : "attention",
-    message: `Pi 0.80.8; pi-web-access 0.17.0; pi-mcp-adapter 1.5.1; ${state.extensions.loadedCount} Extension source(s), ${state.mcp.serverCount} MCP server(s), ${state.skills.loadedCount} isolated Skill(s). Doctor executed no integration code${blocking.length === 0 ? "." : `; ${blocking.map((item) => item.code ?? item.source).join(", ")}.`}`
+    message: `Pi 0.84.1; pi-web-access 0.17.0; pi-mcp-adapter 1.5.1; ${state.extensions.loadedCount} Extension source(s), ${state.mcp.serverCount} MCP server(s), ${state.skills.loadedCount} isolated Skill(s). Doctor executed no integration code${blocking.length === 0 ? "." : `; ${blocking.map((item) => item.code ?? item.source).join(", ")}.`}`
   };
 }
 

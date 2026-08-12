@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"019ff681-4048-70f9-9037-7ad6e91f4834","timestamp":"2026-08-12T15:04:53.576Z","cwd":"C:\\vc-agent\\pi-0808-fixture"}
+{"type":"message","id":"28a4f5a7","parentId":null,"timestamp":"2026-08-12T15:04:53.577Z","message":{"role":"user","content":"Persisted by Pi 0.80.8.","timestamp":1786492800000}}
+{"type":"message","id":"3101d6d2","parentId":"28a4f5a7","timestamp":"2026-08-12T15:04:53.577Z","message":{"role":"assistant","content":[{"type":"text","text":"Legacy Pi session answer."}],"api":"openai-completions","provider":"fixture","model":"fixture-model","usage":{"input":12,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":17,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1786492801000}}
+{"type":"custom","customType":"vc-agent.trajectory-high-water","data":{"eventId":"legacy-turn-1","sequence":2},"id":"5f89b5b1","parentId":"3101d6d2","timestamp":"2026-08-12T15:04:53.577Z"}
