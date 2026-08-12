@@ -8,6 +8,7 @@ import {
   hostCommandSchema,
   thinkingLevelSchema,
   type ArtifactRecord,
+  type CanonicalParse,
   type ActorRef,
   type AcademicCredentialSource,
   type CapabilityExecutionRequest,
@@ -2295,17 +2296,40 @@ async function parseMaterial(correlationId: string, materialId: string, refreshR
   const jobId = randomUUID();
   const stagingDirectory = join(project.path, "outputs", "parsed", ".staging", jobId);
   emit({ ...eventMetadata(correlationId), event: "material.parse.started", payload: { materialId, jobId } });
-  const result = await utilityJobRunner!.run({
-    schemaVersion: 1, command: "material.parse", jobId,
-    material: { id: material.id, projectId: material.projectId, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash, absolutePath: join(project.path, material.relativePath) },
-    stagingDirectory, timeoutMs: 120_000, maxOutputBytes: 50_000_000
-  });
-  if (result.event === "material.parse.failed") {
-    if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, result.message);
-    removeStaging(stagingDirectory, project.path);
-    return materialParseFailure(correlationId, materialId, result.code, result.message);
+  const absolutePath = join(project.path, material.relativePath);
+  let parse: CanonicalParse;
+  if (material.extension === ".pdf") {
+    if (pageRecoveryPipeline === null) return materialParseFailure(correlationId, materialId, "PAGE_RECOVERY_UNAVAILABLE", "The PDF Parse Pipeline is unavailable.");
+    try {
+      parse = await pageRecoveryPipeline.parse({
+        parseId: jobId,
+        absolutePath,
+        material: { id: material.id, projectId: material.projectId, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash },
+        currentSourceHash: () => createHash("sha256").update(readFileSync(absolutePath)).digest("hex")
+      });
+      mkdirSync(stagingDirectory, { recursive: true });
+      writeFileSync(join(stagingDirectory, "parse.json"), `${JSON.stringify(parse, null, 2)}\n`, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "PDF page recovery failed.";
+      const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "PAGE_RECOVERY_FAILED";
+      if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, message);
+      removeStaging(stagingDirectory, project.path);
+      return materialParseFailure(correlationId, materialId, code, message);
+    }
+  } else {
+    const result = await utilityJobRunner!.run({
+      schemaVersion: 1, command: "material.parse", jobId,
+      material: { id: material.id, projectId: material.projectId, relativePath: material.relativePath, mediaType: material.mediaType, sourceHash: material.sourceHash, absolutePath },
+      stagingDirectory, timeoutMs: 120_000, maxOutputBytes: 50_000_000
+    });
+    if (result.event === "material.parse.failed") {
+      if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, result.message);
+      removeStaging(stagingDirectory, project.path);
+      return materialParseFailure(correlationId, materialId, result.code, result.message);
+    }
+    parse = result.parse;
   }
-  const parserId = `${result.parse.parser.id}@${result.parse.parser.version}`;
+  const parserId = `${parse.parser.id}@${parse.parser.version}`;
   if (parserId !== expectedParser) {
     if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, "Parser identity did not match the registered adapter.");
     removeStaging(stagingDirectory, project.path);
@@ -2318,20 +2342,20 @@ async function parseMaterial(correlationId: string, materialId: string, refreshR
   }
   await refreshProjectInventory(correlationId, project.id, false);
   const current = stateStore!.getMaterial(materialId);
-  if (current?.sourceHash !== result.parse.material.sourceHash) {
+  if (current?.sourceHash !== parse.material.sourceHash) {
     if (refreshRequestId !== undefined) stateStore!.failParseRefreshRequest(refreshRequestId, "Source changed while parsing.");
     removeStaging(stagingDirectory, project.path);
     return materialParseFailure(correlationId, materialId, "SOURCE_CHANGED_DURING_PARSE", "Source changed while parsing; retry from the current version.");
   }
 
-  const relativeArtifactPath = `outputs/parsed/${material.id}/${result.parse.parseId}/parse.json`;
+  const relativeArtifactPath = `outputs/parsed/${material.id}/${parse.parseId}/parse.json`;
   const finalDirectory = join(project.path, dirname(relativeArtifactPath));
   mkdirSync(dirname(finalDirectory), { recursive: true });
   let replacedArtifactPath: string | undefined;
   try {
     renameSync(stagingDirectory, finalDirectory);
-    if (refreshRequestId === undefined) stateStore!.recordParsedMaterialVersion(materialId, parserId, relativeArtifactPath, result.parse.parseId);
-    else ({ replacedArtifactPath } = stateStore!.completeParseRefresh(refreshRequestId, result.parse.parseId, parserId, relativeArtifactPath));
+    if (refreshRequestId === undefined) stateStore!.recordParsedMaterialVersion(materialId, parserId, relativeArtifactPath, parse.parseId);
+    else ({ replacedArtifactPath } = stateStore!.completeParseRefresh(refreshRequestId, parse.parseId, parserId, relativeArtifactPath));
   } catch (error) {
     removeParsedArtifact(project.path, relativeArtifactPath);
     if (refreshRequestId !== undefined) {
@@ -2340,11 +2364,11 @@ async function parseMaterial(correlationId: string, materialId: string, refreshR
     return materialParseFailure(correlationId, materialId, "PARSE_COMMIT_FAILED", "Parsed artifact could not be committed.");
   }
   let registryWarning = 0;
-  try { recordParsedArtifact(project.path, result.parse.parseId, material, parserId, relativeArtifactPath, result.parse.warnings.length); }
+  try { recordParsedArtifact(project.path, parse.parseId, material, parserId, relativeArtifactPath, parse.warnings.length); }
   catch { registryWarning = 1; }
   if (replacedArtifactPath !== undefined) removeParsedArtifact(project.path, replacedArtifactPath);
   const updated = stateStore!.getMaterial(materialId)!;
-  return { ...eventMetadata(correlationId), event: "material.parse.completed", payload: { material: updated, parseId: result.parse.parseId, parserId, artifactPath: relativeArtifactPath, warningCount: result.parse.warnings.length + registryWarning, reused: false } };
+  return { ...eventMetadata(correlationId), event: "material.parse.completed", payload: { material: updated, parseId: parse.parseId, parserId, artifactPath: relativeArtifactPath, warningCount: parse.warnings.length + registryWarning, reused: false } };
 }
 
 function materialParseFailure(correlationId: string, materialId: string, code: string, message: string): HostEvent {

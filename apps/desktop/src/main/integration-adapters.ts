@@ -161,7 +161,8 @@ function createUtilityNativePdfAdapter(options: LocalOcrAdapterOptions): NativeP
       if (signal.aborted) throw new Error("PAGE_RECOVERY_CANCELLED");
       const jobId = randomUUID();
       const stagingDirectory = join(options.stagingRoot, jobId);
-      const event = await options.runner.run({ schemaVersion: 1, jobId, command: "material.parse", material: { ...request.material, absolutePath: request.absolutePath }, stagingDirectory, timeoutMs: 300_000, maxOutputBytes: 100_000_000 });
+      const removeAbort = terminateOnAbort(signal, options.runner, jobId);
+      const event = await options.runner.run({ schemaVersion: 1, jobId, command: "material.parse", material: { ...request.material, absolutePath: request.absolutePath }, stagingDirectory, timeoutMs: 300_000, maxOutputBytes: 100_000_000 }).finally(removeAbort);
       try {
         if (event.event !== "material.parse.completed") throw new Error(event.message);
         const pages = event.parse.structure.units.map((unit) => {
@@ -202,7 +203,10 @@ function createUtilityOcrAdapter(stage: "paddle" | "ovis", options: LocalOcrAdap
   const recover = async ({ request, pageNumber, signal }: { readonly request: MaterialParseRequest; readonly pageNumber: number; readonly signal: AbortSignal }): Promise<PageCandidate> => {
     if (request.absolutePath === undefined || !existsSync(request.absolutePath)) throw new Error("PAGE_SOURCE_UNAVAILABLE");
     if (signal.aborted) throw new Error("PAGE_RECOVERY_CANCELLED");
-    const event = await options.runner.run({ schemaVersion: 1, jobId: randomUUID(), command: "page_recovery.ocr", stage, absolutePath: request.absolutePath, pageNumber, device: configuredDevice, runtimeRoot: options.runtimeRoot, timeoutMs: stage === "paddle" ? 300_000 : 1_200_000, maxOutputBytes: 50_000_000 });
+    const jobId = randomUUID();
+    const removeAbort = terminateOnAbort(signal, options.runner, jobId);
+    const event = await options.runner.run({ schemaVersion: 1, jobId, command: "page_recovery.ocr", stage, absolutePath: request.absolutePath, pageNumber, device: configuredDevice, runtimeRoot: options.runtimeRoot, timeoutMs: stage === "paddle" ? 300_000 : 1_200_000, maxOutputBytes: 50_000_000 }).finally(removeAbort);
+    if (signal.aborted) throw new Error("PAGE_RECOVERY_CANCELLED");
     if (event.event !== "page_recovery.ocr.completed") throw new Error(event.message);
     const candidate = pageTextBlock({ request, pageNumber, stage, text: event.text, quality: { confidence: event.confidence, structurallyInsufficient: event.structurallyInsufficient }, adapterId: event.adapterId, adapterVersion: event.adapterVersion, runtimeRevision: `${event.runtimeRevision}:${event.device}` });
     return { ...candidate, warnings: event.warnings };
@@ -231,4 +235,10 @@ function configuredOcrDevice(): LocalOcrDevice {
 
 function localPrintableRatio(text: string): number {
   return text.length === 0 ? 0 : [...text].filter((character) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(character)).length / [...text].length;
+}
+
+function terminateOnAbort(signal: AbortSignal, runner: UtilityJobRunner, jobId: string): () => void {
+  const abort = () => { void runner.terminate(jobId); };
+  if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
 }

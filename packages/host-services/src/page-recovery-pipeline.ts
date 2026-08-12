@@ -246,10 +246,12 @@ export class PageRecoveryPipeline {
     }
     try {
       const candidate = validateCandidate(await this.#paddle.recover({ request, pageNumber, signal: controller.signal }), request);
+      assertNotCancelled(controller.signal);
       const usable = isPaddleReliable(candidate, this.#policy);
       stages.push({ id: this.#paddle.id, version: this.#paddle.version, durationMs: Math.max(0, this.#now() - started), status: usable ? "completed" : "warning", warningCodes: usable ? [] : ["OCR_FAILED"] });
       return candidate;
     } catch {
+      assertNotCancelled(controller.signal);
       stages.push({ id: this.#paddle.id, version: this.#paddle.version, durationMs: Math.max(0, this.#now() - started), status: "failed", warningCodes: ["OCR_FAILED"] });
       return undefined;
     }
@@ -263,10 +265,12 @@ export class PageRecoveryPipeline {
     }
     try {
       const candidate = validateCandidate(await this.#ovis.recover({ request, pageNumber, ...(paddle === undefined ? {} : { paddle }), signal: controller.signal }), request);
+      assertNotCancelled(controller.signal);
       const usable = isOvisReliable(candidate);
       stages.push({ id: this.#ovis.id, version: this.#ovis.version, durationMs: Math.max(0, this.#now() - started), status: usable ? "completed" : "warning", warningCodes: usable ? [] : ["COMPLEX_PARSE_INVALID"] });
       return candidate;
     } catch {
+      assertNotCancelled(controller.signal);
       stages.push({ id: this.#ovis.id, version: this.#ovis.version, durationMs: Math.max(0, this.#now() - started), status: "failed", warningCodes: ["COMPLEX_PARSE_FAILED"] });
       return undefined;
     }
