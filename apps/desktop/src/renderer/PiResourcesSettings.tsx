@@ -7,9 +7,8 @@ import type {
 } from "@vc-agent/contracts";
 
 /**
- * Settings for Pi-native Extensions, MCP, and the isolated VC Agent Skills
- * directory.  This is intentionally a presentational view: the callbacks are
- * small user intents, not the retired Host integration command union.
+ * Settings for Pi-native Extensions and MCP. Skill discovery/activation has a
+ * dedicated tab so users can review and toggle each item independently.
  */
 export function PiResourcesSettings({ state, actions, disabled = false }: PiResourcesSettingsProps) {
   const run = (action: () => void | Promise<void>) => {
@@ -111,11 +110,11 @@ export function PiResourcesSettings({ state, actions, disabled = false }: PiReso
         <PiResourceCard
           testId="pi-skills-settings"
           title="Skills"
-          description="Only the dedicated VC Agent Skills directory is supplied to Pi's progressive-disclosure loader."
+          description="Only the dedicated VC Agent Skills directory is supplied to Pi. Manage individual Skills from the dedicated Skills tab."
           pathLabel="Dedicated directory"
           path={state.skills.directoryPath}
           status={state.skills.status}
-          loadedSummary={`${state.skills.loadedCount} available`}
+          loadedSummary={`${state.skills.loadedCount} enabled · ${state.skills.items.length} discovered`}
           trustDisclosure={state.skills.trustDisclosure}
           diagnostics={state.skills.diagnostics}
           isolationDisclosure={state.skills.sourceIsolationDisclosure}
@@ -137,6 +136,7 @@ export function PiResourcesSettings({ state, actions, disabled = false }: PiReso
           ]}
           run={run}
         />
+
       </div>
 
       <PiDiagnostics diagnostics={state.diagnostics} />

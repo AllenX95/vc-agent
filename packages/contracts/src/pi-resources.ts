@@ -3,10 +3,9 @@ import { z } from "zod";
 /**
  * The three resource families shown by the Pi resource settings view.
  *
- * This contract intentionally describes an observation surface.  It does not
- * contain admission, activation, revision, schema, or per-tool permission
- * state; those concepts are deliberately absent from the Pi-native resource
- * runtime.
+ * This contract describes the resource observation surface. Extensions and
+ * MCP remain source-level observations; Skills additionally expose the
+ * explicit per-item enable state used by the dedicated management view.
  */
 export const piResourceKindSchema = z.enum(["extensions", "mcp", "skills"]);
 export type PiResourceKind = z.infer<typeof piResourceKindSchema>;
@@ -50,10 +49,28 @@ export type PiMcpSettingsState = z.infer<typeof piMcpSettingsStateSchema>;
 export const piSkillsSettingsStateSchema = piResourceCommonStateSchema.extend({
   directoryPath: z.string().min(1),
   loadedCount: z.number().int().nonnegative(),
+  /** Every discovered Skill and its explicit activation state. */
+  items: z.array(z.object({
+    /** Stable id derived from the Skill's relative path under directoryPath. */
+    id: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string(),
+    relativePath: z.string().min(1),
+    enabled: z.boolean()
+  })).default([]),
   /** The dedicated-source statement is separate so it remains visible even when empty. */
   sourceIsolationDisclosure: z.string().min(1).max(1_200)
 });
 export type PiSkillsSettingsState = z.infer<typeof piSkillsSettingsStateSchema>;
+
+/**
+ * Skill ids intentionally remain path based.  A relative path is stable over
+ * application restarts and does not expose an absolute user-data location.
+ */
+export function piSkillId(relativePath: string): string {
+  const normalized = relativePath.replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "");
+  return normalized.length === 0 ? "SKILL.md" : normalized;
+}
 
 export const piResourcesSettingsStateSchema = z.object({
   schemaVersion: z.literal(1),
@@ -80,6 +97,7 @@ export interface PiResourcesSettingsActions {
   onImportSkill: () => void | Promise<void>;
   onReload: () => void | Promise<void>;
   onSetProjectResourcesTrusted?: (trusted: boolean) => void | Promise<void>;
+  onSetSkillEnabled?: (id: string, enabled: boolean) => void | Promise<void>;
 }
 
 /** Backwards-friendly name for callers that prefer an explicit callback suffix. */

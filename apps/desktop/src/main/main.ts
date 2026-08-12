@@ -44,7 +44,8 @@ import {
   type SubAgentContextBoundary,
   type TaskModelType,
   reflectionCompletionTransition,
-  reflectionLaunchTransition
+  reflectionLaunchTransition,
+  piSkillId
 } from "@vc-agent/contracts";
 import { MAX_ARXIV_BUNDLE_BYTES, BinaryOutputStore, CapabilityRegistry, WorkspaceWriteStore, capabilitiesForTurn, createAcademicResearchCapability, createArxivFulltextCapability, createCapabilityBroker, createFileDownloadCapability, createMaterialRecallCapability, createMemoryRecallCapability, createProjectStateRecallCapability, createReflectionEvidenceDrilldownCapability, createReflectionOutcomeProposalCapability, createRuntimeExtensionCapability, createTextEditCapability, createTextOutputCapability, createTurnCapabilitySurface, createWorkspaceWriteCapability, FetchFileDownloadClient, TextOutputStore, type CapabilityExecutionContext } from "@vc-agent/capabilities";
 import { PI_BUILTIN_PROVIDER_IDS } from "@vc-agent/pi-adapter/provider-catalog";
@@ -167,6 +168,8 @@ let allowQuitAfterShutdown = false;
 let piResourcesGeneration = 0;
 let piResourcesReloadPending = false;
 let projectPiResourcesTrusted = false;
+/** Skill ids explicitly disabled in the app-owned Pi resource directory. */
+const disabledPiSkillIds = new Set<string>();
 let piResourceMigrationDiagnostics: readonly PiIntegrationMigrationDiagnostic[] = [];
 const sequenceByThread = new Map<string, number>();
 const integrationJobs = new Map<string, IntegrationJobSummary>();
@@ -263,7 +266,8 @@ function piResourcesConfig(): NonNullable<Extract<WorkerCommand, { command: "tur
     agentDir,
     skillsRoot: join(agentDir, "skills"),
     mcpConfigPath: join(agentDir, "mcp.json"),
-    projectResourcesTrusted: projectPiResourcesTrusted
+    projectResourcesTrusted: projectPiResourcesTrusted,
+    disabledSkillIds: [...disabledPiSkillIds]
   };
 }
 
@@ -288,17 +292,31 @@ function loadPiResourceSettings(): void {
   const paths = piResourcePaths();
   mkdirSync(paths.agentDir, { recursive: true });
   try {
-    const parsed = JSON.parse(readFileSync(paths.settings, "utf8")) as { projectResourcesTrusted?: unknown };
+    const parsed = JSON.parse(readFileSync(paths.settings, "utf8")) as { projectResourcesTrusted?: unknown; disabledSkillIds?: unknown };
     projectPiResourcesTrusted = parsed.projectResourcesTrusted === true;
+    disabledPiSkillIds.clear();
+    if (Array.isArray(parsed.disabledSkillIds)) {
+      for (const value of parsed.disabledSkillIds) if (typeof value === "string" && value.trim() !== "") disabledPiSkillIds.add(value);
+    }
   } catch {
     projectPiResourcesTrusted = false;
+    disabledPiSkillIds.clear();
   }
 }
 
 function persistPiResourceSettings(): void {
   const paths = piResourcePaths();
   mkdirSync(paths.agentDir, { recursive: true });
-  writeFileSync(paths.settings, `${JSON.stringify({ schemaVersion: 1, projectResourcesTrusted: projectPiResourcesTrusted }, null, 2)}\n`, "utf8");
+  writeFileSync(paths.settings, `${JSON.stringify({ schemaVersion: 1, projectResourcesTrusted: projectPiResourcesTrusted, disabledSkillIds: [...disabledPiSkillIds].sort((left, right) => left.localeCompare(right)) }, null, 2)}\n`, "utf8");
+}
+
+function isPiSkillDisabled(id: string, compatibilityAlias?: string): boolean {
+  if (disabledPiSkillIds.has(id) || (compatibilityAlias !== undefined && disabledPiSkillIds.has(compatibilityAlias))) return true;
+  if (process.platform !== "win32") return false;
+  const normalized = id.toLowerCase();
+  const normalizedAlias = compatibilityAlias?.toLowerCase();
+  for (const candidate of disabledPiSkillIds) if (candidate.toLowerCase() === normalized || (normalizedAlias !== undefined && candidate.toLowerCase() === normalizedAlias)) return true;
+  return false;
 }
 
 function ensureNativePiResourceFiles(): void {
@@ -365,6 +383,17 @@ function piResourcesSettingsSnapshot(): PiResourcesSettingsState {
   const extensionCount = existsSync(paths.extensions)
     ? readdirSync(paths.extensions, { withFileTypes: true }).filter((entry) => entry.isDirectory() || entry.isFile()).length
     : 0;
+  const skillItems = skillSnapshot.skills.map((skill) => {
+    const id = piSkillId(skill.relativePath);
+    return {
+      id,
+      name: skill.name,
+      description: skill.description,
+      relativePath: skill.relativePath,
+      enabled: !isPiSkillDisabled(id, skill.name)
+    };
+  });
+  const enabledSkillCount = skillItems.filter((skill) => skill.enabled).length;
   const statusFor = (source: "extension" | "mcp" | "skill"): "ready" | "attention" => diagnostics.some((diagnostic) => diagnostic.source === source && (diagnostic.type === "error" || diagnostic.type === "warning")) ? "attention" : "ready";
   return {
     schemaVersion: 1,
@@ -392,7 +421,8 @@ function piResourcesSettingsSnapshot(): PiResourcesSettingsState {
       diagnostics: diagnostics.filter((diagnostic) => diagnostic.source === "skill"),
       trustDisclosure: "Skill instructions are trusted when copied into the dedicated VC Agent directory.",
       directoryPath: paths.skills,
-      loadedCount: skillSnapshot.skills.length,
+      loadedCount: enabledSkillCount,
+      items: skillItems,
       sourceIsolationDisclosure: "Only this dedicated directory is read; ambient Pi, Codex, Claude Code, .agents, and project Skill roots are ignored."
     }
   };
@@ -400,7 +430,7 @@ function piResourcesSettingsSnapshot(): PiResourcesSettingsState {
 
 function piResourcesEvent(
   correlationId: string,
-  action: "loaded" | "opened" | "reloaded" | "imported" | "project_trust_changed"
+  action: "loaded" | "opened" | "reloaded" | "imported" | "project_trust_changed" | "skill_enabled_changed"
 ): HostEvent {
   return { ...eventMetadata(correlationId), event: "pi.resources.updated", payload: { state: piResourcesSettingsSnapshot(), action } };
 }
@@ -1219,6 +1249,25 @@ async function handleCommand(event: IpcMainInvokeEvent, rawCommand: unknown): Pr
         new VcSkillsDirectoryAdapter({ root: piResourcePaths().skills }).importSkill({ sourceDirectory });
         requestPiResourcesReload();
         return piResourcesEvent(command.correlationId, "imported");
+      }
+      case "pi.skills.set_enabled": {
+        if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "INVALID_COMMAND", "Skill activation requires explicit User action.");
+        const skillSnapshot = new VcSkillsDirectoryAdapter({ root: piResourcePaths().skills }).discover();
+        const knownIds = new Map(skillSnapshot.skills.map((skill) => [piSkillId(skill.relativePath), skill.name]));
+        const canonicalId = [...knownIds.keys()].find((id) => id === command.payload.id || (process.platform === "win32" && id.toLowerCase() === command.payload.id.toLowerCase()));
+        if (canonicalId === undefined) return diagnostic(command.correlationId, "INVALID_COMMAND", "The requested Skill is not present in the dedicated VC Agent directory.");
+        const skillName = knownIds.get(canonicalId);
+        if (command.payload.enabled) {
+          disabledPiSkillIds.delete(canonicalId);
+          if (skillName !== undefined) disabledPiSkillIds.delete(skillName);
+          if (process.platform === "win32") for (const id of disabledPiSkillIds) if (id.toLowerCase() === canonicalId.toLowerCase()) disabledPiSkillIds.delete(id);
+        } else {
+          for (const id of disabledPiSkillIds) if (process.platform === "win32" && id.toLowerCase() === canonicalId.toLowerCase()) disabledPiSkillIds.delete(id);
+          disabledPiSkillIds.add(canonicalId);
+        }
+        persistPiResourceSettings();
+        requestPiResourcesReload();
+        return piResourcesEvent(command.correlationId, "skill_enabled_changed");
       }
       case "pi.resources.project_trust.set":
         if (command.actor.actorType !== "user") return diagnostic(command.correlationId, "INVALID_COMMAND", "Project resource trust requires explicit User action.");

@@ -20,17 +20,20 @@ export type RuntimeResourceSnapshot = z.infer<typeof runtimeResourceSnapshotSche
 /**
  * Application-owned Pi resource roots for the native loading path.
  *
- * This is deliberately a path/configuration contract, not an admission or
- * activation record.  The Worker passes the values to Pi's native
- * DefaultResourceLoader; the legacy snapshots below remain optional
- * compatibility inputs while the desktop sender is migrated.
+ * This is deliberately a path/configuration contract. The Worker passes the
+ * values to Pi's native DefaultResourceLoader; disabledSkillIds is the one
+ * explicit per-Skill activation decision carried across the seam. The legacy
+ * snapshots below remain optional compatibility inputs while the desktop
+ * sender is migrated.
  */
 export const piResourcesSchema = z.object({
   agentDir: z.string().min(1),
   skillsRoot: z.string().min(1),
   extensionPaths: z.array(z.string().min(1)).optional(),
   mcpConfigPath: z.string().min(1).optional(),
-  projectResourcesTrusted: z.boolean().optional()
+  projectResourcesTrusted: z.boolean().optional(),
+  /** Skill ids explicitly disabled in the dedicated source. */
+  disabledSkillIds: z.array(z.string().min(1)).optional()
 });
 export type PiResources = z.infer<typeof piResourcesSchema>;
 

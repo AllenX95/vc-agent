@@ -11,13 +11,15 @@ import {
   type ResourceLoader,
   type Skill
 } from "@earendil-works/pi-coding-agent";
+import { piSkillId } from "@vc-agent/contracts";
 
 /**
  * Configuration for the one Pi resource loading seam used by VC Agent.
  *
  * `agentDir` and `skillsRoot` are deliberately explicit.  They must point at
  * the application-owned Pi directory and must not be the user's ordinary Pi,
- * Codex, or Claude Code directories.
+ * Codex, or Claude Code directories. Disabled Skill ids are filtered at the
+ * same native `skillsOverride` seam so Pi never exposes them to a session.
  */
 export interface PiResourceRuntimeOptions {
   readonly cwd: string;
@@ -42,6 +44,8 @@ export interface PiResourceRuntimeOptions {
   readonly settingsManager?: SettingsManager;
   /** One coarse project-resource trust decision; false by default. */
   readonly projectResourcesTrusted?: boolean;
+  /** Skill ids explicitly disabled from the dedicated source. */
+  readonly disabledSkillIds?: readonly string[];
   /** Additional extension flag values (for example, adapter-specific flags). */
   readonly extensionFlagValues?: ReadonlyMap<string, boolean | string>;
 }
@@ -87,6 +91,7 @@ export class PiResourceRuntime {
   readonly #settingsManager: SettingsManager;
   readonly #resourceLoader: ResourceLoader;
   readonly #extensionFlagValues: ReadonlyMap<string, boolean | string>;
+  readonly #disabledSkillIds: ReadonlySet<string>;
   #snapshot: PiResourceRuntimeSnapshot;
   #activeTurns = 0;
   #reloadQueued = false;
@@ -97,6 +102,7 @@ export class PiResourceRuntime {
     this.#cwd = resolve(options.cwd);
     this.#agentDir = resolve(options.agentDir);
     this.#skillsRoot = resolve(options.skillsRoot ?? `${this.#agentDir}${sep}skills`);
+    this.#disabledSkillIds = new Set(options.disabledSkillIds ?? []);
     this.#settingsManager = options.settingsManager ?? SettingsManager.create(
       this.#cwd,
       this.#agentDir,
@@ -140,13 +146,13 @@ export class PiResourceRuntime {
       ...(options.noPromptTemplates === undefined ? {} : { noPromptTemplates: options.noPromptTemplates }),
       ...(options.noThemes === undefined ? {} : { noThemes: options.noThemes }),
       ...(options.noContextFiles === undefined ? {} : { noContextFiles: options.noContextFiles }),
-      skillsOverride: (result) => filterContainedSkills(result, this.#skillsRoot)
+      skillsOverride: (result) => filterContainedSkills(result, this.#skillsRoot, this.#disabledSkillIds)
     });
     // Extensions may advertise additional Skills through resources_discover.
     // Keep the Pi lifecycle intact while filtering those paths at the same
     // ResourceLoader Seam; only canonical paths under the dedicated root are
     // admitted.
-    this.#resourceLoader = createSkillIsolatedResourceLoader(nativeLoader, this.#skillsRoot);
+    this.#resourceLoader = createSkillIsolatedResourceLoader(nativeLoader, this.#skillsRoot, this.#disabledSkillIds);
 
     this.#snapshot = this.#makeSnapshot(0, false, []);
   }
@@ -457,13 +463,13 @@ function dedupePaths(paths: readonly string[]): string[] {
   return result;
 }
 
-function createSkillIsolatedResourceLoader(base: ResourceLoader, skillsRoot: string): ResourceLoader {
+function createSkillIsolatedResourceLoader(base: ResourceLoader, skillsRoot: string, disabledSkillIds: ReadonlySet<string>): ResourceLoader {
   const rejected: string[] = [];
   const root = canonicalPath(skillsRoot);
   return {
     getExtensions: () => base.getExtensions(),
     getSkills: () => {
-      const result = filterContainedSkills(base.getSkills(), skillsRoot);
+      const result = filterContainedSkills(base.getSkills(), skillsRoot, disabledSkillIds);
       return {
         skills: result.skills,
         diagnostics: [
@@ -496,7 +502,8 @@ function createSkillIsolatedResourceLoader(base: ResourceLoader, skillsRoot: str
 
 function filterContainedSkills(
   result: { readonly skills: Skill[]; readonly diagnostics: ResourceDiagnostic[] },
-  skillsRoot: string
+  skillsRoot: string,
+  disabledSkillIds: ReadonlySet<string> = new Set()
 ): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
   const root = canonicalPath(skillsRoot);
   if (root === undefined) {
@@ -527,9 +534,31 @@ function filterContainedSkills(
       });
       return false;
     }
+    const id = skillIdForPath(skill.filePath, root);
+    // The persisted contract uses path ids. Accepting the frontmatter name as
+    // a compatibility alias keeps older settings from silently re-enabling a
+    // Skill after the id contract was introduced.
+    if ((id !== undefined && hasSkillId(disabledSkillIds, id)) || hasSkillId(disabledSkillIds, skill.name)) return false;
     return true;
   });
   return { skills, diagnostics };
+}
+
+function skillIdForPath(filePath: string, canonicalRoot: string): string | undefined {
+  const canonicalFile = canonicalPath(filePath);
+  if (canonicalFile === undefined || !isContained(canonicalRoot, canonicalFile)) return undefined;
+  const relativePath = relative(canonicalRoot, canonicalFile).replace(/\\/gu, "/");
+  return piSkillId(relativePath);
+}
+
+function hasSkillId(disabledSkillIds: ReadonlySet<string>, id: string): boolean {
+  if (disabledSkillIds.has(id)) return true;
+  // Persisted ids are path based.  Windows paths are case-insensitive, so
+  // accept a casing-only difference without weakening containment checks.
+  if (process.platform !== "win32") return false;
+  const normalized = id.toLowerCase();
+  for (const candidate of disabledSkillIds) if (candidate.toLowerCase() === normalized) return true;
+  return false;
 }
 
 /**

@@ -177,6 +177,15 @@ test("imports a complete Skill copy into the dedicated Pi directory", async () =
       return entries.some((entry) => entry.isDirectory() && existsSync(join(skillsDirectory, entry.name, "SKILL.md")));
     }).toBe(true);
     await expect(resources.getByText(/Only the dedicated VC Agent Skills directory/i)).toBeVisible();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Skills", exact: true }).click();
+    const management = window.getByTestId("skill-management-settings");
+    await expect(management.getByText("fixture-skill", { exact: true })).toBeVisible();
+    await management.getByRole("checkbox", { name: "Disable fixture-skill" }).uncheck();
+    await expect(management.getByRole("checkbox", { name: "Enable fixture-skill" })).not.toBeChecked();
+    await expect.poll(() => {
+      const settings = JSON.parse(readFileSync(join(userDataDirectory, "pi-agent", "vc-agent-resources.json"), "utf8")) as { disabledSkillIds?: string[] };
+      return settings.disabledSkillIds?.some((id) => id.endsWith("/SKILL.md")) ?? false;
+    }).toBe(true);
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
@@ -189,7 +198,7 @@ test("completes Skills and Project file mentions from the composer", async () =>
   const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-composer-project-e2e-"));
   const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-composer-skill-e2e-"));
   writeFileSync(join(projectDirectory, "Investment Memo.md"), "# Investment Memo", "utf8");
-  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: Fixture Skill\ndescription: Composer fixture\nkeywords: fixture\n---\n# Fixture Skill\n", "utf8");
+  writeFileSync(join(skillSource, "SKILL.md"), "---\nname: fixture-skill\ndescription: Composer fixture\nkeywords: fixture\n---\n# Fixture Skill\n", "utf8");
   writeFileSync(join(skillSource, "LICENSE"), "fixture", "utf8");
   const root = resolve(import.meta.dirname, "../..");
   const application = await launchApplication(root, userDataDirectory, {
@@ -210,6 +219,24 @@ test("completes Skills and Project file mentions from the composer", async () =>
     await window.getByRole("button", { name: "Settings" }).click();
 
     const composer = window.getByRole("textbox", { name: "Message" });
+    await composer.fill("/skill:fixture");
+    const skills = window.getByRole("listbox", { name: "Slash commands" });
+    await expect(skills).toContainText("/skill:fixture-skill");
+    await composer.press("Enter");
+    await expect(composer).toHaveValue("/skill:fixture-skill ");
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Skills", exact: true }).click();
+    await window.getByTestId("skill-management-settings").getByRole("checkbox", { name: "Disable fixture-skill" }).uncheck();
+    await window.getByRole("button", { name: "Settings" }).click();
+    await composer.fill("/skill:fixture");
+    await expect(window.getByRole("listbox", { name: "Slash commands" })).toHaveCount(0);
+
+    await window.getByRole("button", { name: "Settings" }).click();
+    await window.locator(".settings-tabs").getByRole("tab", { name: "Skills", exact: true }).click();
+    await window.getByTestId("skill-management-settings").getByRole("checkbox", { name: "Enable fixture-skill" }).check();
+    await window.getByRole("button", { name: "Settings" }).click();
+
     await composer.fill("Review @");
     const files = window.getByRole("listbox", { name: "Project files" });
     await expect(files).toContainText("@Investment Memo.md");

@@ -6,6 +6,7 @@ import {
   matchComposerSuggestions,
   profileSuggestion,
   skillSuggestion,
+  skillSuggestions,
   thinkingSuggestion
 } from "../../apps/desktop/src/renderer/composer-suggestions";
 
@@ -26,6 +27,14 @@ describe("composer suggestions", () => {
       text: "/skill:documents later",
       cursor: 17
     });
+  });
+
+  it("only offers enabled Skills from the settings snapshot", () => {
+    const suggestions = skillSuggestions([
+      { id: "enabled/SKILL.md", name: "enabled", description: "Enabled Skill", relativePath: "enabled/SKILL.md", enabled: true },
+      { id: "disabled/SKILL.md", name: "disabled", description: "Disabled Skill", relativePath: "disabled/SKILL.md", enabled: false }
+    ]);
+    expect(suggestions.map((item) => item.value)).toEqual(["/skill:enabled"]);
   });
 
   it("offers application commands and their model and thinking arguments", () => {
