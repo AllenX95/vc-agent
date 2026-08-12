@@ -11,7 +11,7 @@ export const BASELINE_PARSER_ADAPTERS: readonly ParserAdapterRegistration[] = [
   { id: "pyyaml", version: "6.0.2", extensions: [".yaml", ".yml"], pageRecovery: "not_applicable" },
   { id: "xml", version: "1.0.0", extensions: [".xml"], pageRecovery: "not_applicable" },
   { id: "csv", version: "1.0.0", extensions: [".csv"], pageRecovery: "not_applicable" },
-  { id: "pymupdf", version: "1.28.0", extensions: [".pdf"], pageRecovery: "request_when_needed" },
+  { id: "page-recovery", version: "page-quality-v1", extensions: [".pdf"], pageRecovery: "request_when_needed" },
   { id: "python-docx", version: "1.2.0", extensions: [".docx"], pageRecovery: "not_applicable" },
   { id: "python-pptx", version: "1.0.2", extensions: [".pptx"], pageRecovery: "not_applicable" },
   { id: "openpyxl", version: "3.1.5", extensions: [".xlsx"], pageRecovery: "not_applicable" }

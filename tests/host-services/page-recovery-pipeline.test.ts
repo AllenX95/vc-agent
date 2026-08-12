@@ -98,4 +98,36 @@ describe("Page Recovery Pipeline", () => {
     await expect(pipeline.parse({ ...input, currentSourceHash: () => currentHash })).rejects.toMatchObject({ code: "SOURCE_CHANGED_DURING_PARSE" } satisfies Partial<PageRecoveryError>);
     expect(pipeline.inspectAvailability().native.status).toBe("ready");
   });
+
+  it("does not swallow cancellation while an OCR fallback is running", async () => {
+    const input = { ...request(), pageCount: 1 };
+    let releasePaddle!: () => void;
+    const paddleStarted = new Promise<void>((resolve) => { releasePaddle = resolve; });
+    let finishPaddle!: () => void;
+    const paddleBlocked = new Promise<void>((resolve) => { finishPaddle = resolve; });
+    let ovisCalls = 0;
+    const pipeline = new PageRecoveryPipeline({
+      native: {
+        parse: async () => ({ pageCount: 1, pages: [candidate(input, 1, "native", "", { usable: false, textChars: 0 })] }),
+        inspectAvailability: () => availability()
+      },
+      paddle: {
+        id: "paddleocr", version: "fixture", runtimeRevision: "fixture",
+        recover: async () => { releasePaddle(); await paddleBlocked; return candidate(input, 1, "paddle", "late result"); },
+        inspectAvailability: () => availability()
+      },
+      ovis: {
+        id: "ovisocr2", version: "fixture", runtimeRevision: "fixture",
+        recover: async () => { ovisCalls += 1; return candidate(input, 1, "ovis", "must not run"); },
+        inspectAvailability: () => availability()
+      }
+    });
+    const parsing = pipeline.parse(input);
+    await paddleStarted;
+    await pipeline.cancel(input.parseId!);
+    finishPaddle();
+    await expect(parsing).rejects.toMatchObject({ code: "PAGE_RECOVERY_CANCELLED" } satisfies Partial<PageRecoveryError>);
+    expect(ovisCalls).toBe(0);
+    expect(pipeline.telemetry().lastStatus).toBe("cancelled");
+  });
 });

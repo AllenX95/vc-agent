@@ -33,7 +33,7 @@ describe("Dogfood adapter boundaries", () => {
     capabilities.register(createTextOutputCapability(new TextOutputStore()));
     expect(capabilities.get("output.write_text")?.metadata.executor).toBe("host");
     expect(getParserAdapter(".md")).toMatchObject({ id: "text", version: "1.0.0" });
-    expect(BASELINE_PARSER_ADAPTERS.some((adapter) => adapter.id === "pymupdf")).toBe(true);
+    expect(BASELINE_PARSER_ADAPTERS.some((adapter) => adapter.id === "page-recovery")).toBe(true);
 
     const output = new TextOutputStore().commit({
       requestId: "fixture-request", outputLocation: join(project, "outputs"), relativePath: "fixture.md", content: "# Fixture", mediaType: "text/markdown",

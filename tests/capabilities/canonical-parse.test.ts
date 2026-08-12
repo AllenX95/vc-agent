@@ -22,8 +22,8 @@ beforeAll(() => {
 describe("Canonical Parse adapters", () => {
   it("registers stable identities separately from concrete parser runtimes", () => {
     expect(BASELINE_PARSER_ADAPTERS).toHaveLength(9);
-    expect(expectedParserIdentity(".PDF")).toBe("pymupdf@1.28.0");
-    expect(BASELINE_PARSER_ADAPTERS.find((adapter) => adapter.id === "pymupdf")?.pageRecovery).toBe("request_when_needed");
+    expect(expectedParserIdentity(".PDF")).toBe("page-recovery@page-quality-v1");
+    expect(BASELINE_PARSER_ADAPTERS.find((adapter) => adapter.id === "page-recovery")?.pageRecovery).toBe("request_when_needed");
   });
 
   it("normalizes text, OpenXML, spreadsheet, and PDF formats into one contract", () => {
