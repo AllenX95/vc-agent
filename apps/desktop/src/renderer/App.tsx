@@ -242,6 +242,14 @@ export function App() {
   );
   const activeTurn = items.find((item) => item.role === "assistant" && (item.status === "queued" || item.status === "streaming"));
   const readOnlyRecovery = bootstrap?.storageMode === "read_only_recovery";
+  const composerBlockedByReflection = activeReflection !== undefined && activeReflection.status !== "dialogue_active";
+  const composerPlaceholder = readOnlyRecovery
+    ? "Read-only Recovery"
+    : composerBlockedByReflection
+      ? `Reflection is ${reflectionStatusLabel(activeReflection.status).toLocaleLowerCase()}`
+      : hasActiveTurn
+        ? "Queue a follow-up"
+        : "Ask vc-agent";
   const composerCandidates: ComposerSuggestion[] = [
     ...applicationCommandSuggestions(),
     ...skillSuggestions(piResourcesState?.skills.items ?? []),
@@ -1012,7 +1020,7 @@ export function App() {
         {renameDraft !== null && <form className="workspace-dialog rename-thread-dialog" role="dialog" aria-label="Rename thread" onSubmit={(event) => { event.preventDefault(); void submitRenameThread(); }}><strong>Rename thread</strong><label>Thread name<input aria-label="Thread name" value={renameDraft.title} maxLength={120} autoFocus onChange={(event) => setRenameDraft({ ...renameDraft, title: event.target.value })} /></label><span>Use 1–120 characters.</span><div className="form-actions"><button type="button" onClick={() => setRenameDraft(null)}>Cancel</button><button className="primary-button" type="submit" disabled={renameDraft.title.trim().length === 0}>Save name</button></div></form>}
         {deleteThreadId !== null && <div className="workspace-dialog" role="dialog" aria-label="Delete thread"><strong>Delete this thread?</strong><span>This removes the Thread from the project, together with its retained conversation, physical context, queued work, unapproved candidates, and cognition-review source text. Confirmed Memory and Outputs remain.</span><div className="form-actions"><button type="button" onClick={() => setDeleteThreadId(null)}>Cancel</button><button className="danger-button" type="button" onClick={() => void deleteThread()}>Delete thread</button></div></div>}
 
-        {view === "workspace" && activeThread !== undefined && (activeReflection === undefined || activeReflection.status === "dialogue_active") && (
+        {view === "workspace" && activeThread !== undefined && (
           <form className="composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
             {executionQueue.filter((item) => item.threadId === activeThread.id).length > 0 && <div className="execution-queue" aria-label="Execution Queue">
               <div className="execution-queue-heading"><strong>Execution Queue</strong><span>{executionCapacity.running} / {executionCapacity.capacity} running</span></div>
@@ -1044,7 +1052,7 @@ export function App() {
                 onClick={() => chooseComposerSuggestion(suggestion)}
               ><strong>{suggestion.label}</strong><span>{suggestion.description}</span></button>)}
             </div>}
-            <textarea ref={composerInput} aria-label="Message" aria-autocomplete="list" aria-expanded={composerSuggestionMatch !== null} placeholder={readOnlyRecovery ? "Read-only Recovery" : hasActiveTurn ? "Queue a follow-up" : "Ask vc-agent"} value={prompt} onChange={(event) => {
+            <textarea ref={composerInput} aria-label="Message" aria-autocomplete="list" aria-expanded={composerSuggestionMatch !== null} placeholder={composerPlaceholder} value={prompt} onChange={(event) => {
               setPrompt(event.target.value);
               setComposerCursor(event.target.selectionStart);
               setComposerSuggestionIndex(0);
@@ -1080,16 +1088,17 @@ export function App() {
               if (event.key !== "Enter" || event.shiftKey) return;
               event.preventDefault();
               if (prompt.trim().length > 0) void submit();
-            }} disabled={readOnlyRecovery} />
+            }} disabled={readOnlyRecovery || composerBlockedByReflection} />
             <div className="composer-footer">
               <select aria-label="Active Model Profile" value={activeThread.activeProfileId ?? ""} onChange={(event) => selectProfile(event.target.value)} disabled={activeReflection !== undefined || hasActiveTurn || profiles.length === 0 || readOnlyRecovery}>
                 <option value="">No profile</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
               </select>
               <span className="output-location" title={activeThread.scope === "unscoped" ? activeThread.outputLocation : projects.find((project) => project.id === activeThread.projectId)?.path}>{activeThread.scope === "unscoped" ? activeThread.outputLocation ?? "No output location" : "Project scoped"}</span>
+              {composerBlockedByReflection && <span className="composer-status" role="status">{composerPlaceholder}</span>}
               {bootstrap?.accessMode === "full" && <span className="full-access-indicator">Full access</span>}
               <button className="compact-thread-button" type="button" title="Compact thread" aria-label="Compact thread" onClick={compact} disabled={activeReflection !== undefined || hasActiveTurn || activeProfile === undefined || items.length === 0 || readOnlyRecovery}><Minimize2 size={15} /></button>
-              {hasActiveTurn && <button className="send-button" type="submit" title="Queue follow-up" aria-label="Queue follow-up" disabled={prompt.trim().length === 0 || readOnlyRecovery}><Send size={16} /></button>}
-              {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0 || readOnlyRecovery}><Send size={16} /></button>}
+              {hasActiveTurn && <button className="send-button" type="submit" title="Queue follow-up" aria-label="Queue follow-up" disabled={prompt.trim().length === 0 || readOnlyRecovery || composerBlockedByReflection}><Send size={16} /></button>}
+              {hasActiveTurn ? <button className="stop-button" type="button" title="Stop" aria-label="Stop" onClick={stop}><CircleStop size={16} /></button> : <button className="send-button" type="submit" title="Send" aria-label="Send" disabled={prompt.trim().length === 0 || readOnlyRecovery || composerBlockedByReflection}><Send size={16} /></button>}
             </div>
           </form>
         )}

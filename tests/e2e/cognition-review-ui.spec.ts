@@ -34,6 +34,12 @@ test("cognition settings expose intent profiles and the Memory Review entry poin
     await expect(launch.getByLabel("Reflection Model Profile")).toHaveCount(0);
     await expect(launch.getByRole("button", { name: "Start Reflection", exact: true })).toBeVisible();
     await expect(launch.getByRole("button", { name: /critical dialogue|evidence pass|Judgment Record|Memory patch/i })).toHaveCount(0);
+    await launch.getByRole("button", { name: "Start Reflection", exact: true }).click();
+    await expect(window.getByTestId("reflection-workspace")).toContainText("Awaiting profile");
+    const composer = window.getByRole("textbox", { name: "Message" });
+    await expect(composer).toBeVisible();
+    await expect(composer).toBeDisabled();
+    await expect(composer).toHaveAttribute("placeholder", "Reflection is awaiting profile");
   } finally {
     await application.close();
     rmSync(userDataDirectory, { recursive: true, force: true });
