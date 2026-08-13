@@ -28,6 +28,7 @@ button { font: inherit; letter-spacing: 0; }
 .app-shell {
   display: grid;
   grid-template-columns: 264px minmax(440px, 1fr) 340px;
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   background: var(--surface);
@@ -398,7 +399,7 @@ button { font: inherit; letter-spacing: 0; }
 .access-mode-control button.active { background: #fff; color: #29352e; box-shadow: 0 1px 4px rgba(36, 48, 40, .1); }
 .access-mode-control button.active.full { background: #704b3b; color: #fff; }
 
-.right-panel { display: flex; flex-direction: column; border-left: 1px solid var(--line); min-width: 0; background: #f4f6f2; }
+.right-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--line); background: #f4f6f2; }
 .panel-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 64px; border-bottom: 1px solid var(--line); padding: 0 10px; background: rgba(255,255,255,.35); }
 .panel-tabs button { position: relative; overflow: hidden; border: 0; background: transparent; color: #777e77; font-size: 11px; text-overflow: ellipsis; }
 .panel-tabs button.active { color: #28332c; font-weight: 650; }

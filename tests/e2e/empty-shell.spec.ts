@@ -198,6 +198,9 @@ test("completes Skills and Project file mentions from the composer", async () =>
   const projectDirectory = mkdtempSync(join(tmpdir(), "vc-agent-composer-project-e2e-"));
   const skillSource = mkdtempSync(join(tmpdir(), "vc-agent-composer-skill-e2e-"));
   writeFileSync(join(projectDirectory, "Investment Memo.md"), "# Investment Memo", "utf8");
+  for (let index = 0; index < 36; index += 1) {
+    writeFileSync(join(projectDirectory, `diligence-${String(index).padStart(2, "0")}.pdf`), "%PDF-1.4\n", "utf8");
+  }
   writeFileSync(join(skillSource, "SKILL.md"), "---\nname: fixture-skill\ndescription: Composer fixture\nkeywords: fixture\n---\n# Fixture Skill\n", "utf8");
   writeFileSync(join(skillSource, "LICENSE"), "fixture", "utf8");
   const root = resolve(import.meta.dirname, "../..");
@@ -213,6 +216,10 @@ test("completes Skills and Project file mentions from the composer", async () =>
     await invokeRaw(window, "thread.create.project", { projectId: opened.payload.project.id, title: "Composer Commands" });
     await window.reload();
     await window.getByRole("button", { name: "Composer Commands", exact: true }).click();
+    const composerBounds = await window.locator(".composer").boundingBox();
+    const viewportHeight = await window.evaluate(() => window.innerHeight);
+    expect(composerBounds).not.toBeNull();
+    expect(composerBounds!.y + composerBounds!.height).toBeLessThanOrEqual(viewportHeight);
     await window.getByRole("combobox", { name: "Active Model Profile" }).selectOption(primaryProfile.payload.profile.id);
     await window.getByRole("button", { name: "Settings" }).click();
     await window.getByTestId("pi-skills-import-copy").click();
